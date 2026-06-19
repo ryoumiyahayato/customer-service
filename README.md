@@ -18,7 +18,7 @@
 
 本系统包含前端页面、后端 API、Socket.io 实时通信和 SQLite 数据库，因此不能像普通静态网页一样只部署一个 `index.html`。也不建议为了云端部署打包成 Windows `exe`，因为云服务器需要长期运行 Node.js 服务。
 
-推荐方式是把整个项目作为一个完整文件夹部署到云服务器。更详细的一步一步说明见 [`START_HERE.md`](./START_HERE.md)。
+推荐方式是把整个项目作为一个完整文件夹部署到云服务器。更详细的一步一步说明见 [`START_HERE.md`](./START_HERE.md)，完整说明书式教程见 [`docs/DEPLOYMENT_MANUAL_ZH.md`](./docs/DEPLOYMENT_MANUAL_ZH.md)。
 
 如果你想生成一个方便上传/交付的压缩包，可以运行：
 
@@ -32,6 +32,10 @@ npm run make-release
 release/support-system/
 release/support-system.zip   # 如果服务器或本机安装了 zip 命令
 ```
+
+## 完整部署教程
+
+如果你是代码小白，建议按这个文档一步一步操作：[`docs/DEPLOYMENT_MANUAL_ZH.md`](./docs/DEPLOYMENT_MANUAL_ZH.md)。
 
 ## 快速部署
 
@@ -96,7 +100,8 @@ lib/                 数据库与认证工具
 public/uploads/      图片上传目录
 scripts/             数据库、账号、启动和打包脚本
 server.js            Next.js + Socket.io 自定义服务
-START_HERE.md         小白部署说明
+START_HERE.md         小白快速说明
+docs/DEPLOYMENT_MANUAL_ZH.md  说明书式部署教程
 .env.example          环境变量模板
 ```
 

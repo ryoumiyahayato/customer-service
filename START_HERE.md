@@ -39,6 +39,8 @@ npm run start
 - 访客端：`http://服务器IP:3000/`
 - 客服后台：`http://服务器IP:3000/admin`
 
+如果你需要更详细的“说明书式教程”，请看：`docs/DEPLOYMENT_MANUAL_ZH.md`。
+
 ## 最简单的云端部署流程
 
 1. 买一台 Ubuntu VPS。
