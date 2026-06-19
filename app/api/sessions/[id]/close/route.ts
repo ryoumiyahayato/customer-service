@@ -1,0 +1,2 @@
+import { NextResponse } from 'next/server';import { db,now } from '@/lib/db';import { requireAdmin } from '@/lib/auth';
+export async function POST(_:Request,{params}:{params:Promise<{id:string}>}){await requireAdmin(); const {id}=await params; db.prepare('UPDATE sessions SET status=?,assigned_operator_id=NULL,updated_at=? WHERE id=?').run('CLOSED',now(),id); (global as any).io?.to(`session:${id}`).emit('session:updated',{id,status:'CLOSED'}); return NextResponse.json({ok:true});}

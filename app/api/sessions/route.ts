@@ -1,0 +1,2 @@
+import { NextResponse } from 'next/server';import { db } from '@/lib/db';import { requireAdmin } from '@/lib/auth';
+export async function GET(){await requireAdmin(); const sessions=db.prepare(`SELECT s.*,u.visitor_key,u.display_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ORDER BY s.updated_at DESC`).all(); return NextResponse.json({sessions});}
