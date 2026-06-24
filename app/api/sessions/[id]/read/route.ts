@@ -1,2 +1,5 @@
-import { NextResponse } from 'next/server';import { db,now } from '@/lib/db';import { requireAdmin } from '@/lib/auth';
-export async function POST(_:Request,{params}:{params:Promise<{id:string}>}){await requireAdmin(); const {id}=await params; const t=now(); db.prepare('UPDATE messages SET is_read=1,status=?,read_at=COALESCE(read_at,?) WHERE session_id=? AND sender_type=?').run('read',t,id,'VISITOR'); return NextResponse.json({ok:true});}
+import { NextResponse } from 'next/server';
+import { initDb, markVisitorMessagesRead } from '@/lib/db';
+import { requireAdmin } from '@/lib/auth';
+export const dynamic = 'force-dynamic';
+export async function POST(_: Request, { params }: { params: Promise<{ id: string }> }) { await initDb(); await requireAdmin(); const { id } = await params; await markVisitorMessagesRead(id); return NextResponse.json({ ok: true }); }

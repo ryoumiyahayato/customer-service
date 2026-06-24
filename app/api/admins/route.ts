@@ -1,3 +1,6 @@
-import { NextRequest,NextResponse } from 'next/server';import bcrypt from 'bcrypt';import { db,id,now } from '@/lib/db';import { requireAdmin } from '@/lib/auth';
-export async function GET(){const a=await requireAdmin(); if(a.role!=='SUPER_ADMIN')return NextResponse.json({error:'Forbidden'},{status:403}); return NextResponse.json({admins:db.prepare('SELECT id,username,role,must_change_password,created_at FROM admins ORDER BY created_at').all()});}
-export async function POST(req:NextRequest){const a=await requireAdmin(); if(a.role!=='SUPER_ADMIN')return NextResponse.json({error:'Forbidden'},{status:403}); const b=await req.json(),t=now(); db.prepare('INSERT INTO admins VALUES (?,?,?,?,?,?,?)').run(id('admin'),b.username,bcrypt.hashSync(b.password,10),b.role||'OPERATOR',0,t,t); return NextResponse.json({ok:true});}
+import { NextRequest, NextResponse } from 'next/server';
+import { createAdmin, initDb, listAdmins } from '@/lib/db';
+import { requireAdmin } from '@/lib/auth';
+export const dynamic = 'force-dynamic';
+export async function GET() { await initDb(); const a = await requireAdmin(); if (a.role !== 'SUPER_ADMIN') return NextResponse.json({ error: 'Forbidden' }, { status: 403 }); return NextResponse.json({ admins: await listAdmins() }); }
+export async function POST(req: NextRequest) { await initDb(); const a = await requireAdmin(); if (a.role !== 'SUPER_ADMIN') return NextResponse.json({ error: 'Forbidden' }, { status: 403 }); const b = await req.json(); await createAdmin({ username: b.username, password: b.password, role: b.role || 'OPERATOR' }); return NextResponse.json({ ok: true }); }

@@ -2,20 +2,17 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node server.js",
+    "start": "next start",
     "start:linux": "bash scripts/start-linux.sh",
     "make-release": "node scripts/make-release.js",
     "init-db": "node scripts/init-db.js",
     "create-admin": "node scripts/create-admin.js"
   },
   "dependencies": {
-    "bcrypt": "^5.1.1",
-    "better-sqlite3": "^11.10.0",
     "next": "^15.3.3",
+    "postgres": "^3.4.9",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

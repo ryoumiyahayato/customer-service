@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, id, now } from '@/lib/db';
-export async function POST(req:NextRequest){const {visitorId}=await req.json(); const key=visitorId||id('visitor'); const t=now(); let user:any=db.prepare('SELECT * FROM users WHERE visitor_key=?').get(key); if(!user){db.prepare('INSERT INTO users VALUES (?,?,?,?,?,?)').run(id('user'),key,`访客 ${key.slice(-6)}`,t,t,t); user=db.prepare('SELECT * FROM users WHERE visitor_key=?').get(key);} else db.prepare('UPDATE users SET last_seen_at=?,updated_at=? WHERE id=?').run(t,t,user.id);
- let session:any=db.prepare("SELECT * FROM sessions WHERE user_id=? AND status != 'ARCHIVED' ORDER BY updated_at DESC LIMIT 1").get(user.id); if(!session||session.status==='CLOSED'){session={id:id('sess'),user_id:user.id,status:'PENDING',created_at:t,updated_at:t}; db.prepare('INSERT INTO sessions(id,user_id,status,created_at,updated_at,last_operator_id) VALUES (?,?,?,?,?,?)').run(session.id,user.id,'PENDING',t,t,session.last_operator_id||null);}
- const messages=db.prepare('SELECT * FROM messages WHERE session_id=? ORDER BY created_at').all(session.id); return NextResponse.json({visitorId:key,user,session,messages});}
+import { getMessages, getOrCreateSession, initDb, upsertVisitor } from '@/lib/db';
+export const dynamic = 'force-dynamic';
+export async function POST(req: NextRequest) { await initDb(); const { visitorId } = await req.json(); const { key, user } = await upsertVisitor(visitorId); const session = await getOrCreateSession(user.id); const messages = await getMessages(session.id); return NextResponse.json({ visitorId: key, user, session, messages }); }

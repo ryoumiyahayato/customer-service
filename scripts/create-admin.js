@@ -1,1 +1,24 @@
-const Database=require('better-sqlite3'),bcrypt=require('bcrypt'),crypto=require('crypto'),path=require('path'),fs=require('fs'); const [u,p,r='OPERATOR']=process.argv.slice(2); if(!u||!p) throw new Error('Usage: npm run create-admin -- username password [SUPER_ADMIN|OPERATOR]'); const dir=process.env.DATA_DIR||path.join(process.cwd(),'data'); fs.mkdirSync(dir,{recursive:true}); const db=new Database(process.env.DATABASE_PATH||path.join(dir,'support.sqlite')); const t=new Date().toISOString(); db.prepare('INSERT INTO admins VALUES (?,?,?,?,?,?,?)').run('admin_'+crypto.randomBytes(12).toString('hex'),u,bcrypt.hashSync(p,10),r,0,t,t); console.log('Admin created:',u,r);
+const crypto = require('crypto');
+const postgres = require('postgres');
+
+const [username, password, role = 'OPERATOR'] = process.argv.slice(2);
+if (!username || !password) throw new Error('Usage: npm run create-admin -- username password [SUPER_ADMIN|OPERATOR]');
+if (!['SUPER_ADMIN', 'OPERATOR'].includes(role)) throw new Error('Role must be SUPER_ADMIN or OPERATOR');
+const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+if (!connectionString) throw new Error('POSTGRES_URL or DATABASE_URL is required.');
+const sql = postgres(connectionString, { ssl: 'require', max: 1 });
+const now = () => new Date().toISOString();
+const id = (prefix) => `${prefix}_${crypto.randomBytes(12).toString('hex')}`;
+function hashPassword(value) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(value, salt, 64).toString('hex');
+  return `scrypt:${salt}:${hash}`;
+}
+
+async function main() {
+  const t = now();
+  await sql`INSERT INTO admins VALUES (${id('admin')},${username},${hashPassword(password)},${role},0,${t},${t})`;
+  console.log('Admin created:', username, role);
+}
+
+main().finally(() => sql.end());
