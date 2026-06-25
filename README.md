@@ -55,6 +55,8 @@ npm run start
 | `API_SECURITY_FAIL_CLOSED` | `0` | KV/Redis 不可用时是否阻断 API。默认 `0` 避免未配置 KV 时登录/注册不可用；确认 KV 健康后可设为 `1`。 |
 | `KV_REST_API_URL` | `https://example.upstash.io` | Vercel KV / Upstash REST URL，生产强烈建议配置。 |
 | `KV_REST_API_TOKEN` | `replace-with-kv-rest-token` | Vercel KV / Upstash REST Token，生产强烈建议配置。 |
+| `KV_REST_API_URL` | `https://example.upstash.io` | Vercel KV / Upstash REST URL。生产 API 限流必需。 |
+| `KV_REST_API_TOKEN` | `replace-with-kv-rest-token` | Vercel KV / Upstash REST Token。生产 API 限流必需。 |
 | `UPSTASH_REDIS_REST_URL` | 可选 | `KV_REST_API_URL` 的兼容替代变量。 |
 | `UPSTASH_REDIS_REST_TOKEN` | 可选 | `KV_REST_API_TOKEN` 的兼容替代变量。 |
 | `API_RATE_LIMIT_WINDOW_SECONDS` | `60` | API 限流窗口秒数。 |

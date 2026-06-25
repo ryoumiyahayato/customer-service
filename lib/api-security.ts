@@ -39,6 +39,7 @@ async function redisCommand<T = unknown>(command: unknown[]): Promise<StoreResul
   const config = kvConfig();
   if (!config) {
     if (failClosedWhenStoreUnavailable()) {
+    if (process.env.NODE_ENV === 'production') {
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is not configured' }, { status: MISSING_STORE_STATUS }) };
     }
     return { ok: true, value: null as T };
@@ -60,6 +61,7 @@ async function redisCommand<T = unknown>(command: unknown[]): Promise<StoreResul
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
     }
     return { ok: true, value: null as T };
+    return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
   }
 }
 
@@ -67,6 +69,7 @@ async function redisPipeline<T = unknown>(commands: unknown[][]): Promise<StoreR
   const config = kvConfig();
   if (!config) {
     if (failClosedWhenStoreUnavailable()) {
+    if (process.env.NODE_ENV === 'production') {
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is not configured' }, { status: MISSING_STORE_STATUS }) };
     }
     return { ok: true, value: [] as T[] };
@@ -89,6 +92,7 @@ async function redisPipeline<T = unknown>(commands: unknown[][]): Promise<StoreR
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
     }
     return { ok: true, value: [] as T[] };
+    return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
   }
 }
 
@@ -97,12 +101,14 @@ function safeSegment(value: string) {
 }
 
 function getClientIp(req: NextRequest | Request) {
+export function getClientIp(req: NextRequest | Request) {
   const headers = req.headers;
   const forwardedFor = headers.get('x-forwarded-for')?.split(',')[0]?.trim();
   return forwardedFor || headers.get('x-real-ip') || headers.get('x-vercel-forwarded-for')?.split(',')[0]?.trim() || headers.get('cf-connecting-ip') || 'unknown';
 }
 
 function routeKey(pathname: string) {
+export function routeKey(pathname: string) {
   return safeSegment(pathname.replace(/^\/api\//, '').replace(/\/[a-zA-Z0-9_-]{12,}/g, '/:id') || 'root');
 }
 
@@ -111,6 +117,7 @@ function isAuthPath(pathname: string) {
 }
 
 async function checkApiRequest(req: NextRequest): Promise<StoreResult<RateCheck>> {
+export async function checkApiRequest(req: NextRequest): Promise<StoreResult<RateCheck>> {
   const ip = safeSegment(getClientIp(req));
   const route = routeKey(req.nextUrl.pathname);
   const auth = isAuthPath(req.nextUrl.pathname);
@@ -124,6 +131,7 @@ async function checkApiRequest(req: NextRequest): Promise<StoreResult<RateCheck>
   if (!result.ok) return result;
 
   if (result.value.length === 0) {
+  if (process.env.NODE_ENV !== 'production' && result.value.length === 0) {
     return { ok: true, value: { allowed: true, limit, remaining: limit, resetSeconds: WINDOW_SECONDS } };
   }
 
@@ -140,6 +148,7 @@ async function checkApiRequest(req: NextRequest): Promise<StoreResult<RateCheck>
 }
 
 function rateLimitResponse(check: RateCheck) {
+export function rateLimitResponse(check: RateCheck) {
   const status = check.reason === 'banned' || check.reason === 'auth_failures' ? 403 : 429;
   const res = NextResponse.json({ error: check.reason || 'rate_limited' }, { status });
   res.headers.set('Retry-After', String(check.resetSeconds));
@@ -149,6 +158,7 @@ function rateLimitResponse(check: RateCheck) {
 }
 
 async function recordAuthFailure(req: NextRequest | Request, route = 'auth') {
+export async function recordAuthFailure(req: NextRequest | Request, route = 'auth') {
   const ip = safeSegment(getClientIp(req));
   const pathRoute = routeKey(new URL(req.url).pathname || route);
   const failKey = `authfail:${ip}:${pathRoute}`;
@@ -159,6 +169,7 @@ async function recordAuthFailure(req: NextRequest | Request, route = 'auth') {
 }
 
 async function recordAuthSuccess(req: NextRequest | Request, route = 'auth') {
+export async function recordAuthSuccess(req: NextRequest | Request, route = 'auth') {
   const ip = safeSegment(getClientIp(req));
   const pathRoute = routeKey(new URL(req.url).pathname || route);
   await redisCommand(['DEL', `authfail:${ip}:${pathRoute}`]);
@@ -167,3 +178,4 @@ async function recordAuthSuccess(req: NextRequest | Request, route = 'auth') {
 const apiSecurityConfig = { WINDOW_SECONDS, GLOBAL_LIMIT, AUTH_LIMIT, FAILURE_LIMIT, SLOWDOWN_LIMIT, BAN_SECONDS };
 
 export { apiSecurityConfig, checkApiRequest, getClientIp, rateLimitResponse, recordAuthFailure, recordAuthSuccess, routeKey };
+export const apiSecurityConfig = { WINDOW_SECONDS, GLOBAL_LIMIT, AUTH_LIMIT, FAILURE_LIMIT, SLOWDOWN_LIMIT, BAN_SECONDS };
