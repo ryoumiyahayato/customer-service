@@ -52,6 +52,9 @@ npm run start
 | `DEFAULT_ADMIN_USERNAME` | `owner-root` | 首个超级管理员用户名；已有超级管理员后不再创建。 |
 | `DEFAULT_ADMIN_PASSWORD` | `replace-with-a-strong-private-password` | 首个超级管理员密码；必须使用强密码，不得提交真实值。 |
 | `RESET_SUPER_ADMIN_ON_BOOTSTRAP` | `0` | 仅应在一次性恢复时临时设为 `1`，完成后立即恢复为 `0` 或删除。 |
+| `API_SECURITY_FAIL_CLOSED` | `0` | KV/Redis 不可用时是否阻断 API。默认 `0` 避免未配置 KV 时登录/注册不可用；确认 KV 健康后可设为 `1`。 |
+| `KV_REST_API_URL` | `https://example.upstash.io` | Vercel KV / Upstash REST URL，生产强烈建议配置。 |
+| `KV_REST_API_TOKEN` | `replace-with-kv-rest-token` | Vercel KV / Upstash REST Token，生产强烈建议配置。 |
 | `KV_REST_API_URL` | `https://example.upstash.io` | Vercel KV / Upstash REST URL。生产 API 限流必需。 |
 | `KV_REST_API_TOKEN` | `replace-with-kv-rest-token` | Vercel KV / Upstash REST Token。生产 API 限流必需。 |
 | `UPSTASH_REDIS_REST_URL` | 可选 | `KV_REST_API_URL` 的兼容替代变量。 |
@@ -71,6 +74,7 @@ npm run start
 2. 确认 Vercel Edge Network 正常承载生产流量，并保留转发 IP 相关请求头。
 3. 如接入 Cloudflare，请在 Cloudflare 控制台配置 WAF、Bot 防护、速率限制与真实 IP 转发策略。
 4. 不要把关键安全逻辑只依赖 CDN；本仓库已在 API 层实现限流与封禁闭环。
+5. 为避免 KV 未配置时所有账号无法登录，默认 `API_SECURITY_FAIL_CLOSED=0`；确认 KV/Redis 配置可用后，如需严格阻断可改为 `1`。
 
 ## 数据库初始化与管理员
 

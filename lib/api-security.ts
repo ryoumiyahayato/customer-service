@@ -15,6 +15,10 @@ const SLOWDOWN_LIMIT = intEnv('AUTH_SLOWDOWN_FAILURES', 3);
 const BAN_SECONDS = intEnv('AUTH_BAN_SECONDS', 10 * 60);
 const MISSING_STORE_STATUS = 503;
 
+function failClosedWhenStoreUnavailable() {
+  return process.env.API_SECURITY_FAIL_CLOSED === '1';
+}
+
 type StoreResult<T> = { ok: true; value: T } | { ok: false; response: NextResponse };
 
 type RateCheck = {
@@ -34,6 +38,7 @@ function kvConfig() {
 async function redisCommand<T = unknown>(command: unknown[]): Promise<StoreResult<T>> {
   const config = kvConfig();
   if (!config) {
+    if (failClosedWhenStoreUnavailable()) {
     if (process.env.NODE_ENV === 'production') {
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is not configured' }, { status: MISSING_STORE_STATUS }) };
     }
@@ -52,6 +57,10 @@ async function redisCommand<T = unknown>(command: unknown[]): Promise<StoreResul
     if (payload[0]?.error) throw new Error(payload[0].error);
     return { ok: true, value: payload[0]?.result as T };
   } catch {
+    if (failClosedWhenStoreUnavailable()) {
+      return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
+    }
+    return { ok: true, value: null as T };
     return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
   }
 }
@@ -59,6 +68,7 @@ async function redisCommand<T = unknown>(command: unknown[]): Promise<StoreResul
 async function redisPipeline<T = unknown>(commands: unknown[][]): Promise<StoreResult<T[]>> {
   const config = kvConfig();
   if (!config) {
+    if (failClosedWhenStoreUnavailable()) {
     if (process.env.NODE_ENV === 'production') {
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is not configured' }, { status: MISSING_STORE_STATUS }) };
     }
@@ -78,6 +88,10 @@ async function redisPipeline<T = unknown>(commands: unknown[][]): Promise<StoreR
     if (failed?.error) throw new Error(failed.error);
     return { ok: true, value: payload.map(item => item.result as T) };
   } catch {
+    if (failClosedWhenStoreUnavailable()) {
+      return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
+    }
+    return { ok: true, value: [] as T[] };
     return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
   }
 }
@@ -86,12 +100,14 @@ function safeSegment(value: string) {
   return value.replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 160);
 }
 
+function getClientIp(req: NextRequest | Request) {
 export function getClientIp(req: NextRequest | Request) {
   const headers = req.headers;
   const forwardedFor = headers.get('x-forwarded-for')?.split(',')[0]?.trim();
   return forwardedFor || headers.get('x-real-ip') || headers.get('x-vercel-forwarded-for')?.split(',')[0]?.trim() || headers.get('cf-connecting-ip') || 'unknown';
 }
 
+function routeKey(pathname: string) {
 export function routeKey(pathname: string) {
   return safeSegment(pathname.replace(/^\/api\//, '').replace(/\/[a-zA-Z0-9_-]{12,}/g, '/:id') || 'root');
 }
@@ -100,6 +116,7 @@ function isAuthPath(pathname: string) {
   return pathname.startsWith('/api/auth/') || pathname.includes('/login') || pathname.startsWith('/api/account/login');
 }
 
+async function checkApiRequest(req: NextRequest): Promise<StoreResult<RateCheck>> {
 export async function checkApiRequest(req: NextRequest): Promise<StoreResult<RateCheck>> {
   const ip = safeSegment(getClientIp(req));
   const route = routeKey(req.nextUrl.pathname);
@@ -113,6 +130,7 @@ export async function checkApiRequest(req: NextRequest): Promise<StoreResult<Rat
   const result = await redisPipeline<string | number | null>(commands);
   if (!result.ok) return result;
 
+  if (result.value.length === 0) {
   if (process.env.NODE_ENV !== 'production' && result.value.length === 0) {
     return { ok: true, value: { allowed: true, limit, remaining: limit, resetSeconds: WINDOW_SECONDS } };
   }
@@ -129,6 +147,7 @@ export async function checkApiRequest(req: NextRequest): Promise<StoreResult<Rat
   return { ok: true, value: { allowed: true, limit, remaining: Math.max(0, limit - count), resetSeconds: WINDOW_SECONDS } };
 }
 
+function rateLimitResponse(check: RateCheck) {
 export function rateLimitResponse(check: RateCheck) {
   const status = check.reason === 'banned' || check.reason === 'auth_failures' ? 403 : 429;
   const res = NextResponse.json({ error: check.reason || 'rate_limited' }, { status });
@@ -138,6 +157,7 @@ export function rateLimitResponse(check: RateCheck) {
   return res;
 }
 
+async function recordAuthFailure(req: NextRequest | Request, route = 'auth') {
 export async function recordAuthFailure(req: NextRequest | Request, route = 'auth') {
   const ip = safeSegment(getClientIp(req));
   const pathRoute = routeKey(new URL(req.url).pathname || route);
@@ -148,10 +168,14 @@ export async function recordAuthFailure(req: NextRequest | Request, route = 'aut
   if (failures >= FAILURE_LIMIT) await redisCommand(['SET', `ban:${ip}:${pathRoute}`, '1', 'EX', BAN_SECONDS]);
 }
 
+async function recordAuthSuccess(req: NextRequest | Request, route = 'auth') {
 export async function recordAuthSuccess(req: NextRequest | Request, route = 'auth') {
   const ip = safeSegment(getClientIp(req));
   const pathRoute = routeKey(new URL(req.url).pathname || route);
   await redisCommand(['DEL', `authfail:${ip}:${pathRoute}`]);
 }
 
+const apiSecurityConfig = { WINDOW_SECONDS, GLOBAL_LIMIT, AUTH_LIMIT, FAILURE_LIMIT, SLOWDOWN_LIMIT, BAN_SECONDS };
+
+export { apiSecurityConfig, checkApiRequest, getClientIp, rateLimitResponse, recordAuthFailure, recordAuthSuccess, routeKey };
 export const apiSecurityConfig = { WINDOW_SECONDS, GLOBAL_LIMIT, AUTH_LIMIT, FAILURE_LIMIT, SLOWDOWN_LIMIT, BAN_SECONDS };
