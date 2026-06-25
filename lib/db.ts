@@ -29,8 +29,9 @@ export function verifyPassword(password: string, stored: string) {
 async function ensureDefaultAdmin() {
   const sql = getPg();
   const superRows = await sql`SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1`;
-  const username = process.env.DEFAULT_ADMIN_USERNAME || 'owner_7KQ29M';
-  const password = process.env.DEFAULT_ADMIN_PASSWORD || 'Kefu!q8V-63sL-N4pT-2026';
+  const username = process.env.DEFAULT_ADMIN_USERNAME;
+  const password = process.env.DEFAULT_ADMIN_PASSWORD;
+  if (!username || !password) throw new Error('DEFAULT_ADMIN_USERNAME and DEFAULT_ADMIN_PASSWORD are required for first super admin bootstrap.');
   const t = now();
   if (superRows[0]) {
     if (process.env.RESET_SUPER_ADMIN_ON_BOOTSTRAP === '1') {
