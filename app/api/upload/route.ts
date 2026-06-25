@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-const allowed = new Map([['image/jpeg', 'jpg'], ['image/png', 'png'], ['image/webp', 'webp']]);
+const allowed: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   const form = await req.formData();
   const file = form.get('file') as File | null;
   if (!file) return NextResponse.json({ error: 'No file' }, { status: 400 });
-  if (!allowed.has(file.type)) return NextResponse.json({ error: 'Only jpg, jpeg, png, webp allowed' }, { status: 400 });
+  if (!allowed[file.type]) return NextResponse.json({ error: 'Only jpg, jpeg, png, webp allowed' }, { status: 400 });
   if (file.size > 1024 * 1024) return NextResponse.json({ error: 'Max 1MB on Vercel demo storage' }, { status: 400 });
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sig = Array.from(bytes.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     const base64 = Buffer.from(bytes).toString('base64');
     return NextResponse.json({ path: `data:${file.type};base64,${base64}` });
   }
-  const name = `${crypto.randomBytes(16).toString('hex')}.${allowed.get(file.type)}`;
+  const name = `${crypto.randomBytes(16).toString('hex')}.${allowed[file.type]}`;
   const dir = path.join(process.cwd(), 'public', 'uploads');
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, name), bytes);
