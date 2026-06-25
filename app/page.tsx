@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import { useEffect, useRef, useState } from 'react';
 
 type Mode = 'login' | 'register';
@@ -14,8 +14,10 @@ export default function Home() {
   const [text, setText] = useState('');
   const [device, setDevice] = useState<Device>('desktop');
   const [authError, setAuthError] = useState('');
+  const [quote, setQuote] = useState<any>(null);
   const end = useRef<HTMLDivElement>(null);
   const isMobile = device !== 'desktop';
+  const inChat = guest || account;
 
   async function refresh(currentVisitorId = visitorId) {
     if (!guest && !account) return;
@@ -29,56 +31,14 @@ export default function Home() {
     setSession(d.session);
     setMsgs(d.messages || []);
   }
-
-  useEffect(() => {
-    const ua = navigator.userAgent.toLowerCase();
-    if (ua.includes('android')) setDevice('android');
-    else if (/iphone|ipad|ipod|mobile/.test(ua) || window.matchMedia('(max-width: 760px)').matches) setDevice('mobile');
-    else setDevice('desktop');
-  }, []);
-  useEffect(() => { if (!guest && !account) return; refresh(); const timer = window.setInterval(() => refresh(), 3000); return () => window.clearInterval(timer); }, [guest, account?.id]);
+  useEffect(() => { const ua = navigator.userAgent.toLowerCase(); if (ua.includes('android')) setDevice('android'); else if (/iphone|ipad|ipod|mobile/.test(ua) || window.matchMedia('(max-width:760px)').matches) setDevice('mobile'); else setDevice('desktop'); }, []);
+  useEffect(() => { if (!inChat) return; refresh(); const timer = window.setInterval(() => refresh(), 3000); return () => window.clearInterval(timer); }, [guest, account?.id]);
   useEffect(() => end.current?.scrollIntoView({ behavior: 'smooth' }), [msgs]);
 
-  async function submitAuth(e: any) {
-    e.preventDefault();
-    setAuthError('');
-    const fd = new FormData(e.currentTarget);
-    const body = { username: fd.get('username'), password: fd.get('password'), displayName: fd.get('displayName') };
-    const path = mode === 'register' ? '/api/account/register' : '/api/login';
-    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const d = await r.json();
-    if (!r.ok) { if (d.disabled) alert('该账户权限已被禁用'); setAuthError(d.error || '登录失败'); return; }
-    if (d.type === 'admin') { location.href = '/admin'; return; }
-    setAccount(d.account);
-    setGuest(false);
-    await refresh('');
-  }
+  async function submitAuth(e: any) { e.preventDefault(); setAuthError(''); const fd = new FormData(e.currentTarget); const path = mode === 'register' ? '/api/account/register' : '/api/login'; const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: fd.get('username'), password: fd.get('password'), displayName: fd.get('displayName') }) }); const d = await r.json(); if (!r.ok) { if (d.disabled) alert('该账户权限已被禁用'); setAuthError(d.error || '登录失败'); return; } if (d.type === 'admin') { location.href = '/admin'; return; } setAccount(d.account); setGuest(false); await refresh(''); }
+  async function send(imagePath?: string) { if (!session || (!text.trim() && !imagePath)) return; const body = { sessionId: session.id, visitorId, senderType: 'VISITOR', content: imagePath ? '' : text, messageType: imagePath ? 'image' : 'text', imagePath, quoteMessageId: quote?.id }; setText(''); setQuote(null); await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); await refresh(visitorId); }
+  async function upload(e: any) { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); const r = await fetch('/api/upload', { method: 'POST', body: fd }); const d = await r.json(); if (d.path) await send(d.path); else alert(d.error || '上传失败'); e.target.value = ''; }
+  function quoteText(id: string) { const m = msgs.find(x => x.id === id); if (!m) return '引用的消息'; if (m.status === 'recalled') return '消息已撤回'; return m.message_type === 'image' ? '[图片]' : m.content; }
 
-  async function send(imagePath?: string) {
-    if (!session || (!text.trim() && !imagePath)) return;
-    const body = { sessionId: session.id, visitorId, senderType: 'VISITOR', content: imagePath ? '' : text, messageType: imagePath ? 'image' : 'text', imagePath };
-    setText('');
-    await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    await refresh(visitorId);
-  }
-
-  async function upload(e: any) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const fd = new FormData(); fd.append('file', f);
-    const r = await fetch('/api/upload', { method: 'POST', body: fd }); const d = await r.json();
-    if (d.path) await send(d.path); else alert(d.error || '上传失败');
-    e.target.value = '';
-  }
-
-  const inChat = guest || account;
-  return <div className={'page support-page ' + (isMobile ? 'mobile-shell ' : 'desktop-shell ') + device}>
-    <section className="support-card">
-      <aside className="welcome-panel">
-        <div className="welcome-copy"><h1>在线客服</h1><p>{inChat ? '正在连接客服工作台' : '登录后继续咨询，客服和管理员使用同一入口'}</p><span>{device === 'android' ? '安卓浏览器已适配' : isMobile ? '移动浏览器已适配' : 'PC / Mac 桌面体验'}</span></div>
-        {!inChat ? <div className="auth-box"><div className="auth-tabs two"><button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>登录</button><button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>注册</button></div><form className="auth-form" onSubmit={submitAuth}>{mode === 'register' ? <input name="displayName" placeholder="昵称，可选" autoComplete="nickname" /> : null}<input name="username" placeholder="账号" autoComplete="username" required /><input name="password" type="password" placeholder="密码" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required /><button>{mode === 'login' ? '登录' : '注册并进入'}</button>{authError ? <p className="form-error">{authError}</p> : null}</form><button className="guest-link" onClick={() => { setGuest(true); refresh(''); }}>游客进入</button></div> : <div className="guest-box"><b>{account ? account.display_name : `游客 ${visitorId.slice(-6)}`}</b><p>{account ? '普通用户身份咨询。账号超过一周未登录会自动删除。' : '游客身份仅保存在当前浏览器。'}</p></div>}
-      </aside>
-      <main className="chat"><div className="head"><div><b>{session?.status === 'OPEN' ? '客服正在接待' : '正在等待客服接入'}</b><span>{account ? account.display_name : inChat ? `访客 ${visitorId.slice(-6)}` : '请先登录或游客进入'}</span></div><small>{msgs.length} 条消息</small></div><div className="msgs">{msgs.map(m => <div key={m.id} className={'msg ' + (m.sender_type === 'VISITOR' ? 'me' : '')}>{m.message_type === 'image' ? <img src={m.image_path} alt="聊天图片" /> : <span>{m.content}</span>}<div className="time">{new Date(m.created_at).toLocaleString()}</div></div>)}<div ref={end} /></div>{inChat ? <div className="composer"><label className="file-btn">图片<input type="file" accept="image/jpeg,image/png,image/webp" onChange={upload} /></label><input type="text" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="请输入消息" /><button onClick={() => send()}>发送</button></div> : <div className="empty-state">登录、注册或游客进入后即可发送消息</div>}</main>
-    </section>
-  </div>;
+  return <div className={'page support-page ' + (isMobile ? 'mobile-shell ' : 'desktop-shell ') + device}><section className="support-card"><aside className="welcome-panel"><div className="welcome-copy"><h1>在线客服</h1></div>{!inChat ? <div className="auth-box"><div className="auth-tabs two"><button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>登录</button><button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>注册</button></div><form className="auth-form" onSubmit={submitAuth}>{mode === 'register' ? <input name="displayName" placeholder="昵称，可选" autoComplete="nickname" /> : null}<input name="username" placeholder="账号" autoComplete="username" required /><input name="password" type="password" placeholder="密码" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required /><button>{mode === 'login' ? '登录' : '注册并进入'}</button>{authError ? <p className="form-error">{authError}</p> : null}</form><button className="guest-link" onClick={() => { setGuest(true); refresh(''); }}>游客进入</button></div> : <div className="guest-box"><b>{account ? account.display_name : `游客 ${visitorId.slice(-6)}`}</b><p>{account ? '普通用户身份咨询。' : '游客身份仅保存在当前浏览器。'}</p></div>}</aside><main className="chat"><div className="head"><div><b>{session?.status === 'OPEN' ? '客服正在接待' : '正在等待客服接入'}</b><span>{account ? account.display_name : inChat ? `访客 ${visitorId.slice(-6)}` : '请先登录或游客进入'}</span></div><small>{msgs.length} 条消息</small></div><div className="msgs">{msgs.map(m => <div key={m.id} className={'msg ' + (m.sender_type === 'VISITOR' ? 'me' : '')}>{m.quote_message_id ? <div className="quote-box">{quoteText(m.quote_message_id)}</div> : null}{m.status === 'recalled' ? <span>消息已撤回</span> : m.message_type === 'image' && m.image_path ? <img src={m.image_path} alt="聊天图片" /> : <span>{m.content || '[图片已清除]'}</span>}<button className="msg-action" onClick={() => setQuote(m)}>引用</button></div>)}<div ref={end} /></div>{inChat ? <div className="composer">{quote ? <div className="quote-compose">引用：{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : quote.content}<button onClick={() => setQuote(null)}>取消</button></div> : null}<label className="file-btn">图片<input type="file" accept="image/jpeg,image/png,image/webp" onChange={upload} /></label><input type="text" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="请输入消息" /><button onClick={() => send()}>发送</button></div> : <div className="empty-state">登录、注册或游客进入后即可发送消息</div>}</main></section></div>;
 }

@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAdminByUsername, initDb, loginVisitorAccount, verifyPassword } from '@/lib/db';
 import { COOKIE, makeToken } from '@/lib/auth';
 import { makeVisitorToken, VISITOR_ACCOUNT_COOKIE } from '@/lib/visitor-auth';

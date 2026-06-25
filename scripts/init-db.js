@@ -20,7 +20,7 @@ async function main() {
   await sql`CREATE TABLE IF NOT EXISTS visitor_accounts (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, display_name TEXT NOT NULL, last_login_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`;
   await sql`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, visitor_key TEXT UNIQUE NOT NULL, account_id TEXT REFERENCES visitor_accounts(id) ON DELETE SET NULL, display_name TEXT NOT NULL, last_seen_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`;
   await sql`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), assigned_operator_id TEXT REFERENCES admins(id), last_operator_id TEXT REFERENCES admins(id), status TEXT NOT NULL CHECK(status IN ('PENDING','OPEN','CLOSED','ARCHIVED')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, deleted_by TEXT REFERENCES admins(id))`;
-  await sql`CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, sender_type TEXT NOT NULL CHECK(sender_type IN ('VISITOR','OPERATOR')), sender_id TEXT NOT NULL, content TEXT, message_type TEXT NOT NULL CHECK(message_type IN ('text','image')), image_path TEXT, status TEXT NOT NULL DEFAULT 'sent' CHECK(status IN ('sent','delivered','read')), created_at TEXT NOT NULL, read_at TEXT, is_read INTEGER NOT NULL DEFAULT 0)`;
+  await sql`CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, sender_type TEXT NOT NULL CHECK(sender_type IN ('VISITOR','OPERATOR')), sender_id TEXT NOT NULL, content TEXT, message_type TEXT NOT NULL CHECK(message_type IN ('text','image')), image_path TEXT, status TEXT NOT NULL DEFAULT 'sent' CHECK(status IN ('sent','delivered','read','recalled')), created_at TEXT NOT NULL, read_at TEXT, is_read INTEGER NOT NULL DEFAULT 0, quote_message_id TEXT, recalled_at TEXT, image_purged_at TEXT)`;
   await sql`CREATE TABLE IF NOT EXISTS staff_messages (id TEXT PRIMARY KEY, sender_admin_id TEXT NOT NULL REFERENCES admins(id), content TEXT NOT NULL, created_at TEXT NOT NULL)`;
   await sql`CREATE TABLE IF NOT EXISTS system_logs (id TEXT PRIMARY KEY, level TEXT NOT NULL, event TEXT NOT NULL, actor_id TEXT, message TEXT NOT NULL, created_at TEXT NOT NULL)`;
   for (const statement of [
@@ -30,6 +30,11 @@ async function main() {
     sql`ALTER TABLE users ADD COLUMN account_id TEXT REFERENCES visitor_accounts(id) ON DELETE SET NULL`,
     sql`ALTER TABLE sessions ADD COLUMN deleted_at TEXT`,
     sql`ALTER TABLE sessions ADD COLUMN deleted_by TEXT REFERENCES admins(id)`
+  try { await sql`ALTER TABLE messages ADD COLUMN quote_message_id TEXT`; } catch {}
+  try { await sql`ALTER TABLE messages ADD COLUMN recalled_at TEXT`; } catch {}
+  try { await sql`ALTER TABLE messages ADD COLUMN image_purged_at TEXT`; } catch {}
+  try { await sql`ALTER TABLE messages DROP CONSTRAINT messages_status_check`; } catch {}
+  try { await sql`ALTER TABLE messages ADD CONSTRAINT messages_status_check CHECK(status IN ('sent','delivered','read','recalled'))`; } catch {}
   ]) { try { await statement; } catch {} }
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS one_super_admin ON admins ((role)) WHERE role='SUPER_ADMIN'`;
   await sql`CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at)`;

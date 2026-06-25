@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAdminByUsername, initDb, log, verifyPassword } from '@/lib/db';
 import { COOKIE, makeToken } from '@/lib/auth';
 export const dynamic = 'force-dynamic';

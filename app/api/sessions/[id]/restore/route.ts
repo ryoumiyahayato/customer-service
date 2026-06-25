@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { initDb, restoreSession } from '@/lib/db';
 import { requireAdmin } from '@/lib/auth';
 export const dynamic = 'force-dynamic';

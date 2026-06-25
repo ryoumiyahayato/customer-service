@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { addStaffMessage, initDb, listStaffMessages } from '@/lib/db';
 import { COOKIE, requireAdmin } from '@/lib/auth';
 export const dynamic = 'force-dynamic';
