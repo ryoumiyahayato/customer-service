@@ -1,134 +1,88 @@
-# 轻量级在线客服系统（Web Customer Support System）
+# 轻量级在线客服系统（Vercel / Next.js）
 
-基于 Next.js、TypeScript、Socket.io、SQLite、bcrypt 的轻量级在线客服系统，适合 15~50 个同时在线用户。访客无需注册，系统会自动生成访客身份并恢复历史会话。
+本项目是基于 Next.js App Router、TypeScript、Postgres 的轻量级在线客服系统。当前部署目标为 Vercel Serverless：前端页面只负责渲染与交互，后端能力统一通过 `/api/*` Next.js API Routes 暴露。
 
-## 功能
+## 安全与架构边界
 
-- 访客发送文字和图片，自动保存历史记录。
-- 访客身份保存到 LocalStorage 与 Cookie，再次访问自动恢复。
-- 多客服后台 `/admin`，支持待接入、处理中、已关闭会话。
-- 手动接单，优先保留 `last_operator_id` 用于后续固定客服恢复。
-- Socket.io 实时消息、刷新后重新加入会话房间、断线自动重连。
-- 上传限制：jpg/jpeg/png/webp，最大 5MB，保存到 `public/uploads`，数据库只保存路径。
-- 管理员密码使用 bcrypt，登录使用 HttpOnly Cookie。
-- 首次启动自动创建 `admin` 账号和随机密码，并输出到控制台，首次登录后应修改密码。
-
-
-## 给代码小白的说明：最终交付不是单个 HTML 或 exe
-
-本系统包含前端页面、后端 API、Socket.io 实时通信和 SQLite 数据库，因此不能像普通静态网页一样只部署一个 `index.html`。也不建议为了云端部署打包成 Windows `exe`，因为云服务器需要长期运行 Node.js 服务。
-
-推荐方式是把整个项目作为一个完整文件夹部署到云服务器。更详细的一步一步说明见 [`START_HERE.md`](./START_HERE.md)，完整说明书式教程见 [`docs/DEPLOYMENT_MANUAL_ZH.md`](./docs/DEPLOYMENT_MANUAL_ZH.md)。
-
-如果你想生成一个方便上传/交付的压缩包，可以运行：
-
-```bash
-npm run make-release
-```
-
-生成结果：
-
-```text
-release/support-system/
-release/support-system.zip   # 如果服务器或本机安装了 zip 命令
-```
-
-## 完整部署教程
-
-如果你是代码小白，建议按这个文档一步一步操作：[`docs/DEPLOYMENT_MANUAL_ZH.md`](./docs/DEPLOYMENT_MANUAL_ZH.md)。
-
-## 快速部署
-
-```bash
-npm install
-npm run build
-npm run start
-```
-
-默认监听 `http://localhost:3000`，可通过环境变量 `PORT=8080` 修改。
-
-## 数据库初始化
-
-数据库会在首次启动时自动初始化，默认位置：
-
-```text
-data/support.sqlite
-```
-
-也可以指定：
-
-```bash
-DATABASE_PATH=/var/lib/support/support.sqlite npm run start
-```
-
-## 管理员创建
-
-首次启动会自动生成超级管理员：
-
-```text
-username=admin
-password=<控制台随机输出>
-```
-
-创建额外客服账号：
-
-```bash
-npm run create-admin -- operator1 StrongPassword123 OPERATOR
-npm run create-admin -- boss StrongPassword123 SUPER_ADMIN
-```
-
-## 环境变量
-
-| 名称 | 默认值 | 说明 |
-| --- | --- | --- |
-| `PORT` | `3000` | HTTP 服务端口 |
-| `DATABASE_PATH` | `data/support.sqlite` | SQLite 数据库路径 |
-| `DATA_DIR` | `data` | 默认数据库目录 |
-| `AUTH_SECRET` | `dev-change-me` | 管理员登录 Cookie 签名密钥，生产环境必须修改 |
-| `NODE_ENV` | `production` | 生产运行环境 |
-
-环境变量模板已经放在 `.env.example`，部署时可以复制为 `.env` 后修改。
+- **统一 API 入口**：所有 `/api/*` 请求都会经过 `middleware.ts`，再进入对应 API Route。
+- **Serverless 兼容**：限流、失败计数与封禁状态使用 Redis 兼容的 Vercel KV / Upstash REST 存储，不依赖单实例内存状态。
+- **限流策略**：默认每个 IP + 路由 60 秒最多 60 次请求；登录相关接口默认每个 IP + 路由 60 秒最多 10 次请求。
+- **登录风控**：登录失败会写入带 TTL 的外部失败计数，达到阈值后写入短期 TTL 封禁。
+- **真实 IP 获取**：优先读取 `x-forwarded-for`、`x-real-ip`、`x-vercel-forwarded-for`、`cf-connecting-ip`，不依赖 `req.ip`。
+- **管理接口鉴权**：管理员会话、会话管理、客服管理、内部聊天、图片清理等接口均应在 API 层完成鉴权。
+- **生产 source map**：`next.config.js` 已关闭 `productionBrowserSourceMaps`。
 
 ## 目录结构
 
 ```text
 app/                 Next.js 页面与 API Routes
-app/page.tsx         访客聊天窗口
-app/admin/page.tsx   客服后台
-app/api/             登录、上传、会话、消息 API
-lib/                 数据库与认证工具
-public/uploads/      图片上传目录
-scripts/             数据库、账号、启动和打包脚本
-server.js            Next.js + Socket.io 自定义服务
-START_HERE.md         小白快速说明
-docs/DEPLOYMENT_MANUAL_ZH.md  说明书式部署教程
-.env.example          环境变量模板
+app/page.tsx         访客聊天页面
+app/admin/page.tsx   客服后台页面
+app/api/             登录、上传、会话、消息等 API Routes
+lib/                 数据库、认证与 API 安全工具
+frontend/            前端职责边界说明
+backend/             后端/API 职责边界说明
+shared/              共享代码职责边界说明
+scripts/             数据库、账号、打包脚本
+docs/                部署与安全文档
+public/uploads/      本地开发上传占位目录
+.env.example         环境变量模板
 ```
 
-## Ubuntu VPS 建议
-
-1. 安装 Node.js 20+。
-2. 设置 `AUTH_SECRET` 和 `DATABASE_PATH`。
-3. 使用 `npm install && npm run build && npm run start` 启动。
-4. 可用 systemd 或 pm2 守护 `npm run start`。
-5. 使用 Nginx 反向代理到本服务端口，并确保 WebSocket 代理开启。
-
-## Windows 本地开发
+## 快速启动
 
 ```bash
 npm install
-npm run dev
-```
-
-或者双击/运行：
-
-```bat
-scripts\start-windows.bat
-```
-
-如需测试 Socket.io 生产服务，请运行：
-
-```bash
 npm run build
 npm run start
 ```
+
+生产部署建议使用 Vercel 标准构建流程，并在 Vercel 控制台配置环境变量。
+
+## 环境变量
+
+`.env.example` 包含仓库内可配置的安全参数。生产环境不要提交真实 `.env` 文件；请在 Vercel 项目设置中配置真实值。
+
+| 名称 | 默认/示例 | 说明 |
+| --- | --- | --- |
+| `NODE_ENV` | `production` | 生产运行环境。 |
+| `AUTH_SECRET` | `replace-with-a-long-random-cookie-signing-secret` | Cookie 签名密钥，生产必须使用高强度随机值。 |
+| `POSTGRES_URL` | `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require` | Postgres 连接串。 |
+| `DATABASE_URL` | 可选 | 可替代 `POSTGRES_URL` 的平台连接串变量。 |
+| `DEFAULT_ADMIN_USERNAME` | `owner-root` | 首个超级管理员用户名；已有超级管理员后不再创建。 |
+| `DEFAULT_ADMIN_PASSWORD` | `replace-with-a-strong-private-password` | 首个超级管理员密码；必须使用强密码，不得提交真实值。 |
+| `RESET_SUPER_ADMIN_ON_BOOTSTRAP` | `0` | 仅应在一次性恢复时临时设为 `1`，完成后立即恢复为 `0` 或删除。 |
+| `KV_REST_API_URL` | `https://example.upstash.io` | Vercel KV / Upstash REST URL。生产 API 限流必需。 |
+| `KV_REST_API_TOKEN` | `replace-with-kv-rest-token` | Vercel KV / Upstash REST Token。生产 API 限流必需。 |
+| `UPSTASH_REDIS_REST_URL` | 可选 | `KV_REST_API_URL` 的兼容替代变量。 |
+| `UPSTASH_REDIS_REST_TOKEN` | 可选 | `KV_REST_API_TOKEN` 的兼容替代变量。 |
+| `API_RATE_LIMIT_WINDOW_SECONDS` | `60` | API 限流窗口秒数。 |
+| `API_RATE_LIMIT_GLOBAL_MAX` | `60` | 普通 API 每 IP + 路由每窗口最大请求数。 |
+| `API_RATE_LIMIT_AUTH_MAX` | `10` | 登录相关 API 每 IP + 路由每窗口最大请求数。 |
+| `AUTH_FAILURE_LIMIT` | `5` | 登录失败计数阈值，达到后触发短期封禁。 |
+| `AUTH_SLOWDOWN_FAILURES` | `3` | 预留的登录降速阈值配置，供后续更细粒度策略使用。 |
+| `AUTH_BAN_SECONDS` | `600` | 登录失败封禁 TTL 秒数。 |
+
+## Vercel 与 Cloudflare 配置说明
+
+代码仓库只能实现应用层安全控制，不能自动读取或验证 Vercel / Cloudflare 控制台配置。部署人员需要在控制台手动完成以下事项：
+
+1. 在 Vercel 项目中配置所有生产环境变量，尤其是 `AUTH_SECRET`、数据库连接串、KV/Redis REST URL 与 Token。
+2. 确认 Vercel Edge Network 正常承载生产流量，并保留转发 IP 相关请求头。
+3. 如接入 Cloudflare，请在 Cloudflare 控制台配置 WAF、Bot 防护、速率限制与真实 IP 转发策略。
+4. 不要把关键安全逻辑只依赖 CDN；本仓库已在 API 层实现限流与封禁闭环。
+
+## 数据库初始化与管理员
+
+首次访问需要初始化 Postgres 表结构。也可手动运行：
+
+```bash
+npm run init-db
+```
+
+首次超级管理员依赖 `DEFAULT_ADMIN_USERNAME` 与 `DEFAULT_ADMIN_PASSWORD`。生产环境必须使用强密码，并在创建后妥善轮换。
+
+## 更多文档
+
+- 安全与 Serverless 说明：[`docs/api-security.md`](./docs/api-security.md)
+- 部署手册：[`docs/DEPLOYMENT_MANUAL_ZH.md`](./docs/DEPLOYMENT_MANUAL_ZH.md)
