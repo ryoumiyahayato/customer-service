@@ -1,5 +1,5 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
-import { getOrCreateSession, initDb, insertMessage, log, upsertVisitor } from '@/lib/db';
+import { NextRequest, NextResponse } from 'next/server';
+import { getOrCreateSession, getSessionById, initDb, insertMessage, log, upsertVisitor } from '@/lib/db';
 import { currentAdmin } from '@/lib/auth';
 import { currentVisitorAccount } from '@/lib/visitor-auth';
 export const dynamic = 'force-dynamic';
@@ -16,10 +16,19 @@ export async function POST(req: NextRequest) {
     let session: any = null;
     if (senderType === 'VISITOR') {
       const account = await currentVisitorAccount();
-      const v = await upsertVisitor(b.visitorId, account);
+      const requestedVisitorId = String(b.visitorId || '').trim();
+      if (!account && !requestedVisitorId.startsWith('visitor_')) return NextResponse.json({ error: '游客身份无效，请刷新页面后重试' }, { status: 400 });
+      const v = await upsertVisitor(requestedVisitorId, account);
       senderId = v.key;
-      session = sessionId ? null : await getOrCreateSession(v.user.id);
-      sessionId = sessionId || session.id;
+      if (sessionId) {
+        const existing = await getSessionById(String(sessionId));
+        if (!existing || existing.user_id !== v.user.id || existing.deleted_at) sessionId = '';
+      }
+      session = sessionId ? await getSessionById(String(sessionId)) : await getOrCreateSession(v.user.id);
+      sessionId = session.id;
+    } else if (sessionId) {
+      const existing = await getSessionById(String(sessionId));
+      if (!existing || existing.deleted_at) return NextResponse.json({ error: '会话已删除或不存在' }, { status: 404 });
     }
     if (!sessionId || !senderId) return NextResponse.json({ error: 'Missing session or sender' }, { status: 400 });
     const msg = await insertMessage({ ...b, sessionId }, senderType, senderId);

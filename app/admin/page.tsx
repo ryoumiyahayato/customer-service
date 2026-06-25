@@ -1,5 +1,5 @@
-﻿'use client';
-import { useEffect, useMemo, useState } from 'react';
+'use client';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 type AdminUser = { id: string; username: string; role: 'SUPER_ADMIN' | 'OPERATOR'; is_disabled?: number };
 type View = 'sessions' | 'operators' | 'staffChat';
@@ -20,6 +20,7 @@ export default function Admin() {
   const [staffText, setStaffText] = useState('');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ PENDING: true, OPEN: true, CLOSED: false, ARCHIVED: false, DELETED: true });
   const [notice, setNotice] = useState('');
+  const openRequest = useRef(0);
   const isSuper = admin?.role === 'SUPER_ADMIN';
 
   function disabledExit() { alert('该账户权限已被禁用'); location.href = '/'; }
@@ -36,7 +37,7 @@ export default function Admin() {
   async function createOperator(e: any) { e.preventDefault(); const fd = new FormData(e.currentTarget); const r = await fetch('/api/admins', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: fd.get('username'), password: fd.get('password') }) }); const d = await r.json().catch(() => ({})); if (r.ok) { e.currentTarget.reset(); setNotice('一般客服账号已创建'); await loadOperators(); } else setNotice(d.error || '创建失败'); }
   async function disableOp(op: any) { if (!confirm(`确认禁用客服账号 ${op.username}？`)) return; const r = await fetch('/api/admins/operators', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: op.id }) }); const d = await r.json().catch(() => ({})); setNotice(r.ok ? '客服账号已禁用，相关会话已进入删除暂存' : (d.error || '操作失败')); await loadOperators(); await load(); }
   async function hardDeleteOp(op: any) { if (!confirm(`彻底删除 ${op.username} 并释放名称？`)) return; const r = await fetch('/api/admins/operators', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: op.id, hard: true }) }); const d = await r.json().catch(() => ({})); setNotice(r.ok ? '客服账号已彻底删除，名称已释放' : (d.error || '操作失败')); await loadOperators(); }
-  async function open(s: any, markRead = true) { setCur(s); setQuote(null); if (s.deleted_at) { setMsgs([]); return; } if (markRead) await fetch(`/api/sessions/${s.id}/read`, { method: 'POST' }); const r = await fetch('/api/visitor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ visitorId: s.visitor_key }) }); const d = await r.json(); setMsgs(d.messages || []); }
+  async function open(s: any, markRead = true) { const requestId = ++openRequest.current; setCur(s); setQuote(null); setMsgs([]); if (s.deleted_at) return; const r = await fetch(`/api/sessions/${s.id}/messages`); const d = await r.json(); if (requestId === openRequest.current) setMsgs(d.messages || []); }
   async function act(path: string) { const r = await fetch(path, { method: 'POST' }); if (r.status === 403) disabledExit(); await load(); if (cur) await open(cur, false); }
   async function deleteSession(s: any) { if (!confirm('删除后 1 天内可以撤回，超过 1 天会自动清除。确认删除？')) return; await fetch(`/api/sessions/${s.id}/delete`, { method: 'POST' }); setCur(undefined); setMsgs([]); await load(); }
   async function restore(s: any) { const r = await fetch(`/api/sessions/${s.id}/restore`, { method: 'POST' }); const d = await r.json().catch(() => ({})); setNotice(r.ok ? '会话已恢复' : (d.error || '恢复失败')); await load(); }

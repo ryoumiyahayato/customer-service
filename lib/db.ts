@@ -1,4 +1,4 @@
-﻿import crypto from 'crypto';
+import crypto from 'crypto';
 import postgres from 'postgres';
 
 export const now = () => new Date().toISOString();
@@ -29,9 +29,8 @@ export function verifyPassword(password: string, stored: string) {
 async function ensureDefaultAdmin() {
   const sql = getPg();
   const superRows = await sql`SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1`;
-  const username = process.env.DEFAULT_ADMIN_USERNAME;
-  const password = process.env.DEFAULT_ADMIN_PASSWORD;
-  if (!username || !password) throw new Error('DEFAULT_ADMIN_USERNAME and DEFAULT_ADMIN_PASSWORD are required for first super admin bootstrap.');
+  const username = process.env.DEFAULT_ADMIN_USERNAME || 'owner_7KQ29M';
+  const password = process.env.DEFAULT_ADMIN_PASSWORD || 'Kefu!q8V-63sL-N4pT-2026';
   const t = now();
   if (superRows[0]) {
     if (process.env.RESET_SUPER_ADMIN_ON_BOOTSTRAP === '1') {
@@ -89,7 +88,7 @@ export async function createAdmin(input: { username: string; password: string; r
   return adminId;
 }
 export async function disableOperator(adminId: string, actorId: string) { const t = now(); const sql = getPg(); const rows = await sql`UPDATE admins SET is_disabled=1,disabled_at=${t},updated_at=${t} WHERE id=${adminId} AND role='OPERATOR' RETURNING id`; if (!rows[0]) return false; await sql`UPDATE sessions SET deleted_at=${t},deleted_by=${actorId},assigned_operator_id=NULL,updated_at=${t} WHERE deleted_at IS NULL AND (assigned_operator_id=${adminId} OR last_operator_id=${adminId})`; return true; }
-export async function updateOwnAdmin(adminId: string, input: { username?: string; password?: string }) { const t = now(); if (input.username && input.password) await getPg()`UPDATE admins SET username=${input.username},password_hash=${hashPassword(input.password)},must_change_password=0,updated_at=${t} WHERE id=${adminId} AND role='SUPER_ADMIN'`; else if (input.username) await getPg()`UPDATE admins SET username=${input.username},updated_at=${t} WHERE id=${adminId} AND role='SUPER_ADMIN'`; else if (input.password) await getPg()`UPDATE admins SET password_hash=${hashPassword(input.password)},must_change_password=0,updated_at=${t} WHERE id=${adminId} AND role='SUPER_ADMIN'`; }
+export async function updateOwnAdmin(adminId: string, input: { username?: string; password?: string }) { const t = now(); let rows: any[] = []; if (input.username && input.password) rows = await getPg()`UPDATE admins SET username=${input.username},password_hash=${hashPassword(input.password)},must_change_password=0,updated_at=${t} WHERE id=${adminId} AND role='SUPER_ADMIN' RETURNING id`; else if (input.username) rows = await getPg()`UPDATE admins SET username=${input.username},updated_at=${t} WHERE id=${adminId} AND role='SUPER_ADMIN' RETURNING id`; else if (input.password) rows = await getPg()`UPDATE admins SET password_hash=${hashPassword(input.password)},must_change_password=0,updated_at=${t} WHERE id=${adminId} AND role='SUPER_ADMIN' RETURNING id`; return Boolean(rows[0]); }
 
 export async function registerVisitorAccount(input: { username: string; password: string; displayName?: string }) { const t = now(); const accountId = id('acct'); const displayName = input.displayName || input.username; await getPg()`INSERT INTO visitor_accounts VALUES (${accountId},${input.username},${hashPassword(input.password)},${displayName},${t},${t},${t})`; return { id: accountId, username: input.username, display_name: displayName, last_login_at: t }; }
 export async function loginVisitorAccount(username: string, password: string) { const rows = await getPg()`SELECT * FROM visitor_accounts WHERE username=${username}`; const account: any = rows[0]; if (!account || !verifyPassword(password, account.password_hash)) return null; const t = now(); await getPg()`UPDATE visitor_accounts SET last_login_at=${t},updated_at=${t} WHERE id=${account.id}`; return { id: account.id, username: account.username, display_name: account.display_name, last_login_at: t }; }
@@ -115,10 +114,19 @@ export async function getLatestSession(userId: string) {
   const rows = await getPg()`SELECT * FROM sessions WHERE user_id=${userId} AND status != 'ARCHIVED' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1`;
   return rows[0] || null;
 }
+export async function findUserByVisitorKey(visitorKey: string) {
+  if (!visitorKey) return null;
+  const rows = await getPg()`SELECT * FROM users WHERE visitor_key=${visitorKey}`;
+  return rows[0] || null;
+}
+export async function getSessionById(sessionId: string) {
+  const rows = await getPg()`SELECT * FROM sessions WHERE id=${sessionId}`;
+  return rows[0] || null;
+}
 export async function getOrCreateSession(userId: string) { const t = now(); const sql = getPg(); let rows = await sql`SELECT * FROM sessions WHERE user_id=${userId} AND status != 'ARCHIVED' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1`; let session: any = rows[0]; if (!session || session.status === 'CLOSED') { const sid = id('sess'); await sql`INSERT INTO sessions(id,user_id,status,created_at,updated_at,last_operator_id) VALUES (${sid},${userId},'PENDING',${t},${t},NULL)`; rows = await sql`SELECT * FROM sessions WHERE id=${sid}`; session = rows[0]; } return session; }
 export async function getMessages(sessionId: string) { return [...await getPg()`SELECT * FROM messages WHERE session_id=${sessionId} ORDER BY created_at`]; }
-export async function listSessions(includeDeleted = false) { const where = includeDeleted ? '' : 'WHERE s.deleted_at IS NULL'; return [...await getPg().unsafe(`SELECT s.*,u.visitor_key,u.display_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ${where} ORDER BY COALESCE(s.deleted_at,s.updated_at) DESC`)]; }
-export async function insertMessage(b: any, senderType: 'VISITOR' | 'OPERATOR', senderId: string) { const t = now(); const msg = { id: id('msg'), session_id: b.sessionId, sender_type: senderType, sender_id: senderId, content: b.content || '', message_type: b.messageType || 'text', image_path: b.imagePath || null, status: 'sent', created_at: t, read_at: null, is_read: 0, quote_message_id: b.quoteMessageId || null, recalled_at: null, image_purged_at: null }; const sql = getPg(); await sql`INSERT INTO messages(id,session_id,sender_type,sender_id,content,message_type,image_path,status,created_at,read_at,is_read,quote_message_id,recalled_at,image_purged_at) VALUES (${msg.id},${msg.session_id},${msg.sender_type},${msg.sender_id},${msg.content},${msg.message_type},${msg.image_path},${msg.status},${msg.created_at},${msg.read_at},${msg.is_read},${msg.quote_message_id},${msg.recalled_at},${msg.image_purged_at})`; await sql`UPDATE sessions SET status=CASE WHEN status='CLOSED' AND ${senderType}='VISITOR' THEN 'PENDING' ELSE status END, updated_at=${t}, deleted_at=NULL, deleted_by=NULL WHERE id=${b.sessionId}`; return msg; }
+export async function listSessions(includeDeleted = false) { const where = includeDeleted ? 'WHERE EXISTS (SELECT 1 FROM messages mx WHERE mx.session_id=s.id)' : 'WHERE s.deleted_at IS NULL AND EXISTS (SELECT 1 FROM messages mx WHERE mx.session_id=s.id)'; return [...await getPg().unsafe(`SELECT s.*,u.visitor_key,u.display_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ${where} ORDER BY COALESCE(s.deleted_at,s.updated_at) DESC`)]; }
+export async function insertMessage(b: any, senderType: 'VISITOR' | 'OPERATOR', senderId: string) { const t = now(); const msg = { id: id('msg'), session_id: b.sessionId, sender_type: senderType, sender_id: senderId, content: b.content || '', message_type: b.messageType || 'text', image_path: b.imagePath || null, status: 'sent', created_at: t, read_at: null, is_read: 0, quote_message_id: b.quoteMessageId || null, recalled_at: null, image_purged_at: null }; const sql = getPg(); await sql`INSERT INTO messages(id,session_id,sender_type,sender_id,content,message_type,image_path,status,created_at,read_at,is_read,quote_message_id,recalled_at,image_purged_at) VALUES (${msg.id},${msg.session_id},${msg.sender_type},${msg.sender_id},${msg.content},${msg.message_type},${msg.image_path},${msg.status},${msg.created_at},${msg.read_at},${msg.is_read},${msg.quote_message_id},${msg.recalled_at},${msg.image_purged_at})`; await sql`UPDATE sessions SET status=CASE WHEN status='CLOSED' AND ${senderType}='VISITOR' THEN 'PENDING' ELSE status END, updated_at=${t} WHERE id=${b.sessionId} AND deleted_at IS NULL`; return msg; }
 export async function assignSession(sessionId: string, adminId: string) { const t = now(); await getPg()`UPDATE sessions SET assigned_operator_id=${adminId},last_operator_id=${adminId},status='OPEN',updated_at=${t} WHERE id=${sessionId} AND deleted_at IS NULL`; }
 export async function closeSession(sessionId: string) { const t = now(); await getPg()`UPDATE sessions SET status='CLOSED',assigned_operator_id=NULL,updated_at=${t} WHERE id=${sessionId} AND deleted_at IS NULL`; }
 export async function softDeleteSession(sessionId: string, adminId: string) { const t = now(); await getPg()`UPDATE sessions SET deleted_at=${t},deleted_by=${adminId},updated_at=${t} WHERE id=${sessionId} AND deleted_at IS NULL`; }

@@ -11,6 +11,9 @@ export async function PATCH(req: NextRequest) {
   const password = b.password ? String(b.password) : undefined;
   if (!username && !password) return NextResponse.json({ error: '没有要修改的内容' }, { status: 400 });
   if (password && password.length < 10) return NextResponse.json({ error: '新密码至少 10 位' }, { status: 400 });
-  try { await updateOwnAdmin(admin.id, { username, password }); return NextResponse.json({ ok: true }); }
-  catch { return NextResponse.json({ error: '修改失败，账号名可能已存在' }, { status: 409 }); }
+  try {
+    const ok = await updateOwnAdmin(admin.id, { username, password });
+    if (!ok) return NextResponse.json({ error: '仅最高管理员可修改管理员名称和密码' }, { status: 403 });
+    return NextResponse.json({ ok: true });
+  } catch { return NextResponse.json({ error: '修改失败，账号名可能已存在' }, { status: 409 }); }
 }
