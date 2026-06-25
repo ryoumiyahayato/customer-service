@@ -1,8 +1,10 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { requireAdmin } from '@/lib/auth';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET() {
+  await requireAdmin();
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
