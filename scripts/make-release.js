@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 const root = process.cwd();
 const outRoot = path.join(root, 'release');
 const out = path.join(outRoot, 'support-system');
-const include = ['app','lib','public','scripts','docs','server.js','package.json','next.config.js','tsconfig.json','next-env.d.ts','declarations.d.ts','README.md','START_HERE.md','.env.example'];
+const include = ['app','lib','public','scripts','docs','package.json','next.config.js','tsconfig.json','next-env.d.ts','declarations.d.ts','README.md','START_HERE.md','.env.example'];
 
 fs.rmSync(outRoot, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });

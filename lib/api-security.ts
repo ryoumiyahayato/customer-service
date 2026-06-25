@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const WINDOW_SECONDS = 60;
-const GLOBAL_LIMIT = 60;
-const AUTH_LIMIT = 10;
-const FAILURE_LIMIT = 5;
-const SLOWDOWN_LIMIT = 3;
-const BAN_SECONDS = 10 * 60;
+
+function intEnv(name: string, fallback: number) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+const WINDOW_SECONDS = intEnv('API_RATE_LIMIT_WINDOW_SECONDS', 60);
+const GLOBAL_LIMIT = intEnv('API_RATE_LIMIT_GLOBAL_MAX', 60);
+const AUTH_LIMIT = intEnv('API_RATE_LIMIT_AUTH_MAX', 10);
+const FAILURE_LIMIT = intEnv('AUTH_FAILURE_LIMIT', 5);
+const SLOWDOWN_LIMIT = intEnv('AUTH_SLOWDOWN_FAILURES', 3);
+const BAN_SECONDS = intEnv('AUTH_BAN_SECONDS', 10 * 60);
 const MISSING_STORE_STATUS = 503;
 
 type StoreResult<T> = { ok: true; value: T } | { ok: false; response: NextResponse };
