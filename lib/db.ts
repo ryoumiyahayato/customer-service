@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+﻿import crypto from 'crypto';
 import postgres from 'postgres';
 
 export const now = () => new Date().toISOString();
@@ -95,7 +95,26 @@ export async function registerVisitorAccount(input: { username: string; password
 export async function loginVisitorAccount(username: string, password: string) { const rows = await getPg()`SELECT * FROM visitor_accounts WHERE username=${username}`; const account: any = rows[0]; if (!account || !verifyPassword(password, account.password_hash)) return null; const t = now(); await getPg()`UPDATE visitor_accounts SET last_login_at=${t},updated_at=${t} WHERE id=${account.id}`; return { id: account.id, username: account.username, display_name: account.display_name, last_login_at: t }; }
 export async function getVisitorAccountById(accountId: string) { const rows = await getPg()`SELECT id,username,display_name,last_login_at FROM visitor_accounts WHERE id=${accountId}`; return rows[0] || null; }
 
-export async function upsertVisitor(visitorId?: string, account?: any) { const key = account ? `acct_${account.id}` : (visitorId || id('visitor')); const t = now(); const sql = getPg(); let rows = await sql`SELECT * FROM users WHERE visitor_key=${key}`; let user: any = rows[0]; const displayName = account?.display_name || `闂佽崵濮崇粈渚€鎮樺┑瀣垫晣?${key.slice(-6)}`; if (!user) { await sql`INSERT INTO users(id,visitor_key,account_id,display_name,last_seen_at,created_at,updated_at) VALUES (${id('user')},${key},${account?.id || null},${displayName},${t},${t},${t})`; rows = await sql`SELECT * FROM users WHERE visitor_key=${key}`; user = rows[0]; } else { await sql`UPDATE users SET account_id=${account?.id || user.account_id},display_name=${displayName},last_seen_at=${t},updated_at=${t} WHERE id=${user.id}`; } return { key, user }; }
+export async function upsertVisitor(visitorId?: string, account?: any) {
+  const key = account ? `acct_${account.id}` : (visitorId || id('visitor'));
+  const t = now();
+  const sql = getPg();
+  let rows = await sql`SELECT * FROM users WHERE visitor_key=${key}`;
+  let user: any = rows[0];
+  const displayName = account?.display_name || `游客 ${key.slice(-6)}`;
+  if (!user) {
+    await sql`INSERT INTO users(id,visitor_key,account_id,display_name,last_seen_at,created_at,updated_at) VALUES (${id('user')},${key},${account?.id || null},${displayName},${t},${t},${t})`;
+    rows = await sql`SELECT * FROM users WHERE visitor_key=${key}`;
+    user = rows[0];
+  } else {
+    await sql`UPDATE users SET account_id=${account?.id || user.account_id},display_name=${displayName},last_seen_at=${t},updated_at=${t} WHERE id=${user.id}`;
+  }
+  return { key, user };
+}
+export async function getLatestSession(userId: string) {
+  const rows = await getPg()`SELECT * FROM sessions WHERE user_id=${userId} AND status != 'ARCHIVED' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1`;
+  return rows[0] || null;
+}
 export async function getOrCreateSession(userId: string) { const t = now(); const sql = getPg(); let rows = await sql`SELECT * FROM sessions WHERE user_id=${userId} AND status != 'ARCHIVED' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1`; let session: any = rows[0]; if (!session || session.status === 'CLOSED') { const sid = id('sess'); await sql`INSERT INTO sessions(id,user_id,status,created_at,updated_at,last_operator_id) VALUES (${sid},${userId},'PENDING',${t},${t},NULL)`; rows = await sql`SELECT * FROM sessions WHERE id=${sid}`; session = rows[0]; } return session; }
 export async function getMessages(sessionId: string) { return [...await getPg()`SELECT * FROM messages WHERE session_id=${sessionId} ORDER BY created_at`]; }
 export async function listSessions(includeDeleted = false) { const where = includeDeleted ? '' : 'WHERE s.deleted_at IS NULL'; return [...await getPg().unsafe(`SELECT s.*,u.visitor_key,u.display_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ${where} ORDER BY COALESCE(s.deleted_at,s.updated_at) DESC`)]; }
@@ -116,3 +135,26 @@ export async function recallMessage(messageId: string, adminId: string) { const 
 export async function purgeAdminImages(adminId: string) { const t = now(); await getPg()`UPDATE messages SET image_path=NULL,image_purged_at=${t},content='' WHERE sender_id=${adminId} AND message_type='image'`; }
 export async function hardDeleteDisabledOperator(adminId: string) { const sql = getPg(); await sql`UPDATE sessions SET assigned_operator_id=NULL,last_operator_id=NULL WHERE assigned_operator_id=${adminId} OR last_operator_id=${adminId}`; const rows = await sql`DELETE FROM admins WHERE id=${adminId} AND role='OPERATOR' AND is_disabled=1 RETURNING id`; return Boolean(rows[0]); }
 export async function markOperatorMessagesRead(sessionId: string) { const t = now(); await getPg()`UPDATE messages SET is_read=1,status=CASE WHEN status='sent' THEN 'read' ELSE status END,read_at=COALESCE(read_at,${t}) WHERE session_id=${sessionId} AND sender_type='OPERATOR' AND status!='recalled'`; }
+
+export async function bindGuestToAccount(visitorKey: string, account: any) {
+  if (!visitorKey || !visitorKey.startsWith('visitor_')) return;
+  const accountKey = `acct_${account.id}`;
+  const t = now();
+  const sql = getPg();
+  const accountUser = await sql`SELECT id FROM users WHERE visitor_key=${accountKey}`;
+  const guestUser = await sql`SELECT id FROM users WHERE visitor_key=${visitorKey}`;
+  if (!guestUser[0]) return;
+  if (accountUser[0]) {
+    await sql`UPDATE sessions SET user_id=${accountUser[0].id}, updated_at=${t} WHERE user_id=${guestUser[0].id}`;
+    await sql`DELETE FROM users WHERE id=${guestUser[0].id}`;
+  } else {
+    await sql`UPDATE users SET visitor_key=${accountKey}, account_id=${account.id}, display_name=${account.display_name}, updated_at=${t} WHERE id=${guestUser[0].id}`;
+  }
+}
+
+export async function deleteGuestHistory(visitorKey: string) {
+  if (!visitorKey || !visitorKey.startsWith('visitor_')) return;
+  await getPg()`DELETE FROM users WHERE visitor_key=${visitorKey}`;
+}
+
+

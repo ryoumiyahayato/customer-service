@@ -1,7 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { initDb, registerVisitorAccount } from '@/lib/db';
+﻿import { NextRequest, NextResponse } from 'next/server';
+import { bindGuestToAccount, deleteGuestHistory, initDb, registerVisitorAccount } from '@/lib/db';
 import { makeVisitorToken, VISITOR_ACCOUNT_COOKIE } from '@/lib/visitor-auth';
 export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   await initDb();
   const b = await req.json();
@@ -9,6 +10,8 @@ export async function POST(req: NextRequest) {
   if (String(b.password).length < 6) return NextResponse.json({ error: '密码至少 6 位' }, { status: 400 });
   try {
     const account = await registerVisitorAccount({ username: String(b.username).trim(), password: String(b.password), displayName: b.displayName ? String(b.displayName).trim() : undefined });
+    if (b.claimGuest && b.visitorId) await bindGuestToAccount(String(b.visitorId), account);
+    if (b.discardGuest && b.visitorId) await deleteGuestHistory(String(b.visitorId));
     const res = NextResponse.json({ account });
     res.cookies.set(VISITOR_ACCOUNT_COOKIE, makeVisitorToken(account.id), { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 7, secure: process.env.NODE_ENV === 'production' });
     return res;
