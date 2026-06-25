@@ -39,6 +39,7 @@ async function redisCommand<T = unknown>(command: unknown[]): Promise<StoreResul
   const config = kvConfig();
   if (!config) {
     if (failClosedWhenStoreUnavailable()) {
+    if (process.env.NODE_ENV === 'production') {
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is not configured' }, { status: MISSING_STORE_STATUS }) };
     }
     return { ok: true, value: null as T };
@@ -60,6 +61,7 @@ async function redisCommand<T = unknown>(command: unknown[]): Promise<StoreResul
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
     }
     return { ok: true, value: null as T };
+    return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
   }
 }
 
@@ -67,6 +69,7 @@ async function redisPipeline<T = unknown>(commands: unknown[][]): Promise<StoreR
   const config = kvConfig();
   if (!config) {
     if (failClosedWhenStoreUnavailable()) {
+    if (process.env.NODE_ENV === 'production') {
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is not configured' }, { status: MISSING_STORE_STATUS }) };
     }
     return { ok: true, value: [] as T[] };
@@ -89,6 +92,7 @@ async function redisPipeline<T = unknown>(commands: unknown[][]): Promise<StoreR
       return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
     }
     return { ok: true, value: [] as T[] };
+    return { ok: false, response: NextResponse.json({ error: 'API rate-limit store is unavailable' }, { status: MISSING_STORE_STATUS }) };
   }
 }
 
@@ -124,6 +128,7 @@ export async function checkApiRequest(req: NextRequest): Promise<StoreResult<Rat
   if (!result.ok) return result;
 
   if (result.value.length === 0) {
+  if (process.env.NODE_ENV !== 'production' && result.value.length === 0) {
     return { ok: true, value: { allowed: true, limit, remaining: limit, resetSeconds: WINDOW_SECONDS } };
   }
 
