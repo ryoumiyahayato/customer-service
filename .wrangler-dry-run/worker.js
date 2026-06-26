@@ -14,7 +14,7 @@ var ChatRoom = class {
     const url = new URL(req.url);
     if (url.pathname === "/broadcast") {
       const payload = await req.text();
-      for (const ws of this.state.getWebSockets()) ws.send(payload);
+      this.sendToSockets((meta) => meta.mode !== "global", payload);
       return new Response("ok");
     }
     if (req.headers.get("Upgrade") !== "websocket") {
@@ -22,21 +22,80 @@ var ChatRoom = class {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
+    if (url.pathname === "/ws") {
+      const role = url.searchParams.get("role");
+      const sessionId = url.searchParams.get("sessionId") || "";
+      if (role !== "user" && role !== "admin" || !sessionId) {
+        return new Response("Invalid WebSocket role or sessionId", { status: 400 });
+      }
+      this.state.acceptWebSocket(server);
+      server.serializeAttachment({ mode: "global", role, sessionId });
+      server.send(JSON.stringify({ type: "connected", role, sessionId, time: (/* @__PURE__ */ new Date()).toISOString() }));
+      return new Response(null, { status: 101, webSocket: client });
+    }
     this.state.acceptWebSocket(server);
+    server.serializeAttachment({ mode: "room" });
     server.send(JSON.stringify({ type: "connected", ts: Date.now() }));
     return new Response(null, { status: 101, webSocket: client });
   }
   async webSocketMessage(ws, message) {
     if (typeof message !== "string") return;
+    const meta = this.getMeta(ws);
     try {
       const data = JSON.parse(message);
-      if (data?.type === "ping") ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
+      if (data?.type === "ping") {
+        ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
+        return;
+      }
+      if (meta.mode === "global") {
+        this.forwardGlobalMessage(ws, meta, data);
+      }
     } catch {
+      ws.send(JSON.stringify({ type: "error", error: "Invalid JSON message" }));
     }
   }
   async webSocketClose() {
   }
   async webSocketError() {
+  }
+  forwardGlobalMessage(ws, meta, data) {
+    const sessionId = String(data?.sessionId || meta.sessionId || "");
+    const content = String(data?.content || "");
+    if (!sessionId || !content) {
+      ws.send(JSON.stringify({ type: "error", error: "Message requires sessionId and content" }));
+      return;
+    }
+    const fromRole = meta.role === "admin" ? "admin" : "user";
+    const payload = {
+      type: "message",
+      sessionId,
+      content,
+      fromRole,
+      time: typeof data?.time === "string" ? data.time : (/* @__PURE__ */ new Date()).toISOString()
+    };
+    const encoded = JSON.stringify(payload);
+    if (fromRole === "user") {
+      this.sendToSockets((socketMeta, socket) => socket === ws || socketMeta.role === "admin", encoded);
+      return;
+    }
+    this.sendToSockets((socketMeta) => socketMeta.role === "user" && socketMeta.sessionId === sessionId, encoded);
+  }
+  sendToSockets(filter, payload) {
+    for (const socket of this.state.getWebSockets()) {
+      const meta = this.getMeta(socket);
+      if (!filter(meta, socket)) continue;
+      try {
+        socket.send(payload);
+      } catch {
+      }
+    }
+  }
+  getMeta(ws) {
+    try {
+      return ws.deserializeAttachment() || { mode: "room" };
+    } catch {
+      return { mode: "room" };
+    }
   }
 };
 
@@ -221,7 +280,8 @@ async function visitorOwnsSession(env, req, session) {
 }
 __name(visitorOwnsSession, "visitorOwnsSession");
 async function broadcast(env, room, payload) {
-  await env.CHAT_ROOMS.get(env.CHAT_ROOMS.idFromName(room)).fetch("https://room/broadcast", { method: "POST", body: JSON.stringify(payload) });
+  if (!env.CHAT_ROOM) throw new Error("CHAT_ROOM Durable Object binding is missing. Check wrangler.toml and deployment config.");
+  await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room)).fetch("https://room/broadcast", { method: "POST", body: JSON.stringify(payload) });
 }
 __name(broadcast, "broadcast");
 var notifyAdmins = /* @__PURE__ */ __name((env) => broadcast(env, "admin-feed", { type: "sessions:changed", ts: Date.now() }), "notifyAdmins");
@@ -345,13 +405,14 @@ async function api(req, env) {
     const username = String(b.username || "").trim();
     const password = String(b.password || "");
     const display = String(b.displayName || username).trim();
-    if (username.length < 3 || password.length < 8) return json({ error: "Invalid account" }, { status: 400 });
+    if (username.length < 3) return json({ error: "\u7528\u6237\u540D\u81F3\u5C11\u9700\u8981 3 \u4E2A\u5B57\u7B26" }, { status: 400 });
+    if (password.length < 8) return json({ error: "\u5BC6\u7801\u81F3\u5C11\u9700\u8981 8 \u4E2A\u5B57\u7B26" }, { status: 400 });
     const t = now();
     const accountId = rid("acct");
     try {
       await env.DB.prepare("INSERT INTO visitor_accounts(id,username,password_hash,display_name,last_login_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)").bind(accountId, username, await hashPassword(password), display, t, t, t).run();
     } catch {
-      return json({ error: "Account exists" }, { status: 409 });
+      return json({ error: "\u8D26\u53F7\u5DF2\u5B58\u5728" }, { status: 409 });
     }
     const account = { id: accountId, username, display_name: display, last_login_at: t };
     if (b.claimGuest && b.visitorId) await bindGuest(env, String(b.visitorId), account);
@@ -461,18 +522,18 @@ async function api(req, env) {
   }
   if (path === "/api/ws/admin") {
     await requireAdmin(env, req);
-    return env.CHAT_ROOMS.get(env.CHAT_ROOMS.idFromName("admin-feed")).fetch(req);
+    return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("admin-feed")).fetch(req);
   }
   if (path === "/api/ws/staff") {
     await requireAdmin(env, req);
-    return env.CHAT_ROOMS.get(env.CHAT_ROOMS.idFromName("staff")).fetch(req);
+    return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("staff")).fetch(req);
   }
   const ws = path.match(/^\/api\/ws\/conversations\/([^/]+)$/);
   if (ws) {
     const session = await env.DB.prepare("SELECT * FROM sessions WHERE id=?").bind(ws[1]).first();
     if (!session) return new Response("Not found", { status: 404 });
     if (!await currentAdmin(env, req) && !await visitorOwnsSession(env, req, session)) return new Response("Unauthorized", { status: 401 });
-    return env.CHAT_ROOMS.get(env.CHAT_ROOMS.idFromName(`conversation:${ws[1]}`)).fetch(req);
+    return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(`conversation:${ws[1]}`)).fetch(req);
   }
   return json({ error: "Not found" }, { status: 404 });
 }
@@ -480,6 +541,10 @@ __name(api, "api");
 var worker_default = { async fetch(req, env, ctx) {
   try {
     const url = new URL(req.url);
+    if (url.pathname === "/ws") {
+      if (!env.CHAT_ROOM) return new Response("CHAT_ROOM Durable Object binding is missing", { status: 500 });
+      return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("global")).fetch(req);
+    }
     if (url.pathname.startsWith("/api/")) return await api(req, env);
     return env.ASSETS.fetch(req);
   } catch (e) {

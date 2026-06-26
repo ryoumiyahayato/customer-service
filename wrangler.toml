@@ -19,7 +19,7 @@ binding = "UPLOADS"
 bucket_name = "customer-chat-uploads"
 
 [[durable_objects.bindings]]
-name = "CHAT_ROOMS"
+name = "CHAT_ROOM"
 class_name = "ChatRoom"
 
 [[migrations]]
