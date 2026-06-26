@@ -1,0 +1,111 @@
+--- a/scripts/check-d1-before-0004.sql
++++ b/scripts/check-d1-before-0004.sql
+@@ -0,0 +1,30 @@
++-- Preflight checks before applying migrations/0004_message_dedupe_and_attachment_expiry.sql.
++-- Run these against the target D1 database before any remote 0004 apply.
++-- This file is read-only guidance; do not pipe it into a production migration apply.
++
++-- 1) Confirm whether 0004 columns already exist.
++PRAGMA table_info(messages);
++PRAGMA table_info(attachments);
++
++-- Required manual checks from the PRAGMA output:
++-- - messages.client_message_id must NOT exist before applying 0004.
++-- - attachments.expires_at must NOT exist before applying 0004.
++-- - attachments.deleted_at must NOT exist before applying 0004.
++-- If any of those fields already exist, do not rerun 0004 as-is. Use a patch migration
++-- for only the missing pieces, or repair the D1 migration state manually after verifying schema.
++
++-- 2) Confirm no duplicate non-null client_message_id rows exist before creating the unique index.
++SELECT session_id, sender_type, sender_id, client_message_id, COUNT(*) AS c
++FROM messages
++WHERE client_message_id IS NOT NULL
++GROUP BY session_id, sender_type, sender_id, client_message_id
++HAVING c > 1;
++
++-- Decision rules:
++-- - If all three fields are absent and the duplicate query returns zero rows, 0004 can be applied.
++-- - If fields are partially present, do not apply 0004 again; create a targeted patch migration
++--   or manually reconcile migration state after confirming the real schema.
++-- - If the duplicate query returns any rows, fix or merge those duplicates before creating
++--   idx_messages_client_dedupe.
++-- - Prefer testing 0004 on local or staging D1 first. Do not run remote production apply until
++--   these checks have been reviewed.
+--- a/src/worker.ts
++++ b/src/worker.ts
+@@ -16,6 +16,7 @@
+ const GUEST_COOKIE = 'guest_session';
+ const INVITE_TTL_MS = 24 * 60 * 60 * 1000;
+ const ERR_INVALID_INVITE = '\u94fe\u63a5\u5df2\u5931\u6548\uff0c\u8bf7\u8054\u7cfb\u5ba2\u670d\u91cd\u65b0\u83b7\u53d6';
++const ERR_INVITE_CREATE_FAILED = '\u4f1a\u8bdd\u521b\u5efa\u5931\u8d25\uff0c\u8bf7\u91cd\u65b0\u6253\u5f00\u9080\u8bf7\u94fe\u63a5\u6216\u8054\u7cfb\u5ba2\u670d';
+ const ERR_NO_SESSION_ACCESS = '\u65e0\u6743\u8bbf\u95ee\u8be5\u4f1a\u8bdd';
+ const ERR_SESSION_ENDED = '\u4f1a\u8bdd\u5df2\u7ed3\u675f';
+ const ERR_LOGIN_REQUIRED = '\u8bf7\u5148\u767b\u5f55\u540e\u53f0';
+@@ -56,7 +57,12 @@
+ async function inviteTokenHash(env: Env, value: string) { return await hmac(env.SESSION_SECRET, 'invite:' + value); }
+ function randomToken(bytes = 32) { const data = crypto.getRandomValues(new Uint8Array(bytes)); let s = ''; for (const b of data) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
+ const invalidInvite = () => json({ error: ERR_INVALID_INVITE }, { status: 410 });
+-async function createGuestSession(env: Env, visitorKey: string) { const id = rid('gsess'); await env.DB.prepare('INSERT INTO visitor_sessions(id,visitor_account_id,visitor_key,token_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)').bind(id, null, visitorKey, await tokenHash(env, id), now(), expiresAt()).run(); return await makeToken(env, id); }
++async function createGuestSessionRecord(env: Env, visitorKey: string) {
++  const id = rid('gsess');
++  await env.DB.prepare('INSERT INTO visitor_sessions(id,visitor_account_id,visitor_key,token_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)').bind(id, null, visitorKey, await tokenHash(env, id), now(), expiresAt()).run();
++  return { id, token: await makeToken(env, id) };
++}
++async function createGuestSession(env: Env, visitorKey: string) { return (await createGuestSessionRecord(env, visitorKey)).token; }
+ async function currentGuestSession(env: Env, req: Request) { const sessionId = await verifyToken(env, getCookie(req, GUEST_COOKIE)); if (!sessionId) return null; const row = await env.DB.prepare('SELECT visitor_key FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>? AND visitor_key IS NOT NULL').bind(sessionId, await tokenHash(env, sessionId), now()).first<any>(); if (!row?.visitor_key) return null; const user = await env.DB.prepare('SELECT * FROM users WHERE visitor_key=?').bind(row.visitor_key).first<any>(); if (!user) return null; const session = await latestSession(env, user.id); if (!session || session.deleted_at) return null; return { visitorKey: row.visitor_key as string, user, session }; }
+ function canAccessSession(admin: Admin | null, session: any) { return Boolean(admin && session && (admin.role === 'SUPER_ADMIN' || session.assigned_operator_id === admin.id)); }
+ function sessionEnded(session: any) { return Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED'); }
+@@ -68,7 +74,52 @@
+ async function guestOwnsSession(env: Env, req: Request, session: any) { const guest = await currentGuestSession(env, req); return Boolean(guest && session && guest.session.id === session.id && guest.user.id === session.user_id); }
+ async function guestPayload(env: Env, guest: any, init: ResponseInit = {}) { await env.DB.prepare("UPDATE messages SET is_read=1,status=CASE WHEN status='sent' THEN 'read' ELSE status END,read_at=COALESCE(read_at,?) WHERE session_id=? AND sender_type='OPERATOR' AND status!='recalled'").bind(now(), guest.session.id).run(); return json({ visitorId: guest.visitorKey, account: null, user: guest.user, session: guest.session, messages: await getMessages(env, guest.session.id) }, init); }
+ async function createInviteLink(req: Request, env: Env) { const admin = await requireAdmin(env, req); const b: any = await readJson(req); let sourceOperatorId: string | null = admin.role === 'OPERATOR' ? admin.id : null; if (admin.role === 'SUPER_ADMIN' && b.sourceOperatorId) { const op = await env.DB.prepare("SELECT id FROM admins WHERE id=? AND role='OPERATOR' AND is_disabled=0").bind(String(b.sourceOperatorId)).first<any>(); if (!op) return json({ error: ERR_OPERATOR_NOT_FOUND }, { status: 400 }); sourceOperatorId = op.id; } const token = randomToken(); const t = now(); const exp = new Date(Date.now() + INVITE_TTL_MS).toISOString(); const id = rid('inv'); await env.DB.prepare('INSERT INTO invite_links(id,token_hash,source_operator_id,created_by_admin_id,expires_at,created_at) VALUES(?,?,?,?,?,?)').bind(id, await inviteTokenHash(env, token), sourceOperatorId, admin.id, exp, t).run(); return json({ invite: { id, token, url: `/g/${token}`, expires_at: exp, source_operator_id: sourceOperatorId } }); }
+-async function consumeInvite(req: Request, env: Env, token: string) { const guest = await currentGuestSession(env, req); const tokenHash = await inviteTokenHash(env, token); const invite = await env.DB.prepare('SELECT * FROM invite_links WHERE token_hash=?').bind(tokenHash).first<any>(); const t = now(); if (!invite || invite.revoked_at || invite.expires_at <= t) return invalidInvite(); if (invite.consumed_at) { if (guest && invite.consumed_session_id === guest.session.id) return guestPayload(env, guest); return invalidInvite(); } const sid = rid('sess'); const claimed: any = await env.DB.prepare('UPDATE invite_links SET consumed_at=?,consumed_session_id=? WHERE token_hash=? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>?').bind(t, sid, tokenHash, t).run(); if (typeof claimed?.meta?.changes !== 'number' || claimed.meta.changes < 1) return invalidInvite(); const visitorKey = rid('visitor'); const { user } = await upsertVisitor(env, visitorKey, null); const source = invite.source_operator_id || null; const status = source ? 'OPEN' : 'PENDING'; await env.DB.prepare('INSERT INTO sessions(id,user_id,source_user_id,assigned_operator_id,last_operator_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(sid, user.id, source, source, source, status, t, t).run(); const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sid).first<any>(); return guestPayload(env, { visitorKey, user, session }, { headers: { 'Set-Cookie': setCookie(GUEST_COOKIE, await createGuestSession(env, visitorKey)) } }); }
++async function consumeInvite(req: Request, env: Env, token: string) {
++  const guest = await currentGuestSession(env, req);
++  const tokenHash = await inviteTokenHash(env, token);
++  const invite = await env.DB.prepare('SELECT * FROM invite_links WHERE token_hash=?').bind(tokenHash).first<any>();
++  const t = now();
++  if (!invite || invite.revoked_at || invite.expires_at <= t) return invalidInvite();
++  if (invite.consumed_at) {
++    if (guest && invite.consumed_session_id === guest.session.id) return guestPayload(env, guest);
++    return invalidInvite();
++  }
++  const sid = rid('sess');
++  const claimed: any = await env.DB.prepare('UPDATE invite_links SET consumed_at=?,consumed_session_id=? WHERE token_hash=? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>?').bind(t, sid, tokenHash, t).run();
++  if (typeof claimed?.meta?.changes !== 'number' || claimed.meta.changes < 1) return invalidInvite();
++
++  let guestSessionId: string | null = null;
++  try {
++    const visitorKey = rid('visitor');
++    const { user } = await upsertVisitor(env, visitorKey, null);
++    const source = invite.source_operator_id || null;
++    const status = source ? 'OPEN' : 'PENDING';
++    await env.DB.prepare('INSERT INTO sessions(id,user_id,source_user_id,assigned_operator_id,last_operator_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(sid, user.id, source, source, source, status, t, t).run();
++    const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sid).first<any>();
++    if (!session) throw new Error('Failed to create guest session');
++    const guestSession = await createGuestSessionRecord(env, visitorKey);
++    guestSessionId = guestSession.id;
++    return guestPayload(env, { visitorKey, user, session }, { headers: { 'Set-Cookie': setCookie(GUEST_COOKIE, guestSession.token) } });
++  } catch (e) {
++    console.error('Failed to consume invite after claim', e);
++    try {
++      if (guestSessionId) await env.DB.prepare('DELETE FROM visitor_sessions WHERE id=?').bind(guestSessionId).run();
++    } catch (cleanupError) {
++      console.error('Failed to clean up guest session after invite rollback', cleanupError);
++    }
++    try {
++      await env.DB.prepare('UPDATE invite_links SET consumed_at=NULL,consumed_session_id=NULL WHERE token_hash=? AND consumed_session_id=?').bind(tokenHash, sid).run();
++    } catch (cleanupError) {
++      console.error('Failed to roll back consumed invite token', cleanupError);
++    }
++    try {
++      await env.DB.prepare('DELETE FROM sessions WHERE id=?').bind(sid).run();
++    } catch (cleanupError) {
++      console.error('Failed to clean up session after invite rollback', cleanupError);
++    }
++    return json({ error: ERR_INVITE_CREATE_FAILED }, { status: 500 });
++  }
++}
+ async function rateLimit(env: Env, req: Request) { const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || 'unknown'; const key = `${ip}:${new URL(req.url).pathname}`.slice(0, 240); const reset = Math.floor(Date.now() / 60000) * 60000 + 60000; const row = await env.DB.prepare('SELECT count,reset_at FROM rate_limits WHERE key=?').bind(key).first<{ count: number; reset_at: number }>(); if (!row || row.reset_at < Date.now()) { await env.DB.prepare('INSERT OR REPLACE INTO rate_limits(key,count,reset_at) VALUES(?,?,?)').bind(key, 1, reset).run(); return null; } if (row.count > 120) return json({ error: 'rate_limited' }, { status: 429 }); await env.DB.prepare('UPDATE rate_limits SET count=count+1 WHERE key=?').bind(key).run(); return null; }
+ async function upsertVisitor(env: Env, visitorId?: string, account?: VisitorAccount | null) { const key = account ? `acct_${account.id}` : (visitorId?.startsWith('visitor_') ? visitorId : rid('visitor')); const displayName = account?.display_name || `璁垮 ${key.slice(-6)}`; const t = now(); let user = await env.DB.prepare('SELECT * FROM users WHERE visitor_key=?').bind(key).first<any>(); if (!user) { const uid = rid('user'); await env.DB.prepare('INSERT INTO users(id,visitor_key,account_id,display_name,last_seen_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(uid, key, account?.id || null, displayName, t, t, t).run(); user = await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(uid).first<any>(); } else await env.DB.prepare('UPDATE users SET account_id=COALESCE(?,account_id),display_name=?,last_seen_at=?,updated_at=? WHERE id=?').bind(account?.id || null, displayName, t, t, user.id).run(); return { key, user }; }
+ async function latestSession(env: Env, userId: string) { return await env.DB.prepare("SELECT * FROM sessions WHERE user_id=? AND status!='ARCHIVED' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1").bind(userId).first<any>(); }
