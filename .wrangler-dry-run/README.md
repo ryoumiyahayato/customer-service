@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "support-chat-cloudflare" generated at 2026-06-26T06:31:53.060Z.

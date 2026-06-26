@@ -1,0 +1,27 @@
+name = "support-chat-cloudflare"
+main = "src/worker.ts"
+compatibility_date = "2026-06-26"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "customer_chat_db"
+database_id = "9cda9221-878e-464f-8f0b-5577deec88af"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "customer-chat-uploads"
+
+[[durable_objects.bindings]]
+name = "CHAT_ROOMS"
+class_name = "ChatRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom"]

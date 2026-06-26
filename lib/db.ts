@@ -29,17 +29,18 @@ export function verifyPassword(password: string, stored: string) {
 async function ensureDefaultAdmin() {
   const sql = getPg();
   const superRows = await sql`SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1`;
-  const username = process.env.DEFAULT_ADMIN_USERNAME;
+  const username = process.env.DEFAULT_ADMIN_USERNAME?.trim();
   const password = process.env.DEFAULT_ADMIN_PASSWORD;
-  if (!username || !password) throw new Error('DEFAULT_ADMIN_USERNAME and DEFAULT_ADMIN_PASSWORD are required for first super admin bootstrap.');
   const t = now();
   if (superRows[0]) {
     if (process.env.RESET_SUPER_ADMIN_ON_BOOTSTRAP === '1') {
+      if (!username || !password) throw new Error('DEFAULT_ADMIN_USERNAME and DEFAULT_ADMIN_PASSWORD are required to reset the super admin.');
       await sql`UPDATE admins SET username=${username}, password_hash=${hashPassword(password)}, must_change_password=0, is_disabled=0, updated_at=${t} WHERE id=${superRows[0].id}`;
       await log('ADMIN_BOOTSTRAP_RESET', 'Initial super admin reset from environment');
     }
     return;
   }
+  if (!username || !password) throw new Error('DEFAULT_ADMIN_USERNAME and DEFAULT_ADMIN_PASSWORD are required for first super admin bootstrap.');
   await sql`INSERT INTO admins(id,username,password_hash,role,must_change_password,created_at,updated_at,is_disabled,last_seen_at) VALUES (${id('admin')},${username},${hashPassword(password)},'SUPER_ADMIN',0,${t},${t},0,${t})`;
   await log('ADMIN_BOOTSTRAP', 'Initial super admin created');
 }
@@ -165,5 +166,3 @@ export async function deleteGuestHistory(visitorKey: string) {
   if (!visitorKey || !visitorKey.startsWith('visitor_')) return;
   await getPg()`DELETE FROM users WHERE visitor_key=${visitorKey}`;
 }
-
-
