@@ -26,3 +26,17 @@ export function isWebSocketSupported() {
 export function isAbortControllerSupported() {
   return typeof AbortController !== 'undefined';
 }
+
+export function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return true;
+  if (error instanceof Error && (error.name === 'AbortError' || error.message?.includes('aborted'))) return true;
+  return false;
+}
+
+export function isExpectedError(error: unknown): boolean {
+  if (isAbortError(error)) return true;
+  if (error instanceof TypeError && error.message?.includes('fetch')) return true;
+  if (error instanceof Event && error.type === 'close') return true;
+  const msg = typeof error === 'string' ? error : (error instanceof Error ? (error.name + ': ' + error.message) : '');
+  return /signal is aborted|aborted without reason|networkerror|failed to fetch|request canceled|request cancelled/i.test(msg);
+}
