@@ -4,9 +4,10 @@ import './styles.css';
 import App from './App';
 import { ErrorBoundary, CrashScreen } from './ErrorBoundary';
 import { getErrorMessage, isExpectedError } from './compat';
+import { isAdminMode } from './routing';
 
 function isAdminPath() {
-  return location.pathname.startsWith('/admin');
+  return isAdminMode(location);
 }
 
 const rootElement = document.getElementById('root');

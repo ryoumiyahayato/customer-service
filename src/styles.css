@@ -87,6 +87,8 @@
 
 /* ========== ADMIN DESKTOP LAYOUT ========== */
 .admin{display:grid;grid-template-columns:280px minmax(0,1fr);height:100dvh;min-height:0;overflow:hidden;background:var(--bg)}
+.admin-global-toast{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:220;display:flex;align-items:center;gap:10px;max-width:min(520px,calc(100vw - 24px));padding:10px 12px;border-radius:12px;background:#0f766e;color:#fff;box-shadow:0 14px 40px var(--shadow);font-size:13px}
+.admin-global-toast button{min-height:26px;padding:2px 8px;border-radius:8px;background:#ffffff22;color:#fff}
 .admin .side{height:calc(100dvh - 24px);margin:12px;border-radius:18px;min-height:0;overflow-y:auto;overscroll-behavior:contain;background:var(--side);color:#fff;padding:18px}
 .admin .desktop-side{display:flex;flex-direction:column}
 .brand{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px}
@@ -96,6 +98,14 @@
 .side-nav button,.folder-head{width:100%;justify-content:space-between;background:var(--side-2);color:#dbeafe}
 .side-nav>button{justify-content:flex-start;min-height:44px;border-radius:12px;padding:10px 12px;font-size:14px}
 .side-nav>button.active{background:#2563eb;color:#fff}
+.logout-btn{background:#475569;color:#fff;white-space:nowrap}
+.brand .logout-btn{min-height:34px;padding:7px 10px;border-radius:10px;font-size:12px}
+.invite-panel{display:grid;gap:10px;margin:10px 0;padding:12px;border-radius:14px;background:var(--side-2);color:#fff}
+.invite-panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.invite-panel h3{margin:0;font-size:14px}
+.invite-panel button{min-height:36px;padding:7px 10px;border-radius:10px;font-size:13px}
+.invite-panel select,.invite-panel input{width:100%;min-width:0;border:1px solid #334155;border-radius:10px;padding:9px 10px;background:#0f1f33;color:#fff}
+.invite-result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
 .folder{margin:10px 0}
 .folder-head{display:flex;align-items:center;border-radius:12px;padding:10px 12px;min-height:44px;font-size:13px}
 .folder-head b{background:#243852;border-radius:999px;padding:2px 8px;font-size:12px;margin-left:8px}
@@ -184,8 +194,12 @@ html,body{overflow-x:hidden}
 .mobile-topbar-title{flex:1;min-width:0;font-size:15px;font-weight:600;color:#f8fafc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
 .mobile-topbar-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
 .mobile-topbar-actions .primary-action,.mobile-topbar-actions>button{min-height:36px;padding:6px 12px;border-radius:999px;background:#0ea5e9;font-size:13px}
+.mobile-topbar-actions .logout-btn{background:#475569}
 .mobile-topbar-actions .more-actions>summary{min-height:36px;padding:6px 12px;border-radius:999px;background:#1e3a5f;font-size:13px}
 .mobile-topbar-actions .more-actions>div{position:fixed;right:10px;top:52px;background:#10233a;border-color:#2b4f75;z-index:30}
+.invite-mobile-panel{max-height:calc(100dvh - 24px)}
+.invite-mobile-panel .invite-panel{margin:0;background:#071525;border:1px solid #1f3b57}
+.invite-mobile-panel .invite-result{grid-template-columns:1fr}
 
 /* Mobile session list */
 .mobile-session-list-view{flex:1;overflow-y:auto;overflow-x:hidden;padding:10px;background:#06111f;-webkit-overflow-scrolling:touch}
@@ -288,6 +302,10 @@ button:disabled,input:disabled,textarea:disabled{opacity:.62;cursor:not-allowed}
 .crash-card h1{margin:0;font-size:22px}
 .crash-card p{margin:0;color:var(--muted)}
 .crash-card pre{white-space:pre-wrap;word-break:break-word;background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:12px;max-height:180px;overflow:auto}
+.link-expired-page{min-height:100vh;min-height:100dvh;display:grid;place-items:center;background:var(--bg);padding:20px}
+.link-expired-card{width:min(420px,100%);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;box-shadow:0 16px 50px var(--shadow);text-align:center}
+.link-expired-card h1{margin:0 0 10px;font-size:22px;line-height:1.3;color:var(--text)}
+.link-expired-card p{margin:0;color:var(--muted);line-height:1.6}
 .form-error,.panel-error,.notice{word-break:break-word}
 @supports not (height:100dvh){.admin,.admin .main,.admin .side{height:100vh}.chat-page{min-height:100vh}.admin-login-page{min-height:100vh}.admin-loading-page{min-height:100vh}}
 

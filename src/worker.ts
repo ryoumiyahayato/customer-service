@@ -63,7 +63,7 @@ async function createGuestSessionRecord(env: Env, visitorKey: string) {
   return { id, token: await makeToken(env, id) };
 }
 async function createGuestSession(env: Env, visitorKey: string) { return (await createGuestSessionRecord(env, visitorKey)).token; }
-async function currentGuestSession(env: Env, req: Request) { const sessionId = await verifyToken(env, getCookie(req, GUEST_COOKIE)); if (!sessionId) return null; const row = await env.DB.prepare('SELECT visitor_key FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>? AND visitor_key IS NOT NULL').bind(sessionId, await tokenHash(env, sessionId), now()).first<any>(); if (!row?.visitor_key) return null; const user = await env.DB.prepare('SELECT * FROM users WHERE visitor_key=?').bind(row.visitor_key).first<any>(); if (!user) return null; const session = await latestSession(env, user.id); if (!session || session.deleted_at) return null; return { visitorKey: row.visitor_key as string, user, session }; }
+async function currentGuestSession(env: Env, req: Request) { const sessionId = await verifyToken(env, getCookie(req, GUEST_COOKIE)); if (!sessionId) return null; const row = await env.DB.prepare('SELECT visitor_key FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>? AND visitor_key IS NOT NULL').bind(sessionId, await tokenHash(env, sessionId), now()).first<any>(); if (!row?.visitor_key) return null; const user = await env.DB.prepare('SELECT * FROM users WHERE visitor_key=?').bind(row.visitor_key).first<any>(); if (!user) return null; const session = await latestSession(env, user.id); if (sessionEnded(session)) return null; return { visitorKey: row.visitor_key as string, user, session }; }
 function canAccessSession(admin: Admin | null, session: any) { return Boolean(admin && session && (admin.role === 'SUPER_ADMIN' || session.assigned_operator_id === admin.id)); }
 function sessionEnded(session: any) { return Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED'); }
 function canSendMessage(admin: Admin | null, session: any) { return canAccessSession(admin, session) && !sessionEnded(session); }
@@ -85,7 +85,7 @@ async function consumeInvite(req: Request, env: Env, token: string) {
     return invalidInvite();
   }
   const sid = rid('sess');
-  const claimed: any = await env.DB.prepare('UPDATE invite_links SET consumed_at=?,consumed_session_id=? WHERE token_hash=? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>?').bind(t, sid, tokenHash, t).run();
+  const claimed: any = await env.DB.prepare('UPDATE invite_links SET consumed_at=? WHERE token_hash=? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>?').bind(t, tokenHash, t).run();
   if (typeof claimed?.meta?.changes !== 'number' || claimed.meta.changes < 1) return invalidInvite();
 
   let guestSessionId: string | null = null;
@@ -97,6 +97,7 @@ async function consumeInvite(req: Request, env: Env, token: string) {
     await env.DB.prepare('INSERT INTO sessions(id,user_id,source_user_id,assigned_operator_id,last_operator_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(sid, user.id, source, source, source, status, t, t).run();
     const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sid).first<any>();
     if (!session) throw new Error('Failed to create guest session');
+    await env.DB.prepare('UPDATE invite_links SET consumed_session_id=? WHERE token_hash=? AND consumed_at=?').bind(sid, tokenHash, t).run();
     const guestSession = await createGuestSessionRecord(env, visitorKey);
     guestSessionId = guestSession.id;
     return guestPayload(env, { visitorKey, user, session }, { headers: { 'Set-Cookie': setCookie(GUEST_COOKIE, guestSession.token) } });
@@ -108,7 +109,7 @@ async function consumeInvite(req: Request, env: Env, token: string) {
       console.error('Failed to clean up guest session after invite rollback', cleanupError);
     }
     try {
-      await env.DB.prepare('UPDATE invite_links SET consumed_at=NULL,consumed_session_id=NULL WHERE token_hash=? AND consumed_session_id=?').bind(tokenHash, sid).run();
+      await env.DB.prepare('UPDATE invite_links SET consumed_at=NULL,consumed_session_id=NULL WHERE token_hash=? AND consumed_at=?').bind(tokenHash, t).run();
     } catch (cleanupError) {
       console.error('Failed to roll back consumed invite token', cleanupError);
     }

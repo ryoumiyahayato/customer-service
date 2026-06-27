@@ -24,8 +24,21 @@ async function parseBody(response: Response) {
   }
 }
 
-function messageForStatus(status: number, data: any) {
+function pathFromInput(input: RequestInfo | URL) {
+  const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  try {
+    return new URL(raw, window.location.origin).pathname;
+  } catch {
+    return '';
+  }
+}
+
+function messageForStatus(status: number, data: any, path: string) {
   const backend = typeof data?.error === 'string' ? data.error : '';
+  if (path === '/api/auth/login' && status === 401) return '账号或密码错误';
+  if (path === '/api/account/login' && status === 401) return '账号或密码错误';
+  if (path === '/api/auth/me' && status === 401) return '请登录';
+  if (path.startsWith('/api/guest/') && [401, 403, 404, 410].includes(status)) return '链接不存在或已失效';
   if (status === 400 && backend) return backend;
   if (status === 401) return '登录已过期，请重新登录';
   if (status >= 500) return '服务器错误，请稍后重试';
@@ -37,7 +50,8 @@ async function fetchOnce(input: RequestInfo | URL, options: ApiFetchOptions) {
   const supportsAbort = isAbortControllerSupported();
   const controller = supportsAbort ? new AbortController() : null;
   const timer = setTimeout(() => controller?.abort(), timeoutMs);
-  const request = fetch(input, { ...options, signal: controller?.signal });
+  const credentials = options.credentials ?? 'same-origin';
+  const request = fetch(input, { ...options, credentials, signal: controller?.signal });
   const timeout = new Promise<Response>((_, reject) => {
     if (!supportsAbort) setTimeout(() => reject(new ApiError('请求超时，请检查网络后重试', 408)), timeoutMs);
   });
@@ -45,7 +59,7 @@ async function fetchOnce(input: RequestInfo | URL, options: ApiFetchOptions) {
   try {
     const response = await (supportsAbort ? request : Promise.race([request, timeout]));
     const data = await parseBody(response);
-    if (!response.ok) throw new ApiError(messageForStatus(response.status, data), response.status, data);
+    if (!response.ok) throw new ApiError(messageForStatus(response.status, data, pathFromInput(input)), response.status, data);
     return data;
   } catch (error: any) {
     if (error?.name === 'AbortError') throw new ApiError('请求超时，请检查网络后重试', 408);

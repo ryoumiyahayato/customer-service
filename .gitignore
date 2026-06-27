@@ -5,6 +5,12 @@ data/
 .env
 .env.local
 release/
+.wrangler-dry-run/
+admin-cookie.txt
+login.json
+change-password.json
+make-admin-hash.cjs
+reset-ryouma-password.sql
 npm-debug.log*
 public/uploads/*
 !public/uploads/.gitkeep
