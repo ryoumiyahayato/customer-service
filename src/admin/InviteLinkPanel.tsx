@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { apiFetch } from '../api';
 
 type InviteLinkPanelProps = {
@@ -29,6 +29,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
+  const inviteInputRef = useRef<HTMLInputElement>(null);
   const isSuper = adminRole === 'SUPER_ADMIN';
 
   const createInvite = async () => {
@@ -54,10 +55,13 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
   const copyInvite = async () => {
     if (!inviteUrl) return;
     try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
       await navigator.clipboard.writeText(inviteUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
+      inviteInputRef.current?.focus();
+      inviteInputRef.current?.select();
       setError(text.copyFailed);
     }
   };
@@ -76,7 +80,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
       ) : null}
       {inviteUrl ? (
         <div className="invite-result">
-          <input value={inviteUrl} readOnly onFocus={e => e.currentTarget.select()} />
+          <input ref={inviteInputRef} value={inviteUrl} readOnly onFocus={e => e.currentTarget.select()} />
           <button onClick={copyInvite}>{copied ? text.copied : text.copy}</button>
         </div>
       ) : null}

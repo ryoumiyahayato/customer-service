@@ -10,6 +10,7 @@ type Admin = any;
 
 const formatTime = (ts?: string) => (ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
+const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
 
 /* ========== ADMIN DASHBOARD ========== */
 export default function AdminDashboard() {
@@ -41,7 +42,9 @@ export default function AdminDashboard() {
   const [dirOpen, setDirOpen] = useState(false);
   const [mobileInviteOpen, setMobileInviteOpen] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
+  const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const isSuper = admin?.role === 'SUPER_ADMIN';
+  const currentSessionEnded = sessionEnded(cur);
   const sendingRef = useRef(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const wsRefs = useRef<{ admin?: WebSocket; conv?: WebSocket; staff?: WebSocket }>({});
@@ -109,7 +112,7 @@ export default function AdminDashboard() {
   useEffect(() => { const iv = setInterval(() => { if (admin) { fetchSessions(); if (cur) fetchMsgs(cur.id); } }, 15000); return () => clearInterval(iv); }, [admin, cur]);
 
   const send = async () => {
-    if (sendingRef.current || sending !== 'idle' || !cur) return;
+    if (sendingRef.current || sending !== 'idle' || !cur || currentSessionEnded) return;
     const content = text.trim();
     if (!content && !quote) return;
     sendingRef.current = true; setSending(quote ? 'text' : 'text');
@@ -122,7 +125,7 @@ export default function AdminDashboard() {
   };
 
   const upload = async (file: File) => {
-    if (sendingRef.current || sending !== 'idle' || !cur) return;
+    if (sendingRef.current || sending !== 'idle' || !cur || currentSessionEnded) return;
     sendingRef.current = true; setSending('image');
     try {
       const clientMessageId = newClientMessageId();
@@ -174,6 +177,23 @@ export default function AdminDashboard() {
 
   const handleSessionAction = async (s: Session, action: string) => {
     try { await apiFetch(`/api/sessions/${s.id}/${action}`, { method: 'POST' }); } catch {}
+  };
+
+  const closeSession = async (s: Session) => {
+    if (closingSessionId || sessionEnded(s)) return;
+    if (!window.confirm('确认结束该会话？结束后访客不能继续发送消息或上传图片。')) return;
+    setClosingSessionId(s.id);
+    try {
+      await apiFetch(`/api/sessions/${s.id}/close`, { method: 'POST' });
+      setQuote(null);
+      await fetchSessions();
+      setCur((c: Session | null) => c?.id === s.id ? { ...c, status: 'CLOSED', assigned_operator_id: null } : c);
+      showToast('会话已结束');
+    } catch (e: any) {
+      showToast(e?.message || '结束会话失败，请稍后重试');
+    } finally {
+      setClosingSessionId(null);
+    }
   };
 
   const updateProfile = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -293,7 +313,8 @@ export default function AdminDashboard() {
           <div className="mobile-topbar-title">{view === 'sessions' ? (cur ? cur.display_name || '访客' : '会话') : view === 'operators' ? '客服管理' : '内部消息'}</div>
           <div className="mobile-topbar-actions">
             <button onClick={() => setMobileInviteOpen(true)}>{'\u9080\u8bf7'}</button>
-            {cur && view === 'sessions' && <button className="primary-action" onClick={() => assignSession(cur)}>接管</button>}
+            {cur && view === 'sessions' && !currentSessionEnded && <button className="primary-action" onClick={() => assignSession(cur)}>接管</button>}
+            {cur && view === 'sessions' && !currentSessionEnded && <button className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中' : '结束'}</button>}
             <button className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '\u9000\u51fa\u4e2d' : '\u9000\u51fa'}</button>
           </div>
         </div>
@@ -348,6 +369,10 @@ export default function AdminDashboard() {
             {view === 'sessions' && mobileView === 'chat' && cur && (
               <div className="mobile-chat-workspace">
                 <section className="chat-panel">
+                  <div className="session-action-bar">
+                    <div><b>{cur.display_name || '访客'}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
+                    {!currentSessionEnded ? <button className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
+                  </div>
                   {toast && <div className="notice">{toast}<button className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
                     {loadingMsgs === cur.id && <div className="empty-state"><span className="spinner" /> 加载中</div>}
@@ -366,12 +391,12 @@ export default function AdminDashboard() {
                       )
                     ))}
                   </div>
-                  <div className="composer">
+                  {currentSessionEnded ? <div className="session-ended-state">会话已结束</div> : <div className="composer">
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button onClick={() => setQuote(null)}>取消</button></div>}
                     <label className="file-btn">{uploadButtonLabel}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={sending !== 'idle'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
                     <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !sendingRef.current) { e.preventDefault(); send(); } }} disabled={sending !== 'idle'} placeholder="输入消息" rows={1} />
                     <button onClick={send} disabled={sending !== 'idle' || (!text.trim() && !quote)}>{sendButtonLabel}</button>
-                  </div>
+                  </div>}
                 </section>
               </div>
             )}
@@ -427,6 +452,10 @@ export default function AdminDashboard() {
             {view === 'sessions' ? (
               <div className="workspace">
                 <section className="chat-panel">
+                  {cur ? <div className="session-action-bar">
+                    <div><b>{cur.display_name || '访客'}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
+                    {!currentSessionEnded ? <button className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
+                  </div> : null}
                   {toast && <div className="notice">{toast}<button className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
                     {loadingMsgs === cur?.id ? <div className="empty-state"><span className="spinner" /> 正在加载消息</div> : null}
@@ -446,7 +475,7 @@ export default function AdminDashboard() {
                       )
                     ))}
                   </div>
-                  {cur && !cur.deleted_at ? (
+                  {cur && !currentSessionEnded ? (
                     <div className="composer">
                       {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button onClick={() => setQuote(null)}>取消</button></div> : null}
                       <label className="file-btn">{uploadButtonLabel}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={sending !== 'idle'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
@@ -454,7 +483,7 @@ export default function AdminDashboard() {
                       <button onClick={send} disabled={sending !== 'idle' || (!text.trim() && !quote)}>{sendButtonLabel}</button>
                     </div>
                   ) : (
-                    <div className="empty-state">{cur?.deleted_at ? '会话已删除' : '请选择一个访客会话'}</div>
+                    <div className="empty-state">{cur ? '会话已结束' : '请选择一个访客会话'}</div>
                   )}
                 </section>
               </div>
