@@ -23,6 +23,10 @@ const visitorBaseUrl = () => {
   return (configured || window.location.origin).replace(/\/+$/, '');
 };
 
+const visitorRootDomain = () => {
+  return ((import.meta.env.VITE_VISITOR_ROOT_DOMAIN as string | undefined) || '').trim();
+};
+
 export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLinkPanelProps) {
   const [sourceOperatorId, setSourceOperatorId] = useState('');
   const [inviteUrl, setInviteUrl] = useState('');
@@ -41,9 +45,19 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
       const body = isSuper && sourceOperatorId ? { sourceOperatorId } : {};
       const res: any = await apiFetch('/api/invites', { method: 'POST', body: JSON.stringify(body) });
       const token = res?.invite?.token;
-      const path = token ? `/g/${encodeURIComponent(token)}` : res?.invite?.url;
-      if (!path) throw new Error(text.createFailed);
-      const fullUrl = path.startsWith('http') ? path : `${visitorBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
+      const rootDomain = visitorRootDomain();
+      let fullUrl: string;
+      if (token && rootDomain) {
+        // New subdomain format: https://<token>.vx9qn7zr.org/
+        fullUrl = `https://${token}.${rootDomain}/`;
+      } else if (token) {
+        // Fallback: https://<origin>/g/<token>
+        fullUrl = `${visitorBaseUrl()}/g/${encodeURIComponent(token)}`;
+      } else {
+        const path = res?.invite?.url;
+        if (!path) throw new Error(text.createFailed);
+        fullUrl = path.startsWith('http') ? path : `${visitorBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
+      }
       setInviteUrl(fullUrl);
     } catch (e: any) {
       setError(e?.message || text.createFailed);

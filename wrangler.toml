@@ -25,3 +25,6 @@ class_name = "ChatRoom"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
+
+[vars]
+VISITOR_ROOT_DOMAIN = "vx9qn7zr.org"

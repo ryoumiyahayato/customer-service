@@ -7,6 +7,7 @@ export interface Env {
   SESSION_SECRET: string;
   SUPER_ADMIN_USERNAME?: string;
   SUPER_ADMIN_PASSWORD?: string;
+  VISITOR_ROOT_DOMAIN?: string;
 }
 
 type Admin = { id: string; username: string; role: 'SUPER_ADMIN' | 'OPERATOR'; is_disabled?: number; must_change_password?: number; last_seen_at?: string };
@@ -55,7 +56,7 @@ async function requireAdmin(env: Env, req: Request) { const admin = await curren
 async function requireSuper(env: Env, req: Request) { const admin = await requireAdmin(env, req); if (admin.role !== 'SUPER_ADMIN') throw new Response('Forbidden', { status: 403 }); return admin; }
 async function currentVisitorAccount(env: Env, req: Request) { const sessionId = await verifyToken(env, getCookie(req, VISITOR_COOKIE)); if (!sessionId) return null; const session = await env.DB.prepare('SELECT visitor_account_id FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>?').bind(sessionId, await tokenHash(env, sessionId), now()).first<any>(); return session?.visitor_account_id ? await env.DB.prepare('SELECT id,username,display_name,last_login_at FROM visitor_accounts WHERE id=?').bind(session.visitor_account_id).first<VisitorAccount>() : null; }
 async function inviteTokenHash(env: Env, value: string) { return await hmac(env.SESSION_SECRET, 'invite:' + value); }
-function randomToken(bytes = 32) { const data = crypto.getRandomValues(new Uint8Array(bytes)); let s = ''; for (const b of data) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
+function randomToken(bytes = 20) { const data = crypto.getRandomValues(new Uint8Array(bytes)); return [...data].map((b) => b.toString(16).padStart(2, '0')).join(''); }
 const invalidInvite = () => json({ error: ERR_INVALID_INVITE }, { status: 410 });
 async function createGuestSessionRecord(env: Env, visitorKey: string) {
   const id = rid('gsess');
@@ -181,4 +182,6 @@ async function api(req: Request, env: Env) {
   if (ws) { const session = await getSessionById(env, ws[1]); if (!session) return new Response('Not found', { status: 404 }); const admin = await currentAdmin(env, req); if (admin) { if (!canJoinConversationRoom(admin, session)) return new Response(ERR_NO_SESSION_ACCESS, { status: 403 }); } else if (!(await guestOwnsSession(env, req, session))) return new Response(ERR_NO_SESSION_ACCESS, { status: 403 }); return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(`conversation:${ws[1]}`)).fetch(req); }
   return json({ error: 'Not found' }, { status: 404 });
 }
-export default { async fetch(req: Request, env: Env, ctx: ExecutionContext) { try { const url = new URL(req.url); if (url.pathname === '/ws') return new Response('Forbidden', { status: 403 }); if (url.pathname.startsWith('/api/')) return await api(req, env); return env.ASSETS.fetch(req); } catch (e: any) { if (e instanceof Response) return e; console.error(e); return json({ error: 'Internal error' }, { status: 500 }); } } };
+
+
+export default { async fetch(req: Request, env: Env, ctx: ExecutionContext) { try { const url = new URL(req.url); if (url.pathname === '/ws') return new Response('Forbidden', { status: 403 }); if (url.pathname.startsWith('/api/')) return await api(req, env); const host = url.hostname.toLowerCase(); const vr = (env.VISITOR_ROOT_DOMAIN || 'vx9qn7zr.org').toLowerCase(); if (host === vr || (host.endsWith('.' + vr) && (host.slice(0, -(vr.length + 1)).includes('.') || !/^[a-f0-9]{40}$/.test(host.slice(0, -(vr.length + 1)))))) return new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } }); const sub = host.endsWith('.' + vr) ? host.slice(0, -(vr.length + 1)) : null; if (sub && /^[a-f0-9]{40}$/.test(sub)) { const tokenHash = await inviteTokenHash(env, sub); const invite = await env.DB.prepare('SELECT * FROM invite_links WHERE token_hash=?').bind(tokenHash).first<any>(); if (!invite || invite.revoked_at || invite.expires_at <= now()) return new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } }); if (invite.consumed_at && !invite.consumed_session_id) return new Response(null, { status: 410, headers: { 'cache-control': 'no-store' } }); if (invite.consumed_at && invite.consumed_session_id) { const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(invite.consumed_session_id).first<any>(); if (!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED') return new Response(null, { status: 410, headers: { 'cache-control': 'no-store' } }); } } const isVr = host === vr || host.endsWith('.' + vr); const assetsResp = await env.ASSETS.fetch(req); if (isVr) return new Response(assetsResp.body, { status: assetsResp.status, headers: { 'cache-control': 'private, no-store' } }); return assetsResp; } catch (e: any) { if (e instanceof Response) return e; console.error(e); return json({ error: 'Internal error' }, { status: 500 }); } } };
