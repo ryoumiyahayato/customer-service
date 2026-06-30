@@ -3,7 +3,10 @@ node_modules/
 out/
 data/
 .env
+.dev.vars
 .env.local
+.env.*.local
+.env.production
 release/
 .wrangler-dry-run/
 admin-cookie.txt
