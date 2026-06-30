@@ -433,3 +433,9 @@ proxy_set_header Connection "upgrade";
 ## 15. 一句话总结
 
 你最终要部署的不是单个 HTML 或 exe，而是一个完整的 `support-system` 文件夹。运行 `npm run make-release` 可以生成这个文件夹和压缩包，然后上传到云服务器，按本说明执行即可。
+
+## Current Production Admin And Database Operations
+
+The current production system uses Cloudflare Worker + Vite + D1. Do not use legacy Postgres initialization or admin-creation scripts for production accounts.
+
+Administrator creation and password changes should be handled through the admin UI or a controlled D1/Worker operations process. Do not document or store real usernames, passwords, session secrets, tokens, or cookies in this repository.

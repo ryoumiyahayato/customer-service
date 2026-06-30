@@ -119,3 +119,9 @@ Cloudflare Dashboard -> Workers & Pages -> Worker -> Settings / Domains & Routes
 ## Notes
 
 The old Next.js route files under `app/api` still exist as migration reference code, but the configured Cloudflare entrypoint is `src/worker.ts`. Avoid adding Node-only APIs such as `fs`, `net`, `child_process`, Express servers, Socket.IO servers, or Prisma to the Worker path.
+
+## Current Production Admin And Database Operations
+
+The current production system uses Cloudflare Worker + Vite + D1. Do not use legacy Postgres initialization or admin-creation scripts for production accounts.
+
+Administrator creation and password changes should be handled through the admin UI or a controlled D1/Worker operations process. Do not document or store real usernames, passwords, session secrets, tokens, or cookies in this repository.

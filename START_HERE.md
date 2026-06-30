@@ -83,3 +83,9 @@ Default admin created: username=admin password=随机密码
 - Ubuntu/Linux：运行 `bash scripts/start-linux.sh`
 
 它们本质上仍然是帮你执行 `npm install`、`npm run build`、`npm run start`。
+
+## Current Production Admin And Database Operations
+
+The current production system uses Cloudflare Worker + Vite + D1. Do not use legacy Postgres initialization or admin-creation scripts for production accounts.
+
+Administrator creation and password changes should be handled through the admin UI or a controlled D1/Worker operations process. Do not document or store real usernames, passwords, session secrets, tokens, or cookies in this repository.
