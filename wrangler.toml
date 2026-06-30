@@ -7,6 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = true
 
 [[d1_databases]]
 binding = "DB"
@@ -33,6 +34,10 @@ zone_name = "vx9qn7zr.org"
 [[routes]]
 pattern = "vx9qn7zr.org/*"
 zone_name = "vx9qn7zr.org"
+
+[[routes]]
+pattern = "denglu.kefuxitong.net/*"
+zone_name = "kefuxitong.net"
 
 [vars]
 VISITOR_ROOT_DOMAIN = "vx9qn7zr.org"
