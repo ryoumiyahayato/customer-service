@@ -190,7 +190,8 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   };
 
   if (accessError === INVITE_NOT_FOUND || sessionClosed) return <LinkExpired />;
-  if (connecting) return <div className="chat-gate-page"><span className="spinner" /> 加载中...</div>;
+  // Do not render loading/spinner before token/session validation
+  if (connecting) return null;
   if (accessError) return <div className="chat-gate-page">{accessError}</div>;
 
   return (

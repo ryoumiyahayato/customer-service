@@ -26,5 +26,13 @@ class_name = "ChatRoom"
 tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
 
+[[routes]]
+pattern = "*.vx9qn7zr.org/*"
+zone_name = "vx9qn7zr.org"
+
+[[routes]]
+pattern = "vx9qn7zr.org/*"
+zone_name = "vx9qn7zr.org"
+
 [vars]
 VISITOR_ROOT_DOMAIN = "vx9qn7zr.org"

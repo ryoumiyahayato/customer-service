@@ -1,0 +1,101 @@
+[
+  {
+    "name": "root /",
+    "status": 200,
+    "cache": "HIT",
+    "len": 2365,
+    "html": true,
+    "script": true,
+    "loading": true,
+    "vite": true,
+    "snippet": "<!doctype html>\\n<html lang=\"zh-CN\">\\n  <head>\\n    <script type=\"module\" crossorigin src=\"/assets/polyfills-CwN2Ph1M.js\"><"
+  },
+  {
+    "name": "root /?t=ts",
+    "status": 200,
+    "cache": "HIT",
+    "len": 2365,
+    "html": true,
+    "script": true,
+    "loading": true,
+    "vite": true,
+    "snippet": "<!doctype html>\\n<html lang=\"zh-CN\">\\n  <head>\\n    <script type=\"module\" crossorigin src=\"/assets/polyfills-CwN2Ph1M.js\"><"
+  },
+  {
+    "name": "40hex /",
+    "status": 200,
+    "cache": "HIT",
+    "len": 2365,
+    "html": true,
+    "script": true,
+    "loading": true,
+    "vite": true,
+    "snippet": "<!doctype html>\\n<html lang=\"zh-CN\">\\n  <head>\\n    <script type=\"module\" crossorigin src=\"/assets/polyfills-CwN2Ph1M.js\"><"
+  },
+  {
+    "name": "40hex /?t=ts",
+    "status": 200,
+    "cache": "HIT",
+    "len": 2365,
+    "html": true,
+    "script": true,
+    "loading": true,
+    "vite": true,
+    "snippet": "<!doctype html>\\n<html lang=\"zh-CN\">\\n  <head>\\n    <script type=\"module\" crossorigin src=\"/assets/polyfills-CwN2Ph1M.js\"><"
+  },
+  {
+    "name": "abc /",
+    "status": 200,
+    "cache": "HIT",
+    "len": 2365,
+    "html": true,
+    "script": true,
+    "loading": true,
+    "vite": true,
+    "snippet": "<!doctype html>\\n<html lang=\"zh-CN\">\\n  <head>\\n    <script type=\"module\" crossorigin src=\"/assets/polyfills-CwN2Ph1M.js\"><"
+  },
+  {
+    "name": "bad_token /",
+    "status": 200,
+    "cache": "HIT",
+    "len": 2365,
+    "html": true,
+    "script": true,
+    "loading": true,
+    "vite": true,
+    "snippet": "<!doctype html>\\n<html lang=\"zh-CN\">\\n  <head>\\n    <script type=\"module\" crossorigin src=\"/assets/polyfills-CwN2Ph1M.js\"><"
+  },
+  {
+    "name": "api/auth/me",
+    "status": 200,
+    "cache": "HIT",
+    "len": 2365,
+    "html": true,
+    "script": true,
+    "loading": true,
+    "vite": true,
+    "snippet": "<!doctype html>\\n<html lang=\"zh-CN\">\\n  <head>\\n    <script type=\"module\" crossorigin src=\"/assets/polyfills-CwN2Ph1M.js\"><"
+  },
+  {
+    "name": "abc/api/auth",
+    "status": 404,
+    "cache": "NONE",
+    "len": 0,
+    "html": false,
+    "script": false,
+    "loading": false,
+    "vite": false,
+    "snippet": ""
+  },
+  {
+    "name": "40hex/api/auth",
+    "status": 404,
+    "cache": "NONE",
+    "len": 0,
+    "html": false,
+    "script": false,
+    "loading": false,
+    "vite": false,
+    "snippet": ""
+  }
+]

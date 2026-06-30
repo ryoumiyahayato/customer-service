@@ -1,0 +1,1 @@
+\n=== RESULTS ===\n\nTest|Status|CF-Cache|Len|HTML|API\n40hex /?t|200|HIT|2365|YES|ok\n40hex /|200|HIT|2365|YES|ok\n40hex/api/auth|200|NONE|14|no|LEAK\nabc /|200|HIT|2365|YES|ok\nabc/api/auth|200|NONE|14|no|LEAK\napi/admin|404|NONE|21|no|ok\napi/auth/me|200|NONE|14|no|LEAK\nbad_token /|200|HIT|2365|YES|ok\nroot /?t|200|HIT|2365|YES|ok\nroot /|200|HIT|2365|YES|ok

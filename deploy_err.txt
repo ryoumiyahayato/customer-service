@@ -1,0 +1,4 @@
+[31mX [41;31m[[41;97mERROR[41;31m][0m [1mThe OAuth callback server could not bind to localhost:8976 because the port is already in use. Stop the process using that port or pass a different `--callback-port`.[0m
+
+
+🪵  Logs were written to "C:\Users\agcrf\AppData\Roaming\xdg.config\.wrangler\logs\wrangler-2026-06-30_04-39-23_635.log"
