@@ -24,6 +24,13 @@ out*.txt
 deploy_*.txt
 test_*_out.txt
 test_results.txt
+test_*.mjs
+check_worker.mjs
+deploy*.mjs
+force_*.mjs
+rollback.mjs
+purge*.mjs
+check_and_purge.mjs
 whoami.txt
 backup*.sql
 *.sqlite
