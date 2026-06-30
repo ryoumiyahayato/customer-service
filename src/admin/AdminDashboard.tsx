@@ -10,6 +10,21 @@ type Admin = any;
 
 const formatTime = (ts?: string) => (ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
+const localMessageId = (clientMessageId: string) => `local-${clientMessageId}`;
+const isMessageCreatedEvent = (type?: string) => type === 'message:new' || type === 'message_created';
+const mergeMessage = (messages: Message[], message?: Message) => {
+  if (!message) return messages;
+  const idx = messages.findIndex(m =>
+    (message.id && m.id === message.id) ||
+    (message.client_message_id && m.client_message_id === message.client_message_id)
+  );
+  if (idx < 0) return [...messages, message];
+  const next = messages.slice();
+  next[idx] = message;
+  return next;
+};
+const mergeMessages = (messages: Message[], incoming: Message[] = []) => incoming.reduce(mergeMessage, messages);
+const markMessageFailed = (messages: Message[], id: string) => messages.map(m => m.id === id ? { ...m, status: 'failed' } : m);
 const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
 
 /* ========== ADMIN DASHBOARD ========== */
@@ -66,7 +81,7 @@ export default function AdminDashboard() {
 
   const fetchMsgs = async (sid: string) => {
     setLoadingMsgs(sid);
-    try { const res: any = await apiFetch(`/api/sessions/${sid}/messages`); setSelectedMsgs(res.messages || []); } catch {}
+    try { const res: any = await apiFetch(`/api/sessions/${sid}/messages`); setSelectedMsgs(mergeMessages([], res.messages || [])); } catch {}
     setLoadingMsgs(null);
   };
 
@@ -87,15 +102,15 @@ export default function AdminDashboard() {
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
-        if (d.type === 'message:new') { setSelectedMsgs(prev => [...prev, d.message]); if (d.session) { setCur((c: any) => c?.id === d.session.id ? d.session : c); } }
-        else if (d.type === 'message:updated') { setSelectedMsgs(prev => prev.map(m => m.id === d.message.id ? d.message : m)); }
+        if (isMessageCreatedEvent(d.type)) { setSelectedMsgs(prev => mergeMessage(prev, d.message)); if (d.session) { setCur((c: any) => c?.id === d.session.id ? d.session : c); } }
+        else if (d.type === 'message:updated') { setSelectedMsgs(prev => mergeMessage(prev, d.message)); }
         else if (d.type === 'message:deleted') { setSelectedMsgs(prev => prev.map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
-        else if (d.type === 'session:updated' && d.session?.id === cur?.id) { setCur(d.session); }
+        else if (d.type === 'session:updated') { setCur((c: any) => c?.id === d.session?.id ? d.session : c); }
       } catch {}
     };
-    ws.onclose = () => { reconnectTimers.current.conv = setTimeout(() => { if (cur) wsConv(cur.id); }, 5000); };
+    ws.onclose = () => { reconnectTimers.current.conv = setTimeout(() => wsConv(sid), 5000); };
     wsRefs.current.conv = ws;
-  }, [cur?.id]);
+  }, []);
 
   const wsStaff = useCallback(() => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -105,34 +120,56 @@ export default function AdminDashboard() {
     wsRefs.current.staff = ws;
   }, []);
 
-  useEffect(() => { if (!admin) return; wsAdmin(); return () => { wsRefs.current.admin?.close(); clearTimeout(reconnectTimers.current.admin); }; }, [admin]);
-  useEffect(() => { if (!cur || !admin) return; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); wsConv(cur.id); return () => { wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); }; }, [cur?.id, admin]);
-  useEffect(() => { if (!admin || view !== 'staffChat') return; wsRefs.current.staff?.close(); wsStaff(); return () => { wsRefs.current.staff?.close(); clearTimeout(reconnectTimers.current.staff); }; }, [admin, view]);
-
-  useEffect(() => { const iv = setInterval(() => { if (admin) { fetchSessions(); if (cur) fetchMsgs(cur.id); } }, 15000); return () => clearInterval(iv); }, [admin, cur]);
+  useEffect(() => { if (!admin) return; wsAdmin(); return () => { if (wsRefs.current.admin) wsRefs.current.admin.onclose = null; wsRefs.current.admin?.close(); clearTimeout(reconnectTimers.current.admin); }; }, [admin]);
+  useEffect(() => { if (!cur || !admin) return; if (wsRefs.current.conv) wsRefs.current.conv.onclose = null; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); wsConv(cur.id); return () => { if (wsRefs.current.conv) wsRefs.current.conv.onclose = null; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); }; }, [cur?.id, admin, wsConv]);
+  useEffect(() => { if (!admin || view !== 'staffChat') return; if (wsRefs.current.staff) wsRefs.current.staff.onclose = null; wsRefs.current.staff?.close(); wsStaff(); return () => { if (wsRefs.current.staff) wsRefs.current.staff.onclose = null; wsRefs.current.staff?.close(); clearTimeout(reconnectTimers.current.staff); }; }, [admin, view]);
 
   const send = async () => {
-    if (sendingRef.current || sending !== 'idle' || !cur || currentSessionEnded) return;
+    if (!cur || currentSessionEnded) return;
     const content = text.trim();
     if (!content && !quote) return;
-    sendingRef.current = true; setSending(quote ? 'text' : 'text');
+    const currentQuote = quote;
+    const clientMessageId = newClientMessageId();
+    const tempId = localMessageId(clientMessageId);
+    const optimisticMessage = {
+      id: tempId,
+      session_id: cur.id,
+      sender_type: 'OPERATOR',
+      sender_id: admin?.id || '',
+      content,
+      message_type: 'text',
+      image_path: null,
+      status: 'sending',
+      created_at: new Date().toISOString(),
+      read_at: null,
+      is_read: 0,
+      quote_message_id: currentQuote?.id || null,
+      client_message_id: clientMessageId
+    };
+    setSelectedMsgs(prev => mergeMessage(prev, optimisticMessage));
+    setText('');
+    setQuote(null);
     try {
-      const clientMessageId = newClientMessageId();
-      await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: cur.id, clientMessageId, content, senderType: 'OPERATOR', quoteMessageId: quote?.id || null }) });
-      setText(''); setQuote(null);
-    } catch (e: any) { showToast(e?.message || '发送失败'); }
-    sendingRef.current = false; setSending('idle');
+      const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: cur.id, clientMessageId, content, senderType: 'OPERATOR', quoteMessageId: currentQuote?.id || null }) });
+      if (res?.message) setSelectedMsgs(prev => mergeMessage(prev, res.message));
+      if (res?.session) setCur((c: any) => c?.id === res.session.id ? res.session : c);
+    } catch (e: any) { setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
   };
 
   const upload = async (file: File) => {
-    if (sendingRef.current || sending !== 'idle' || !cur || currentSessionEnded) return;
+    if (sending === 'image' || !cur || currentSessionEnded) return;
+    let tempId = '';
     sendingRef.current = true; setSending('image');
     try {
       const clientMessageId = newClientMessageId();
       const fd = new FormData(); fd.append('file', file); fd.append('sessionId', cur.id);
       const res: any = await apiFetch(`/api/upload?sessionId=${encodeURIComponent(cur.id)}`, { method: 'POST', body: fd });
-      await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: cur.id, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'OPERATOR' }) });
-    } catch (e: any) { showToast(e?.message || '发送失败'); }
+      tempId = localMessageId(clientMessageId);
+      setSelectedMsgs(prev => mergeMessage(prev, { id: tempId, session_id: cur.id, sender_type: 'OPERATOR', sender_id: admin?.id || '', content: '', message_type: 'image', image_path: res.path, status: 'sending', created_at: new Date().toISOString(), read_at: null, is_read: 0, quote_message_id: null, client_message_id: clientMessageId }));
+      const msgRes: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: cur.id, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'OPERATOR' }) });
+      if (msgRes?.message) setSelectedMsgs(prev => mergeMessage(prev, msgRes.message));
+      if (msgRes?.session) setCur((c: any) => c?.id === msgRes.session.id ? msgRes.session : c);
+    } catch (e: any) { if (tempId) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
     sendingRef.current = false; setSending('idle');
   };
 
@@ -262,7 +299,7 @@ export default function AdminDashboard() {
     }
   };
 
-  const sendButtonLabel = sending === 'text' ? '发送中...' : '发送';
+  const sendButtonLabel = '发送';
   const uploadButtonLabel = sending === 'image' ? '上传中...' : '📎';
   const staffButtonLabel = staffSending ? '发送中...' : '发送';
 
@@ -386,16 +423,16 @@ export default function AdminDashboard() {
                           onTouchStart={handleLongPress(m)}>
                           {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
                           {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <img src={m.image_path} alt="聊天图片" loading="lazy" /> : <span>{m.content || '[未知消息]'}</span>}
-                          <div className="time">{formatTime(m.created_at)} {m.sender_type === 'OPERATOR' && (m.is_read ? '已读' : '未读')}</div>
+                          <div className="time">{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败' : `${formatTime(m.created_at)} ${m.sender_type === 'OPERATOR' ? (m.is_read ? '已读' : '未读') : ''}`}</div>
                         </div>
                       )
                     ))}
                   </div>
                   {currentSessionEnded ? <div className="session-ended-state">会话已结束</div> : <div className="composer">
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button onClick={() => setQuote(null)}>取消</button></div>}
-                    <label className="file-btn">{uploadButtonLabel}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={sending !== 'idle'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
-                    <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !sendingRef.current) { e.preventDefault(); send(); } }} disabled={sending !== 'idle'} placeholder="输入消息" rows={1} />
-                    <button onClick={send} disabled={sending !== 'idle' || (!text.trim() && !quote)}>{sendButtonLabel}</button>
+                    <label className="file-btn">{uploadButtonLabel}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+                    <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
+                    <button onClick={send} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                   </div>}
                 </section>
               </div>
@@ -470,7 +507,7 @@ export default function AdminDashboard() {
                           onTouchStart={handleLongPress(m)}>
                           {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
                           {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <img src={m.image_path} alt="聊天图片" loading="lazy" /> : <span>{m.content || '[未知消息]'}</span>}
-                          <div className="time">{formatTime(m.created_at)} {m.sender_type === 'OPERATOR' ? (m.is_read ? '已读' : '未读') : ''}</div>
+                          <div className="time">{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败' : `${formatTime(m.created_at)} ${m.sender_type === 'OPERATOR' ? (m.is_read ? '已读' : '未读') : ''}`}</div>
                         </div>
                       )
                     ))}
@@ -478,9 +515,9 @@ export default function AdminDashboard() {
                   {cur && !currentSessionEnded ? (
                     <div className="composer">
                       {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button onClick={() => setQuote(null)}>取消</button></div> : null}
-                      <label className="file-btn">{uploadButtonLabel}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={sending !== 'idle'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
-                      <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !sendingRef.current) { e.preventDefault(); send(); } }} disabled={sending !== 'idle'} placeholder="输入消息" rows={1} />
-                      <button onClick={send} disabled={sending !== 'idle' || (!text.trim() && !quote)}>{sendButtonLabel}</button>
+                      <label className="file-btn">{uploadButtonLabel}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+                      <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
+                      <button onClick={send} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                     </div>
                   ) : (
                     <div className="empty-state">{cur ? '会话已结束' : '请选择一个访客会话'}</div>

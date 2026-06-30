@@ -12,6 +12,21 @@ const SERVER_ERROR_TEXT = '\u670d\u52a1\u5668\u9519\u8bef\uff0c\u8bf7\u7a0d\u540
 const SESSION_ENDED_ERROR = '\u4f1a\u8bdd\u5df2\u7ed3\u675f';
 const inviteConsumeRequests = new Map<string, Promise<any>>();
 const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
+const localMessageId = (clientMessageId: string) => `local-${clientMessageId}`;
+const isMessageCreatedEvent = (type?: string) => type === 'message:new' || type === 'message_created';
+const mergeMessage = (messages: Message[], message?: Message) => {
+  if (!message) return messages;
+  const idx = messages.findIndex(m =>
+    (message.id && m.id === message.id) ||
+    (message.client_message_id && m.client_message_id === message.client_message_id)
+  );
+  if (idx < 0) return [...messages, message];
+  const next = messages.slice();
+  next[idx] = message;
+  return next;
+};
+const mergeMessages = (messages: Message[], incoming: Message[] = []) => incoming.reduce(mergeMessage, messages);
+const markMessageFailed = (messages: Message[], id: string) => messages.map(m => m.id === id ? { ...m, status: 'failed' } : m);
 const isNotFoundStatus = (status?: number) => status === 401 || status === 403 || status === 404 || status === 410;
 const isSessionGoneError = (error: any) => isNotFoundStatus(error?.status) || (error?.status === 400 && error?.data?.error === SESSION_ENDED_ERROR);
 const sessionUnavailable = (session?: any) => !session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED';
@@ -89,7 +104,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       }
       if (res.visitorId && res.visitorId !== visitorId) { setVisitorId(res.visitorId); localStorage.setItem('chat_visitor_id', res.visitorId); }
       if (res.session) { setSessionId(res.session.id); localStorage.setItem('chat_session_id', res.session.id); }
-      if (res.messages) setMessages(res.messages);
+      if (res.messages) setMessages(mergeMessages([], res.messages));
       sessionClosedRef.current = false;
       setSessionClosed(false);
       setAccessError(''); setOnline(true); setConnecting(false);
@@ -114,48 +129,70 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/conversations/${sid}`);
     ws.onopen = () => { setOnline(true); setReconnecting(false); };
-    ws.onclose = () => { setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => { if (sessionId) wsConnect(sessionId); }, 3000); };
+    ws.onclose = () => { setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => wsConnect(sid), 3000); };
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
-        if (d.type === 'message:new') { setMessages(prev => [...prev, d.message]); }
-        else if (d.type === 'message:updated') { setMessages(prev => prev.map(m => m.id === d.message.id ? d.message : m)); }
+        if (isMessageCreatedEvent(d.type)) { setMessages(prev => mergeMessage(prev, d.message)); }
+        else if (d.type === 'message:updated') { setMessages(prev => mergeMessage(prev, d.message)); }
         else if (d.type === 'message:deleted') { setMessages(prev => prev.map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
         else if (d.type === 'session:updated' && sessionUnavailable(d.session)) { showNotFound(); ws.close(); }
       } catch {}
     };
     ws.onerror = () => ws.close();
     wsRef.current = ws;
-  }, [sessionId, showNotFound]);
+  }, [showNotFound]);
 
-  useEffect(() => { if (connecting || accessError || sessionClosed || !sessionId) return; wsConnect(sessionId); return () => { wsRef.current?.close(); clearTimeout(reconnectTimer.current); }; }, [accessError, connecting, sessionClosed, sessionId, wsConnect]);
+  useEffect(() => { if (connecting || accessError || sessionClosed || !sessionId) return; wsConnect(sessionId); return () => { if (wsRef.current) wsRef.current.onclose = null; wsRef.current?.close(); clearTimeout(reconnectTimer.current); }; }, [accessError, connecting, sessionClosed, sessionId, wsConnect]);
 
   useEffect(() => { const f = (e: StorageEvent) => { if (e.key === 'chat_visitor_id' && e.newValue && e.newValue !== visitorId) window.location.reload(); }; addEventListener('storage', f); return () => removeEventListener('storage', f); }, [visitorId]);
   useEffect(() => { messagesEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => { if (networkBanner) { const t = setTimeout(() => setNetworkBanner(false), 10000); return () => clearTimeout(t); } }, [networkBanner]);
 
   const send = async () => {
-    if (accessError || sessionClosed || !sessionId || sendingRef.current || sending !== 'idle') return;
+    if (accessError || sessionClosed || !sessionId) return;
     const content = text.trim();
     if (!content && !quote) return;
-    sendingRef.current = true; setSending(quote ? 'text' : 'text');
+    const currentQuote = quote;
+    const clientMessageId = newClientMessageId();
+    const tempId = localMessageId(clientMessageId);
+    const optimisticMessage = {
+      id: tempId,
+      session_id: sessionId,
+      sender_type: 'VISITOR',
+      sender_id: visitorId,
+      content,
+      message_type: 'text',
+      image_path: null,
+      status: 'sending',
+      created_at: new Date().toISOString(),
+      read_at: null,
+      is_read: 0,
+      quote_message_id: currentQuote?.id || null,
+      client_message_id: clientMessageId
+    };
+    setMessages(prev => mergeMessage(prev, optimisticMessage));
+    setText('');
+    setQuote(null);
     try {
-      const clientMessageId = newClientMessageId();
-      await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content, senderType: 'VISITOR', quoteMessageId: quote?.id || null }) });
-      setText(''); setQuote(null);
-    } catch (e: any) { if (isSessionGoneError(e)) { showNotFound(); } else { showToast(e?.message || '发送失败'); setNetworkBanner(true); } }
-    sendingRef.current = false; setSending('idle');
+      const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content, senderType: 'VISITOR', quoteMessageId: currentQuote?.id || null }) });
+      if (res?.message) setMessages(prev => mergeMessage(prev, res.message));
+    } catch (e: any) { if (isSessionGoneError(e)) { showNotFound(); } else { setMessages(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); setNetworkBanner(true); } }
   };
 
   const upload = async (file: File) => {
-    if (accessError || sessionClosed || !sessionId || sendingRef.current || sending !== 'idle') return;
+    if (accessError || sessionClosed || !sessionId || sending === 'image') return;
+    let tempId = '';
     sendingRef.current = true; setSending('image');
     try {
       const clientMessageId = newClientMessageId();
       const fd = new FormData(); fd.append('file', file); fd.append('sessionId', sessionId);
       const res: any = await apiFetch(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST', body: fd });
-      await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
-    } catch (e: any) { if (isSessionGoneError(e)) { showNotFound(); } else { showToast(e?.message || '发送失败'); setNetworkBanner(true); } }
+      tempId = localMessageId(clientMessageId);
+      setMessages(prev => mergeMessage(prev, { id: tempId, session_id: sessionId, sender_type: 'VISITOR', sender_id: visitorId, content: '', message_type: 'image', image_path: res.path, status: 'sending', created_at: new Date().toISOString(), read_at: null, is_read: 0, quote_message_id: null, client_message_id: clientMessageId }));
+      const msgRes: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
+      if (msgRes?.message) setMessages(prev => mergeMessage(prev, msgRes.message));
+    } catch (e: any) { if (isSessionGoneError(e)) { showNotFound(); } else { if (tempId) setMessages(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); setNetworkBanner(true); } }
     sendingRef.current = false; setSending('idle');
   };
 
@@ -213,18 +250,18 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
               onTouchStart={isMobile && !m.deleted_at ? handleLongPress(m) : undefined}>
               {m.quote_message_id && <div className="quote-box">{[messages.find(x => x.id === m.quote_message_id)].map(q => q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : q.content || '[未知消息]') : '引用消息不可用').join('')}</div>}
               {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <img src={m.image_path} alt="图片" loading="lazy" /> : <span>{m.content || '[未知消息]'}</span>}
+              {(m.status === 'sending' || m.status === 'failed') && <div className="time">{m.status === 'sending' ? '发送中...' : '发送失败'}</div>}
             </div>
           )
         ))}
-        {sending === 'text' && <div className="msg user sending-msg"><div className="sending-dots"><span /><span /><span /></div></div>}
         {sending === 'image' && <div className="msg user sending-msg"><span className="spinner" /> 发送图片中...</div>}
         <div ref={messagesEnd} />
       </div>
       <div className="composer">
         {quote && <div className="quote-compose" style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 10, padding: 8, color: 'var(--muted)', fontSize: 12 }}>{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)} <button onClick={() => setQuote(null)} style={{ minHeight: 'auto', padding: '3px 8px', borderRadius: 8, fontSize: 12, background: '#64748b' }}>取消</button></div>}
-        <label className="upload-btn"><input ref={uploadRef} type="file" accept="image/jpeg,image/png,image/webp" disabled={sessionClosed || !!accessError || !sessionId || sending !== 'idle'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />📎</label>
-        <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !sendingRef.current) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId || sending !== 'idle'} placeholder="输入消息" rows={1} />
-        <button className="send-btn" onClick={send} disabled={sessionClosed || !!accessError || !sessionId || sending !== 'idle' || (!text.trim() && !quote)}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg></button>
+        <label className="upload-btn"><input ref={uploadRef} type="file" accept="image/jpeg,image/png,image/webp" disabled={sessionClosed || !!accessError || !sessionId || sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />📎</label>
+        <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId} placeholder="输入消息" rows={1} />
+        <button className="send-btn" onClick={send} disabled={sessionClosed || !!accessError || !sessionId || (!text.trim() && !quote)}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg></button>
       </div>
 
       {/* Context menu */}
