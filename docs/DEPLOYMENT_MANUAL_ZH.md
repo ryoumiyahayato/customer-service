@@ -27,20 +27,15 @@ support-system/
 └── START_HERE.md         小白快速说明
 ```
 
-如果你要交给别人部署，可以运行：
+当前生产发布不再生成 release zip。发布前在本机运行：
 
 ```bash
-npm run make-release
+npm.cmd run typecheck
+npm.cmd run build
+npx.cmd wrangler deploy
 ```
 
-它会生成：
-
-```text
-release/support-system/      # 完整可上传文件夹
-release/support-system.zip   # 如果本机安装了 zip 命令，会同时生成压缩包
-```
-
-把 `release/support-system` 或 `support-system.zip` 上传到服务器即可。
+不要把 `.dev.vars`、`.env.production`、secret、cookie 或 Cloudflare token 写进仓库。
 
 ---
 
@@ -100,18 +95,12 @@ npm -v
 在本地项目目录运行：
 
 ```bash
-npm run make-release
+npm.cmd run build
 ```
 
-然后把 `release/support-system.zip` 上传到服务器 `/opt` 目录。
+当前生产发布使用 Wrangler，不再上传旧 release zip 到云服务器。
 
-服务器上解压：
-
-```bash
-cd /opt
-unzip support-system.zip
-cd support-system
-```
+Wrangler 会直接发布 Worker 和 `dist` 静态资源，不需要在云服务器上解压上传包。
 
 ### 方法 B：用 Git 拉取
 
@@ -432,10 +421,25 @@ proxy_set_header Connection "upgrade";
 
 ## 15. 一句话总结
 
-你最终要部署的不是单个 HTML 或 exe，而是一个完整的 `support-system` 文件夹。运行 `npm run make-release` 可以生成这个文件夹和压缩包，然后上传到云服务器，按本说明执行即可。
+当前生产发布不是上传旧 release zip，而是通过 Wrangler 发布 Cloudflare Worker 和 `dist` 静态资源。发布前运行 `npm.cmd run typecheck`、`npm.cmd run build`，确认后再运行 `npx.cmd wrangler deploy`。
 
 ## Current Production Admin And Database Operations
 
 The current production system uses Cloudflare Worker + Vite + D1. Do not use legacy Postgres initialization or admin-creation scripts for production accounts.
 
 Administrator creation and password changes should be handled through the admin UI or a controlled D1/Worker operations process. Do not document or store real usernames, passwords, session secrets, tokens, or cookies in this repository.
+
+
+## Current Worker Deployment Flow
+
+The current production deployment path is Cloudflare Worker + Vite + D1 + Wrangler.
+
+Use this sequence before production deployment:
+
+```powershell
+npm.cmd run typecheck
+npm.cmd run build
+npx.cmd wrangler deploy
+```
+
+Do not commit or document `.dev.vars`, `.env.production`, secrets, cookies, or Cloudflare tokens. `wrangler.toml` uses `[assets]` with `run_worker_first = true` so visitor/admin host requests pass through the Worker gate before static assets.
