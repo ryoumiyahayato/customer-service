@@ -27,6 +27,10 @@ const mergeMessage = (messages: Message[], message?: Message) => {
 };
 const mergeMessages = (messages: Message[], incoming: Message[] = []) => incoming.reduce(mergeMessage, messages);
 const markMessageFailed = (messages: Message[], id: string) => messages.map(m => m.id === id ? { ...m, status: 'failed' } : m);
+const lastServerMessageTime = (messages: Message[]) => messages.reduce((latest, msg) => {
+  if (!msg.created_at || String(msg.id || '').startsWith('local-') || msg.status === 'sending' || msg.status === 'failed') return latest;
+  return !latest || msg.created_at > latest ? msg.created_at : latest;
+}, '');
 const isNotFoundStatus = (status?: number) => status === 401 || status === 403 || status === 404 || status === 410;
 const isSessionGoneError = (error: any) => isNotFoundStatus(error?.status) || (error?.status === 400 && error?.data?.error === SESSION_ENDED_ERROR);
 const sessionUnavailable = (session?: any) => !session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED';
@@ -60,11 +64,14 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const sessionClosedRef = useRef(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const messagesEnd = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<Message[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<any>(null);
+  const fallbackTimer = useRef<any>(null);
 
   useEffect(() => { const on = () => setIsMobile(window.innerWidth < 768); addEventListener('resize', on); return () => removeEventListener('resize', on); }, []);
   useEffect(() => { const tou = () => setIsMobile(true); addEventListener('touchstart', tou, { once: true }); return () => removeEventListener('touchstart', tou); }, []);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   const showNotFound = useCallback(() => {
     sessionClosedRef.current = true;
@@ -78,6 +85,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     setQuote(null);
     localStorage.removeItem('chat_session_id');
     clearTimeout(reconnectTimer.current);
+    clearInterval(fallbackTimer.current);
     wsRef.current?.close();
   }, []);
 
@@ -128,8 +136,8 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     if (!sid) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/conversations/${sid}`);
-    ws.onopen = () => { setOnline(true); setReconnecting(false); };
-    ws.onclose = () => { setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => wsConnect(sid), 3000); };
+    ws.onopen = () => { clearInterval(fallbackTimer.current); setOnline(true); setReconnecting(false); };
+    ws.onclose = () => { setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => wsConnect(sid), 5000); };
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
@@ -144,6 +152,22 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   }, [showNotFound]);
 
   useEffect(() => { if (connecting || accessError || sessionClosed || !sessionId) return; wsConnect(sessionId); return () => { if (wsRef.current) wsRef.current.onclose = null; wsRef.current?.close(); clearTimeout(reconnectTimer.current); }; }, [accessError, connecting, sessionClosed, sessionId, wsConnect]);
+
+  const syncMessages = useCallback(async (sid: string) => {
+    const after = lastServerMessageTime(messagesRef.current);
+    const url = `/api/sessions/${encodeURIComponent(sid)}/messages${after ? `?after=${encodeURIComponent(after)}` : ''}`;
+    const res: any = await apiFetch(url, { retryGet: false });
+    if (Array.isArray(res?.messages) && res.messages.length) setMessages(prev => mergeMessages(prev, res.messages));
+  }, []);
+
+  useEffect(() => {
+    clearInterval(fallbackTimer.current);
+    if (connecting || accessError || sessionClosed || !sessionId || online) return;
+    fallbackTimer.current = setInterval(() => {
+      syncMessages(sessionId).catch((e: any) => { if (isSessionGoneError(e)) showNotFound(); });
+    }, 15000);
+    return () => clearInterval(fallbackTimer.current);
+  }, [accessError, connecting, online, sessionClosed, sessionId, showNotFound, syncMessages]);
 
   useEffect(() => { const f = (e: StorageEvent) => { if (e.key === 'chat_visitor_id' && e.newValue && e.newValue !== visitorId) window.location.reload(); }; addEventListener('storage', f); return () => removeEventListener('storage', f); }, [visitorId]);
   useEffect(() => { messagesEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -257,12 +281,12 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
         {sending === 'image' && <div className="msg user sending-msg"><span className="spinner" /> 发送图片中...</div>}
         <div ref={messagesEnd} />
       </div>
-      <div className="composer">
-        {quote && <div className="quote-compose" style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 10, padding: 8, color: 'var(--muted)', fontSize: 12 }}>{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)} <button onClick={() => setQuote(null)} style={{ minHeight: 'auto', padding: '3px 8px', borderRadius: 8, fontSize: 12, background: '#64748b' }}>取消</button></div>}
-        <label className="upload-btn"><input ref={uploadRef} type="file" accept="image/jpeg,image/png,image/webp" disabled={sessionClosed || !!accessError || !sessionId || sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />📎</label>
-        <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId} placeholder="输入消息" rows={1} />
-        <button className="send-btn" onClick={send} disabled={sessionClosed || !!accessError || !sessionId || (!text.trim() && !quote)}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg></button>
-      </div>
+      <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
+        {quote && <div className="quote-compose" style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 10, padding: 8, color: 'var(--muted)', fontSize: 12 }}>{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)} <button type="button" onClick={() => setQuote(null)} style={{ minHeight: 'auto', padding: '3px 8px', borderRadius: 8, fontSize: 12, background: '#64748b' }}>取消</button></div>}
+        <label className="upload-btn"><input ref={uploadRef} type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sessionClosed || !!accessError || !sessionId || sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />📎</label>
+        <textarea name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId} placeholder="输入消息" rows={1} />
+        <button type="submit" className="send-btn" disabled={sessionClosed || !!accessError || !sessionId || (!text.trim() && !quote)}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg></button>
+      </form>
 
       {/* Context menu */}
       {contextMenu && (() => {

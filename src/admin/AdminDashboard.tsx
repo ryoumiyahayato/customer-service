@@ -25,6 +25,10 @@ const mergeMessage = (messages: Message[], message?: Message) => {
 };
 const mergeMessages = (messages: Message[], incoming: Message[] = []) => incoming.reduce(mergeMessage, messages);
 const markMessageFailed = (messages: Message[], id: string) => messages.map(m => m.id === id ? { ...m, status: 'failed' } : m);
+const lastServerMessageTime = (messages: Message[]) => messages.reduce((latest, msg) => {
+  if (!msg.created_at || String(msg.id || '').startsWith('local-') || msg.status === 'sending' || msg.status === 'failed') return latest;
+  return !latest || msg.created_at > latest ? msg.created_at : latest;
+}, '');
 const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
 
 /* ========== ADMIN DASHBOARD ========== */
@@ -58,16 +62,20 @@ export default function AdminDashboard() {
   const [mobileInviteOpen, setMobileInviteOpen] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
+  const [convOnline, setConvOnline] = useState(false);
   const isSuper = admin?.role === 'SUPER_ADMIN';
   const currentSessionEnded = sessionEnded(cur);
   const sendingRef = useRef(false);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const selectedMsgsRef = useRef<Message[]>([]);
   const wsRefs = useRef<{ admin?: WebSocket; conv?: WebSocket; staff?: WebSocket }>({});
   const reconnectTimers = useRef<{ admin?: any; conv?: any; staff?: any }>({});
+  const messageFallbackTimer = useRef<any>(null);
 
   const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); }, []);
 
   useEffect(() => { const on = () => setIsNarrow(window.innerWidth <= 820); addEventListener('resize', on); return () => removeEventListener('resize', on); }, []);
+  useEffect(() => { selectedMsgsRef.current = selectedMsgs; }, [selectedMsgs]);
 
   const fetchAdmin = useCallback(async () => {
     try { const res: any = await apiFetch('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (e: any) { if (e?.status !== 401) showToast(e?.message || '获取管理员信息失败'); } setLoading(false);
@@ -85,6 +93,13 @@ export default function AdminDashboard() {
     setLoadingMsgs(null);
   };
 
+  const syncSelectedMsgs = useCallback(async (sid: string) => {
+    const after = lastServerMessageTime(selectedMsgsRef.current);
+    const url = `/api/sessions/${encodeURIComponent(sid)}/messages${after ? `?after=${encodeURIComponent(after)}` : ''}`;
+    const res: any = await apiFetch(url, { retryGet: false });
+    if (Array.isArray(res?.messages) && res.messages.length) setSelectedMsgs(prev => mergeMessages(prev, res.messages));
+  }, []);
+
   const selectSession = (s: Session) => { setCur(s); fetchMsgs(s.id); if (isNarrow) setMobileView('chat'); };
 
   const wsAdmin = useCallback(() => {
@@ -99,6 +114,7 @@ export default function AdminDashboard() {
     if (!sid) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/conversations/${sid}`);
+    ws.onopen = () => { clearInterval(messageFallbackTimer.current); setConvOnline(true); };
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
@@ -108,7 +124,8 @@ export default function AdminDashboard() {
         else if (d.type === 'session:updated') { setCur((c: any) => c?.id === d.session?.id ? d.session : c); }
       } catch {}
     };
-    ws.onclose = () => { reconnectTimers.current.conv = setTimeout(() => wsConv(sid), 5000); };
+    ws.onerror = () => ws.close();
+    ws.onclose = () => { setConvOnline(false); reconnectTimers.current.conv = setTimeout(() => wsConv(sid), 5000); };
     wsRefs.current.conv = ws;
   }, []);
 
@@ -121,8 +138,15 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => { if (!admin) return; wsAdmin(); return () => { if (wsRefs.current.admin) wsRefs.current.admin.onclose = null; wsRefs.current.admin?.close(); clearTimeout(reconnectTimers.current.admin); }; }, [admin]);
-  useEffect(() => { if (!cur || !admin) return; if (wsRefs.current.conv) wsRefs.current.conv.onclose = null; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); wsConv(cur.id); return () => { if (wsRefs.current.conv) wsRefs.current.conv.onclose = null; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); }; }, [cur?.id, admin, wsConv]);
+  useEffect(() => { if (!cur || !admin) return; setConvOnline(false); if (wsRefs.current.conv) wsRefs.current.conv.onclose = null; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); wsConv(cur.id); return () => { if (wsRefs.current.conv) wsRefs.current.conv.onclose = null; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); }; }, [cur?.id, admin, wsConv]);
   useEffect(() => { if (!admin || view !== 'staffChat') return; if (wsRefs.current.staff) wsRefs.current.staff.onclose = null; wsRefs.current.staff?.close(); wsStaff(); return () => { if (wsRefs.current.staff) wsRefs.current.staff.onclose = null; wsRefs.current.staff?.close(); clearTimeout(reconnectTimers.current.staff); }; }, [admin, view]);
+  useEffect(() => {
+    clearInterval(messageFallbackTimer.current);
+    if (!admin || !cur || currentSessionEnded || convOnline) return;
+    const sid = cur.id;
+    messageFallbackTimer.current = setInterval(() => { syncSelectedMsgs(sid).catch(() => {}); }, 15000);
+    return () => clearInterval(messageFallbackTimer.current);
+  }, [admin, convOnline, cur?.id, currentSessionEnded, syncSelectedMsgs]);
 
   const send = async () => {
     if (!cur || currentSessionEnded) return;
@@ -309,17 +333,17 @@ export default function AdminDashboard() {
 
   return (
     <div className={`admin${isNarrow ? ' is-narrow' : ''}`}>
-      {toast && <div className="admin-global-toast">{toast}<button onClick={() => setToast('')}>×</button></div>}
+      {toast && <div className="admin-global-toast">{toast}<button type="button" onClick={() => setToast('')}>×</button></div>}
       {/* Desktop sidebar */}
       <aside className="side desktop-side">
         <div className="brand">
           <div><h2>{'\u5ba2\u670d\u540e\u53f0'}</h2><span>{admin?.username}</span></div>
-          <button className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '\u9000\u51fa\u4e2d...' : '\u9000\u51fa'}</button>
+          <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '\u9000\u51fa\u4e2d...' : '\u9000\u51fa'}</button>
         </div>
         <nav className="side-nav">
-          <button className={view === 'sessions' ? 'active' : ''} onClick={() => { setView('sessions'); if (isNarrow) setMobileView('dir'); }}>会话</button>
-          {isSuper && <button className={view === 'operators' ? 'active' : ''} onClick={() => { setView('operators'); if (isNarrow) setMobileView('panel'); }}>客服管理</button>}
-          <button className={view === 'staffChat' ? 'active' : ''} onClick={() => { setView('staffChat'); if (isNarrow) setMobileView('panel'); }}>内部消息</button>
+          <button type="button" className={view === 'sessions' ? 'active' : ''} onClick={() => { setView('sessions'); if (isNarrow) setMobileView('dir'); }}>会话</button>
+          {isSuper && <button type="button" className={view === 'operators' ? 'active' : ''} onClick={() => { setView('operators'); if (isNarrow) setMobileView('panel'); }}>客服管理</button>}
+          <button type="button" className={view === 'staffChat' ? 'active' : ''} onClick={() => { setView('staffChat'); if (isNarrow) setMobileView('panel'); }}>内部消息</button>
         </nav>
         <InviteLinkPanel adminRole={admin?.role} operators={operators} />
         {view === 'sessions' && <div className="folder">
@@ -329,7 +353,7 @@ export default function AdminDashboard() {
           </div>
           <div className="folder-body">
             {sessions.slice(0, isNarrow ? sessions.length : 30).map(s => (
-              <button key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
+              <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
                 <div className="avatar-dot">{s.display_name?.[0] || '访'}</div>
                 <div className="session-main"><b>{s.display_name || '访客'}</b><p>{s.status}</p></div>
                 <div className="session-meta">
@@ -346,13 +370,13 @@ export default function AdminDashboard() {
       {/* Mobile topbar */}
       {isNarrow && (
         <div className="mobile-admin-topbar">
-          <button className="mobile-dir-btn" onClick={() => setDirOpen(true)}>☰ 目录</button>
+          <button type="button" className="mobile-dir-btn" onClick={() => setDirOpen(true)}>☰ 目录</button>
           <div className="mobile-topbar-title">{view === 'sessions' ? (cur ? cur.display_name || '访客' : '会话') : view === 'operators' ? '客服管理' : '内部消息'}</div>
           <div className="mobile-topbar-actions">
-            <button onClick={() => setMobileInviteOpen(true)}>{'\u9080\u8bf7'}</button>
-            {cur && view === 'sessions' && !currentSessionEnded && <button className="primary-action" onClick={() => assignSession(cur)}>接管</button>}
-            {cur && view === 'sessions' && !currentSessionEnded && <button className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中' : '结束'}</button>}
-            <button className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '\u9000\u51fa\u4e2d' : '\u9000\u51fa'}</button>
+            <button type="button" onClick={() => setMobileInviteOpen(true)}>{'\u9080\u8bf7'}</button>
+            {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="primary-action" onClick={() => assignSession(cur)}>接管</button>}
+            {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中' : '结束'}</button>}
+            <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '\u9000\u51fa\u4e2d' : '\u9000\u51fa'}</button>
           </div>
         </div>
       )}
@@ -361,7 +385,7 @@ export default function AdminDashboard() {
       {isNarrow && mobileInviteOpen && (
         <div className="mobile-dir-overlay" onClick={() => setMobileInviteOpen(false)}>
           <div className="mobile-dir-panel invite-mobile-panel" onClick={e => e.stopPropagation()}>
-            <div className="mobile-dir-header"><h3>{'\u8bbf\u5ba2\u9080\u8bf7\u94fe\u63a5'}</h3><button onClick={() => setMobileInviteOpen(false)}>{'\u5173\u95ed'}</button></div>
+            <div className="mobile-dir-header"><h3>{'\u8bbf\u5ba2\u9080\u8bf7\u94fe\u63a5'}</h3><button type="button" onClick={() => setMobileInviteOpen(false)}>{'\u5173\u95ed'}</button></div>
             <InviteLinkPanel adminRole={admin?.role} operators={operators} />
           </div>
         </div>
@@ -371,11 +395,11 @@ export default function AdminDashboard() {
       {isNarrow && dirOpen && (
         <div className="mobile-dir-overlay" onClick={() => setDirOpen(false)}>
           <div className="mobile-dir-panel" onClick={e => e.stopPropagation()}>
-            <div className="mobile-dir-header"><h3>目录</h3><button onClick={() => setDirOpen(false)}>✕</button></div>
+            <div className="mobile-dir-header"><h3>目录</h3><button type="button" onClick={() => setDirOpen(false)}>✕</button></div>
             <div className="mobile-dir-list">
-              <button className={`mobile-dir-item${view === 'sessions' ? ' active' : ''}`} onClick={() => { setView('sessions'); setMobileView('dir'); setDirOpen(false); }}>会话</button>
-              {isSuper && <button className={`mobile-dir-item${view === 'operators' ? ' active' : ''}`} onClick={() => { setView('operators'); setMobileView('panel'); setDirOpen(false); }}>客服管理</button>}
-              <button className={`mobile-dir-item${view === 'staffChat' ? ' active' : ''}`} onClick={() => { setView('staffChat'); setMobileView('panel'); setDirOpen(false); }}>内部消息</button>
+              <button type="button" className={`mobile-dir-item${view === 'sessions' ? ' active' : ''}`} onClick={() => { setView('sessions'); setMobileView('dir'); setDirOpen(false); }}>会话</button>
+              {isSuper && <button type="button" className={`mobile-dir-item${view === 'operators' ? ' active' : ''}`} onClick={() => { setView('operators'); setMobileView('panel'); setDirOpen(false); }}>客服管理</button>}
+              <button type="button" className={`mobile-dir-item${view === 'staffChat' ? ' active' : ''}`} onClick={() => { setView('staffChat'); setMobileView('panel'); setDirOpen(false); }}>内部消息</button>
             </div>
           </div>
         </div>
@@ -389,7 +413,7 @@ export default function AdminDashboard() {
               <div className="mobile-session-list-view">
                 <div className="session-list-area">
                   {sessions.map(s => (
-                    <button key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
+                    <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
                       <div className="avatar-dot">{s.display_name?.[0] || '访'}</div>
                       <div className="session-main"><b>{s.display_name || '访客'}</b><p>{s.status}</p></div>
                       <div className="session-meta">
@@ -408,9 +432,9 @@ export default function AdminDashboard() {
                 <section className="chat-panel">
                   <div className="session-action-bar">
                     <div><b>{cur.display_name || '访客'}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
-                    {!currentSessionEnded ? <button className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
+                    {!currentSessionEnded ? <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
                   </div>
-                  {toast && <div className="notice">{toast}<button className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
+                  {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
                     {loadingMsgs === cur.id && <div className="empty-state"><span className="spinner" /> 加载中</div>}
                     {selectedMsgs.length === 0 && !loadingMsgs && <div className="empty-state">暂无消息</div>}
@@ -428,12 +452,12 @@ export default function AdminDashboard() {
                       )
                     ))}
                   </div>
-                  {currentSessionEnded ? <div className="session-ended-state">会话已结束</div> : <div className="composer">
-                    {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button onClick={() => setQuote(null)}>取消</button></div>}
-                    <label className="file-btn">{uploadButtonLabel}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
-                    <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
-                    <button onClick={send} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
-                  </div>}
+                  {currentSessionEnded ? <div className="session-ended-state">会话已结束</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
+                    {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
+                    <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+                    <textarea name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
+                    <button type="submit" disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
+                  </form>}
                 </section>
               </div>
             )}
@@ -444,23 +468,23 @@ export default function AdminDashboard() {
               <div className="mobile-panel-workspace">
                 <div className="admin-panel">
                   <h3>修改超级管理员</h3>
-                  <form onSubmit={updateProfile} className="mini-form">
+                  <form onSubmit={updateProfile} className="mini-form" autoComplete="off">
                     <input name="username" placeholder="新用户名" autoComplete="off" />
                     <input name="password" type="password" placeholder="新密码" autoComplete="new-password" />
-                    <button disabled={profileLoading}>{profileLoading ? '保存中...' : '保存'}</button>
+                    <button type="submit" disabled={profileLoading}>{profileLoading ? '保存中...' : '保存'}</button>
                   </form>
                   <h3 className="panel-title">创建客服</h3>
-                  <form onSubmit={doCreateOperator} className="mini-form">
+                  <form onSubmit={doCreateOperator} className="mini-form" autoComplete="off">
                     <input name="username" placeholder="用户名" required autoComplete="off" />
                     <input name="password" type="password" placeholder="密码（至少8位）" required autoComplete="new-password" />
-                    <button disabled={createOpLoading}>{createOpLoading ? '创建中...' : '创建'}</button>
+                    <button type="submit" disabled={createOpLoading}>{createOpLoading ? '创建中...' : '创建'}</button>
                   </form>
                   <h3 className="panel-title">客服</h3>
                   <div className="operator-list">
                     {operators.length ? operators.map(op => (
                       <div className="operator-row" key={op.id}>
                         <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
-                        {op.is_disabled ? <button className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
+                        {op.is_disabled ? <button type="button" className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
                     )) : <div className="empty-state">暂无客服账号</div>}
                   </div>
@@ -475,9 +499,9 @@ export default function AdminDashboard() {
                       <div key={m.id} className={'msg ' + (m.sender_admin_id === admin.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
                     ))}
                   </div>
-                  <form className="composer staff-composer" onSubmit={sendStaff}>
-                    <input type="text" value={staffText} onChange={e => setStaffText(e.target.value)} disabled={staffSending} placeholder="输入内部消息..." />
-                    <button disabled={staffSending || !staffText.trim()}>{staffButtonLabel}</button>
+                  <form className="composer staff-composer" autoComplete="off" onSubmit={sendStaff}>
+                    <input type="text" name="message" autoComplete="off" value={staffText} onChange={e => setStaffText(e.target.value)} disabled={staffSending} placeholder="输入内部消息..." />
+                    <button type="submit" disabled={staffSending || !staffText.trim()}>{staffButtonLabel}</button>
                   </form>
                 </section>
               </div>
@@ -491,9 +515,9 @@ export default function AdminDashboard() {
                 <section className="chat-panel">
                   {cur ? <div className="session-action-bar">
                     <div><b>{cur.display_name || '访客'}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
-                    {!currentSessionEnded ? <button className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
+                    {!currentSessionEnded ? <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
                   </div> : null}
-                  {toast && <div className="notice">{toast}<button className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
+                  {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
                     {loadingMsgs === cur?.id ? <div className="empty-state"><span className="spinner" /> 正在加载消息</div> : null}
                     {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <div className="empty-state">暂无消息</div> : null}
@@ -513,12 +537,12 @@ export default function AdminDashboard() {
                     ))}
                   </div>
                   {cur && !currentSessionEnded ? (
-                    <div className="composer">
-                      {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button onClick={() => setQuote(null)}>取消</button></div> : null}
-                      <label className="file-btn">{uploadButtonLabel}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
-                      <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
-                      <button onClick={send} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
-                    </div>
+                    <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
+                      {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button type="button" onClick={() => setQuote(null)}>取消</button></div> : null}
+                      <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+                      <textarea name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
+                      <button type="submit" disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
+                    </form>
                   ) : (
                     <div className="empty-state">{cur ? '会话已结束' : '请选择一个访客会话'}</div>
                   )}
@@ -529,23 +553,23 @@ export default function AdminDashboard() {
               <div className="workspace">
                 <aside className="admin-panel wide">
                   <h3>修改超级管理员</h3>
-                  <form onSubmit={updateProfile} className="mini-form">
+                  <form onSubmit={updateProfile} className="mini-form" autoComplete="off">
                     <input name="username" placeholder="新用户名" autoComplete="off" />
                     <input name="password" type="password" placeholder="新密码" autoComplete="new-password" />
-                    <button disabled={profileLoading}>{profileLoading ? '保存中...' : '保存'}</button>
+                    <button type="submit" disabled={profileLoading}>{profileLoading ? '保存中...' : '保存'}</button>
                   </form>
                   <h3 className="panel-title">创建客服</h3>
-                  <form onSubmit={doCreateOperator} className="mini-form">
+                  <form onSubmit={doCreateOperator} className="mini-form" autoComplete="off">
                     <input name="username" placeholder="用户名" required autoComplete="off" />
                     <input name="password" type="password" placeholder="密码（至少8位）" required autoComplete="new-password" />
-                    <button disabled={createOpLoading}>{createOpLoading ? '创建中...' : '创建'}</button>
+                    <button type="submit" disabled={createOpLoading}>{createOpLoading ? '创建中...' : '创建'}</button>
                   </form>
                   <h3 className="panel-title">客服</h3>
                   <div className="operator-list">
                     {operators.length ? operators.map(op => (
                       <div className="operator-row" key={op.id}>
                         <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
-                        {op.is_disabled ? <button className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
+                        {op.is_disabled ? <button type="button" className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
                     )) : <div className="empty-state">暂无客服账号</div>}
                   </div>
@@ -560,9 +584,9 @@ export default function AdminDashboard() {
                       <div key={m.id} className={'msg ' + (m.sender_admin_id === admin.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
                     ))}
                   </div>
-                  <form className="composer staff-composer" onSubmit={sendStaff}>
-                    <input type="text" value={staffText} onChange={e => setStaffText(e.target.value)} disabled={staffSending} placeholder="输入内部消息..." />
-                    <button disabled={staffSending || !staffText.trim()}>{staffButtonLabel}</button>
+                  <form className="composer staff-composer" autoComplete="off" onSubmit={sendStaff}>
+                    <input type="text" name="message" autoComplete="off" value={staffText} onChange={e => setStaffText(e.target.value)} disabled={staffSending} placeholder="输入内部消息..." />
+                    <button type="submit" disabled={staffSending || !staffText.trim()}>{staffButtonLabel}</button>
                   </form>
                 </section>
               </div>
@@ -580,7 +604,7 @@ export default function AdminDashboard() {
         return <div className="context-menu-overlay" onClick={() => setContextMenu(null)} onContextMenu={e => { e.preventDefault(); setContextMenu(null); }}
           style={{ position: 'fixed', inset: 0, zIndex: 199, background: 'transparent' }}>
           <div className="context-menu" style={{ position: 'fixed', left: mx, top: my, zIndex: 200, background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 8px 32px var(--shadow)', padding: 6, display: 'grid', gap: 2, minWidth: 150 }}>
-            {items.map((it, i) => <button key={i} onClick={it.action} disabled={it.disabled} style={{ textAlign: 'left', padding: '10px 14px', borderRadius: 8, background: 'transparent', color: 'var(--text)', fontSize: 14, minHeight: 40, width: '100%', border: 0, cursor: it.disabled ? 'not-allowed' : 'pointer' }}>{it.label}{it.disabled && <span className="spinner" style={{ marginLeft: 8 }} />}</button>)}
+            {items.map((it, i) => <button type="button" key={i} onClick={it.action} disabled={it.disabled} style={{ textAlign: 'left', padding: '10px 14px', borderRadius: 8, background: 'transparent', color: 'var(--text)', fontSize: 14, minHeight: 40, width: '100%', border: 0, cursor: it.disabled ? 'not-allowed' : 'pointer' }}>{it.label}{it.disabled && <span className="spinner" style={{ marginLeft: 8 }} />}</button>)}
           </div>
         </div>;
       })()}

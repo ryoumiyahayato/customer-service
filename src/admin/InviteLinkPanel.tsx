@@ -84,7 +84,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
     <section className="invite-panel">
       <div className="invite-panel-head">
         <h3>{text.title}</h3>
-        <button onClick={createInvite} disabled={loading}>{loading ? text.creating : text.create}</button>
+        <button type="button" onClick={createInvite} disabled={loading}>{loading ? text.creating : text.create}</button>
       </div>
       {isSuper && operators.length > 0 ? (
         <select value={sourceOperatorId} onChange={e => setSourceOperatorId(e.target.value)} aria-label={text.assignOperator}>
@@ -95,7 +95,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
       {inviteUrl ? (
         <div className="invite-result">
           <input ref={inviteInputRef} value={inviteUrl} readOnly onFocus={e => e.currentTarget.select()} />
-          <button onClick={copyInvite}>{copied ? text.copied : text.copy}</button>
+          <button type="button" onClick={copyInvite}>{copied ? text.copied : text.copy}</button>
         </div>
       ) : null}
       {error ? <p className="form-error">{error}</p> : null}

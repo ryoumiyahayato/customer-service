@@ -26,11 +26,11 @@ export default function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
       <div className="admin-login-card">
         <h2>客服后台</h2>
         <p className="admin-login-sub">请使用管理员账号登录</p>
-        <form className="admin-login-form" onSubmit={login}>
-          <input placeholder="用户名" value={user} onChange={e => setUser(e.target.value)} required autoComplete="username" />
-          <input type="password" placeholder="密码" value={pass} onChange={e => setPass(e.target.value)} required autoComplete="current-password" />
+        <form className="admin-login-form" onSubmit={login} autoComplete="on">
+          <input name="username" placeholder="用户名" value={user} onChange={e => setUser(e.target.value)} required autoComplete="username" />
+          <input name="password" type="password" placeholder="密码" value={pass} onChange={e => setPass(e.target.value)} required autoComplete="current-password" />
           {error && <p className="form-error">{error}</p>}
-          <button disabled={loading}>{loading ? '登录中...' : '登录'}</button>
+          <button type="submit" disabled={loading}>{loading ? '登录中...' : '登录'}</button>
         </form>
       </div>
     </div>
