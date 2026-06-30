@@ -26,13 +26,7 @@ support-system/
 └── README.md
 ```
 
-服务器上只需要执行：
-
-```bash
-npm install
-npm run build
-npm run start
-```
+本地开发和发布使用当前 Wrangler 流程，见下方命令清单。
 
 然后访问：
 
@@ -47,13 +41,7 @@ npm run start
 2. 安装 Node.js 20 或更高版本。
 3. 上传整个项目文件夹。
 4. 进入项目目录。
-5. 复制环境变量模板：
-
-```bash
-cp .env.example .env
-```
-
-6. 修改 `.env` 里的 `AUTH_SECRET`。
+5. Configure production secrets through Wrangler or Cloudflare Dashboard. Do not commit `.dev.vars`, `.env.production`, secrets, cookies, or Cloudflare tokens.
 7. 安装依赖并构建：
 
 ```bash
@@ -61,31 +49,34 @@ npm install
 npm run build
 ```
 
-8. 启动：
-
-```bash
-npm run start
-```
-
-第一次启动时，控制台会输出默认管理员：
-
-```text
-Default admin created: username=admin password=随机密码
-```
-
-请保存这个密码，然后登录 `/admin`。
-
-## 想要“一键启动”怎么办？
-
-项目里提供了两个启动脚本：
-
-- Windows 本地开发：双击或运行 `scripts/start-windows.bat`
-- Ubuntu/Linux：运行 `bash scripts/start-linux.sh`
-
-它们本质上仍然是帮你执行 `npm install`、`npm run build`、`npm run start`。
+8. 本地 Worker 开发运行 `npm.cmd run dev`。管理员创建和密码修改通过后台功能或受控 D1/Worker 运维流程处理。
 
 ## Current Production Admin And Database Operations
 
 The current production system uses Cloudflare Worker + Vite + D1. Do not use legacy Postgres initialization or admin-creation scripts for production accounts.
 
 Administrator creation and password changes should be handled through the admin UI or a controlled D1/Worker operations process. Do not document or store real usernames, passwords, session secrets, tokens, or cookies in this repository.
+
+
+## Current Development And Deployment Commands
+
+Use the current Cloudflare Worker + Vite + D1 + Wrangler flow:
+
+```powershell
+# Local Worker development
+npm.cmd run dev
+
+# Frontend SPA only
+npm.cmd run dev:spa
+
+# Typecheck
+npm.cmd run typecheck
+
+# Build and Wrangler dry-run
+npm.cmd run build
+
+# Production deploy, only after review
+npx.cmd wrangler deploy
+```
+
+Do not commit or document `.dev.vars`, `.env.production`, secrets, cookies, or Cloudflare tokens.

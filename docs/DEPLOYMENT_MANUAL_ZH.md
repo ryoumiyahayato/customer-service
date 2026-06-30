@@ -22,7 +22,7 @@ support-system/
 ├── scripts/              启动、打包、创建管理员脚本
 ├── server.js             云端启动入口
 ├── package.json          项目依赖和命令
-├── .env.example          环境变量模板
+├── wrangler.toml          Cloudflare Worker 配置
 ├── README.md             简要说明
 └── START_HERE.md         小白快速说明
 ```
@@ -114,37 +114,9 @@ cd support-system
 
 ---
 
-## 6. 配置环境变量
+## 6. 配置生产密钥
 
-复制模板：
-
-```bash
-cp .env.example .env
-```
-
-编辑：
-
-```bash
-nano .env
-```
-
-至少修改 `AUTH_SECRET`：
-
-```text
-AUTH_SECRET=换成一串很长的随机字符串
-PORT=3000
-DATA_DIR=./data
-DATABASE_PATH=./data/support.sqlite
-NODE_ENV=production
-```
-
-生成随机密钥可以用：
-
-```bash
-openssl rand -hex 32
-```
-
-把输出内容复制到 `AUTH_SECRET=` 后面。
+当前生产系统使用 Cloudflare Worker + D1。生产密钥应通过 Wrangler 或 Cloudflare Dashboard 配置，不要把 `.dev.vars`、`.env.production`、secret、cookie 或 Cloudflare token 写进仓库。
 
 ---
 
@@ -161,40 +133,19 @@ npm run build
 
 ---
 
-## 8. 启动系统
+## 8. 当前开发和发布方式
 
-```bash
-npm run start
-```
+当前生产系统使用 Cloudflare Worker + Vite + D1 + Wrangler，不再通过旧云服务器启动流程运行，也不会在启动日志里输出默认管理员密码。
 
-第一次启动时，控制台会出现类似内容：
+本地 Worker 开发使用 `npm.cmd run dev`；发布前运行 `npm.cmd run typecheck` 和 `npm.cmd run build`，确认后再运行 `npx.cmd wrangler deploy`。
 
-```text
-Default admin created: username=admin password=xxxxxxxxxxxx
-Support system ready on http://localhost:3000
-```
-
-请立刻记下这个密码。
-
-访问地址：
-
-```text
-访客端：http://你的服务器IP:3000/
-客服后台：http://你的服务器IP:3000/admin
-```
-
-后台默认账号：
-
-```text
-账号：admin
-密码：控制台输出的随机密码
-```
+管理员创建和密码修改应通过后台功能或受控 D1/Worker 运维流程处理。
 
 ---
 
 ## 9. 让程序后台长期运行
 
-直接 `npm run start` 会占用当前终端。生产环境建议用 PM2。
+Cloudflare Worker 由 Cloudflare 托管运行，当前生产流程不需要 PM2。以下 PM2 内容仅适用于旧云服务器流程。
 
 安装 PM2：
 
@@ -364,12 +315,6 @@ npm install
 npm run dev
 ```
 
-或者双击/运行：
-
-```bat
-scripts\start-windows.bat
-```
-
 本地访问：
 
 ```text
@@ -391,11 +336,7 @@ http://localhost:3000/admin
 
 ### 14.3 为什么打开 `/admin` 没有账号？
 
-第一次启动 `npm run start` 时，控制台会输出默认账号和随机密码。如果错过了，可以查看启动日志：
-
-```bash
-pm2 logs support-system
-```
+当前生产系统使用 D1 中的管理员和会话记录。请通过后台功能或受控 D1/Worker 运维流程处理管理员创建和密码修改，不要在文档或仓库中记录真实用户名、密码、secret、cookie 或 token。
 
 ### 14.4 图片上传失败怎么办？
 
@@ -443,3 +384,27 @@ npx.cmd wrangler deploy
 ```
 
 Do not commit or document `.dev.vars`, `.env.production`, secrets, cookies, or Cloudflare tokens. `wrangler.toml` uses `[assets]` with `run_worker_first = true` so visitor/admin host requests pass through the Worker gate before static assets.
+
+
+## Current Development And Deployment Commands
+
+Use the current Cloudflare Worker + Vite + D1 + Wrangler flow:
+
+```powershell
+# Local Worker development
+npm.cmd run dev
+
+# Frontend SPA only
+npm.cmd run dev:spa
+
+# Typecheck
+npm.cmd run typecheck
+
+# Build and Wrangler dry-run
+npm.cmd run build
+
+# Production deploy, only after review
+npx.cmd wrangler deploy
+```
+
+Do not commit or document `.dev.vars`, `.env.production`, secrets, cookies, or Cloudflare tokens.
