@@ -29,6 +29,10 @@ const lastServerMessageTime = (messages: Message[]) => messages.reduce((latest, 
   if (!msg.created_at || String(msg.id || '').startsWith('local-') || msg.status === 'sending' || msg.status === 'failed') return latest;
   return !latest || msg.created_at > latest ? msg.created_at : latest;
 }, '');
+const fallbackDelay = (misses: number) => misses < 3 ? 2000 : misses < 12 ? 5000 : 10000;
+const chatMetric = (name: string, started: number, extra?: Record<string, number | string>) => {
+  try { console.debug('[chat_metric]', name, Math.round(performance.now() - started), extra || {}); } catch {}
+};
 const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
 
 /* ========== ADMIN DASHBOARD ========== */
@@ -68,6 +72,8 @@ export default function AdminDashboard() {
   const sendingRef = useRef(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const selectedMsgsRef = useRef<Message[]>([]);
+  const convOnlineRef = useRef(false);
+  const messageFallbackMissesRef = useRef(0);
   const wsRefs = useRef<{ admin?: WebSocket; conv?: WebSocket; staff?: WebSocket }>({});
   const reconnectTimers = useRef<{ admin?: any; conv?: any; staff?: any }>({});
   const messageFallbackTimer = useRef<any>(null);
@@ -76,6 +82,7 @@ export default function AdminDashboard() {
 
   useEffect(() => { const on = () => setIsNarrow(window.innerWidth <= 820); addEventListener('resize', on); return () => removeEventListener('resize', on); }, []);
   useEffect(() => { selectedMsgsRef.current = selectedMsgs; }, [selectedMsgs]);
+  useEffect(() => { convOnlineRef.current = convOnline; }, [convOnline]);
 
   const fetchAdmin = useCallback(async () => {
     try { const res: any = await apiFetch('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (e: any) { if (e?.status !== 401) showToast(e?.message || '获取管理员信息失败'); } setLoading(false);
@@ -94,10 +101,14 @@ export default function AdminDashboard() {
   };
 
   const syncSelectedMsgs = useCallback(async (sid: string) => {
+    const started = performance.now();
     const after = lastServerMessageTime(selectedMsgsRef.current);
     const url = `/api/sessions/${encodeURIComponent(sid)}/messages${after ? `?after=${encodeURIComponent(after)}` : ''}`;
     const res: any = await apiFetch(url, { retryGet: false });
-    if (Array.isArray(res?.messages) && res.messages.length) setSelectedMsgs(prev => mergeMessages(prev, res.messages));
+    const count = Array.isArray(res?.messages) ? res.messages.length : 0;
+    chatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
+    if (count) setSelectedMsgs(prev => mergeMessages(prev, res.messages));
+    return count;
   }, []);
 
   const selectSession = (s: Session) => { setCur(s); fetchMsgs(s.id); if (isNarrow) setMobileView('chat'); };
@@ -113,8 +124,9 @@ export default function AdminDashboard() {
   const wsConv = useCallback((sid: string) => {
     if (!sid) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const connectStarted = performance.now();
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/conversations/${sid}`);
-    ws.onopen = () => { clearInterval(messageFallbackTimer.current); setConvOnline(true); };
+    ws.onopen = () => { chatMetric('ws_connect_ms', connectStarted); clearTimeout(messageFallbackTimer.current); messageFallbackMissesRef.current = 0; setConvOnline(true); };
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
@@ -125,7 +137,7 @@ export default function AdminDashboard() {
       } catch {}
     };
     ws.onerror = () => ws.close();
-    ws.onclose = () => { setConvOnline(false); reconnectTimers.current.conv = setTimeout(() => wsConv(sid), 5000); };
+    ws.onclose = (e) => { try { console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 }); } catch {} setConvOnline(false); reconnectTimers.current.conv = setTimeout(() => wsConv(sid), 5000); };
     wsRefs.current.conv = ws;
   }, []);
 
@@ -140,13 +152,38 @@ export default function AdminDashboard() {
   useEffect(() => { if (!admin) return; wsAdmin(); return () => { if (wsRefs.current.admin) wsRefs.current.admin.onclose = null; wsRefs.current.admin?.close(); clearTimeout(reconnectTimers.current.admin); }; }, [admin]);
   useEffect(() => { if (!cur || !admin) return; setConvOnline(false); if (wsRefs.current.conv) wsRefs.current.conv.onclose = null; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); wsConv(cur.id); return () => { if (wsRefs.current.conv) wsRefs.current.conv.onclose = null; wsRefs.current.conv?.close(); clearTimeout(reconnectTimers.current.conv); }; }, [cur?.id, admin, wsConv]);
   useEffect(() => { if (!admin || view !== 'staffChat') return; if (wsRefs.current.staff) wsRefs.current.staff.onclose = null; wsRefs.current.staff?.close(); wsStaff(); return () => { if (wsRefs.current.staff) wsRefs.current.staff.onclose = null; wsRefs.current.staff?.close(); clearTimeout(reconnectTimers.current.staff); }; }, [admin, view]);
+
+  const scheduleMessageFallback = useCallback((sid: string, delay = 0) => {
+    clearTimeout(messageFallbackTimer.current);
+    messageFallbackTimer.current = setTimeout(async () => {
+      if (!sid || convOnlineRef.current || sessionEnded(cur)) return;
+      try {
+        const count = await syncSelectedMsgs(sid);
+        messageFallbackMissesRef.current = count ? 0 : messageFallbackMissesRef.current + 1;
+      } catch {
+        messageFallbackMissesRef.current += 1;
+      }
+      if (!convOnlineRef.current) scheduleMessageFallback(sid, fallbackDelay(messageFallbackMissesRef.current));
+    }, delay);
+  }, [cur, syncSelectedMsgs]);
+
   useEffect(() => {
-    clearInterval(messageFallbackTimer.current);
+    clearTimeout(messageFallbackTimer.current);
     if (!admin || !cur || currentSessionEnded || convOnline) return;
-    const sid = cur.id;
-    messageFallbackTimer.current = setInterval(() => { syncSelectedMsgs(sid).catch(() => {}); }, 15000);
-    return () => clearInterval(messageFallbackTimer.current);
-  }, [admin, convOnline, cur?.id, currentSessionEnded, syncSelectedMsgs]);
+    messageFallbackMissesRef.current = 0;
+    scheduleMessageFallback(cur.id, 0);
+    return () => clearTimeout(messageFallbackTimer.current);
+  }, [admin, convOnline, cur?.id, currentSessionEnded, scheduleMessageFallback]);
+
+  useEffect(() => {
+    const syncIfVisible = () => {
+      if (document.visibilityState === 'hidden' || !cur || currentSessionEnded || convOnline) return;
+      syncSelectedMsgs(cur.id).catch(() => {});
+    };
+    addEventListener('focus', syncIfVisible);
+    document.addEventListener('visibilitychange', syncIfVisible);
+    return () => { removeEventListener('focus', syncIfVisible); document.removeEventListener('visibilitychange', syncIfVisible); };
+  }, [convOnline, cur?.id, currentSessionEnded, syncSelectedMsgs]);
 
   const send = async () => {
     if (!cur || currentSessionEnded) return;
@@ -174,9 +211,12 @@ export default function AdminDashboard() {
     setText('');
     setQuote(null);
     try {
+      const postStarted = performance.now();
       const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: cur.id, clientMessageId, content, senderType: 'OPERATOR', quoteMessageId: currentQuote?.id || null }) });
+      chatMetric('api_post_total_ms', postStarted);
       if (res?.message) setSelectedMsgs(prev => mergeMessage(prev, res.message));
       if (res?.session) setCur((c: any) => c?.id === res.session.id ? res.session : c);
+      syncSelectedMsgs(cur.id).catch(() => {});
     } catch (e: any) { setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
   };
 

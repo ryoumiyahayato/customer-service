@@ -190,6 +190,7 @@ const noStoreHeaders = { 'cache-control': 'no-store' };
 const empty = (status: number) => new Response(null, { status, headers: noStoreHeaders });
 
 function withNoStore(response: Response) {
+  if ((response as any).webSocket) return response;
   const headers = new Headers(response.headers);
   headers.set('cache-control', 'no-store');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });

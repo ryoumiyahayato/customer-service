@@ -31,6 +31,10 @@ const lastServerMessageTime = (messages: Message[]) => messages.reduce((latest, 
   if (!msg.created_at || String(msg.id || '').startsWith('local-') || msg.status === 'sending' || msg.status === 'failed') return latest;
   return !latest || msg.created_at > latest ? msg.created_at : latest;
 }, '');
+const fallbackDelay = (misses: number) => misses < 3 ? 2000 : misses < 12 ? 5000 : 10000;
+const chatMetric = (name: string, started: number, extra?: Record<string, number | string>) => {
+  try { console.debug('[chat_metric]', name, Math.round(performance.now() - started), extra || {}); } catch {}
+};
 const isNotFoundStatus = (status?: number) => status === 401 || status === 403 || status === 404 || status === 410;
 const isSessionGoneError = (error: any) => isNotFoundStatus(error?.status) || (error?.status === 400 && error?.data?.error === SESSION_ENDED_ERROR);
 const sessionUnavailable = (session?: any) => !session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED';
@@ -65,6 +69,8 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const uploadRef = useRef<HTMLInputElement>(null);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<Message[]>([]);
+  const onlineRef = useRef(false);
+  const fallbackMissesRef = useRef(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<any>(null);
   const fallbackTimer = useRef<any>(null);
@@ -72,6 +78,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   useEffect(() => { const on = () => setIsMobile(window.innerWidth < 768); addEventListener('resize', on); return () => removeEventListener('resize', on); }, []);
   useEffect(() => { const tou = () => setIsMobile(true); addEventListener('touchstart', tou, { once: true }); return () => removeEventListener('touchstart', tou); }, []);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { onlineRef.current = online; }, [online]);
 
   const showNotFound = useCallback(() => {
     sessionClosedRef.current = true;
@@ -85,7 +92,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     setQuote(null);
     localStorage.removeItem('chat_session_id');
     clearTimeout(reconnectTimer.current);
-    clearInterval(fallbackTimer.current);
+    clearTimeout(fallbackTimer.current);
     wsRef.current?.close();
   }, []);
 
@@ -115,7 +122,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       if (res.messages) setMessages(mergeMessages([], res.messages));
       sessionClosedRef.current = false;
       setSessionClosed(false);
-      setAccessError(''); setOnline(true); setConnecting(false);
+      setAccessError(''); setOnline(false); setConnecting(false);
       return res.session?.id;
     } catch (e: any) {
       if (!isNotFoundStatus(e?.status)) inviteConsumeRequests.delete(resolvedInviteToken);
@@ -135,9 +142,10 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const wsConnect = useCallback((sid: string) => {
     if (!sid) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const connectStarted = performance.now();
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/conversations/${sid}`);
-    ws.onopen = () => { clearInterval(fallbackTimer.current); setOnline(true); setReconnecting(false); };
-    ws.onclose = () => { setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => wsConnect(sid), 5000); };
+    ws.onopen = () => { chatMetric('ws_connect_ms', connectStarted); clearTimeout(fallbackTimer.current); fallbackMissesRef.current = 0; setOnline(true); setReconnecting(false); };
+    ws.onclose = (e) => { try { console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 }); } catch {} setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => wsConnect(sid), 5000); };
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
@@ -154,20 +162,48 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   useEffect(() => { if (connecting || accessError || sessionClosed || !sessionId) return; wsConnect(sessionId); return () => { if (wsRef.current) wsRef.current.onclose = null; wsRef.current?.close(); clearTimeout(reconnectTimer.current); }; }, [accessError, connecting, sessionClosed, sessionId, wsConnect]);
 
   const syncMessages = useCallback(async (sid: string) => {
+    const started = performance.now();
     const after = lastServerMessageTime(messagesRef.current);
     const url = `/api/sessions/${encodeURIComponent(sid)}/messages${after ? `?after=${encodeURIComponent(after)}` : ''}`;
     const res: any = await apiFetch(url, { retryGet: false });
-    if (Array.isArray(res?.messages) && res.messages.length) setMessages(prev => mergeMessages(prev, res.messages));
+    const count = Array.isArray(res?.messages) ? res.messages.length : 0;
+    chatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
+    if (count) setMessages(prev => mergeMessages(prev, res.messages));
+    return count;
   }, []);
 
+  const scheduleFallback = useCallback((sid: string, delay = 0) => {
+    clearTimeout(fallbackTimer.current);
+    fallbackTimer.current = setTimeout(async () => {
+      if (!sid || sessionClosedRef.current || onlineRef.current) return;
+      try {
+        const count = await syncMessages(sid);
+        fallbackMissesRef.current = count ? 0 : fallbackMissesRef.current + 1;
+      } catch (e: any) {
+        fallbackMissesRef.current += 1;
+        if (isSessionGoneError(e)) { showNotFound(); return; }
+      }
+      if (!sessionClosedRef.current && !onlineRef.current) scheduleFallback(sid, fallbackDelay(fallbackMissesRef.current));
+    }, delay);
+  }, [showNotFound, syncMessages]);
+
   useEffect(() => {
-    clearInterval(fallbackTimer.current);
+    clearTimeout(fallbackTimer.current);
     if (connecting || accessError || sessionClosed || !sessionId || online) return;
-    fallbackTimer.current = setInterval(() => {
+    fallbackMissesRef.current = 0;
+    scheduleFallback(sessionId, 0);
+    return () => clearTimeout(fallbackTimer.current);
+  }, [accessError, connecting, online, scheduleFallback, sessionClosed, sessionId]);
+
+  useEffect(() => {
+    const syncIfVisible = () => {
+      if (document.visibilityState === 'hidden' || !sessionId || online || sessionClosed || accessError) return;
       syncMessages(sessionId).catch((e: any) => { if (isSessionGoneError(e)) showNotFound(); });
-    }, 15000);
-    return () => clearInterval(fallbackTimer.current);
-  }, [accessError, connecting, online, sessionClosed, sessionId, showNotFound, syncMessages]);
+    };
+    addEventListener('focus', syncIfVisible);
+    document.addEventListener('visibilitychange', syncIfVisible);
+    return () => { removeEventListener('focus', syncIfVisible); document.removeEventListener('visibilitychange', syncIfVisible); };
+  }, [accessError, online, sessionClosed, sessionId, showNotFound, syncMessages]);
 
   useEffect(() => { const f = (e: StorageEvent) => { if (e.key === 'chat_visitor_id' && e.newValue && e.newValue !== visitorId) window.location.reload(); }; addEventListener('storage', f); return () => removeEventListener('storage', f); }, [visitorId]);
   useEffect(() => { messagesEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -199,8 +235,11 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     setText('');
     setQuote(null);
     try {
+      const postStarted = performance.now();
       const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content, senderType: 'VISITOR', quoteMessageId: currentQuote?.id || null }) });
+      chatMetric('api_post_total_ms', postStarted);
       if (res?.message) setMessages(prev => mergeMessage(prev, res.message));
+      syncMessages(sessionId).catch((e: any) => { if (isSessionGoneError(e)) showNotFound(); });
     } catch (e: any) { if (isSessionGoneError(e)) { showNotFound(); } else { setMessages(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); setNetworkBanner(true); } }
   };
 
