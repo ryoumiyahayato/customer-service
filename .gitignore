@@ -40,3 +40,6 @@ HEAD_worker.ts
 _deploy_main.ts
 public/uploads/*
 !public/uploads/.gitkeep
+deploy.bat
+deploy.local.bat
+*.local.bat
