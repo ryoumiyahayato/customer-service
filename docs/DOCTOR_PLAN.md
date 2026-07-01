@@ -7,8 +7,18 @@ chat message bodies.
 ## MVP Implementation Status
 
 The current MVP implements local repository checks in `scripts/doctor.mjs`.
-It does not run online smoke tests yet. HTTPS/HSTS checks, invite 404/410
-checks, and WebSocket 101 checks are planned for a later iteration.
+`npm run doctor` runs only local checks by default.
+
+`npm run doctor:online` runs the local checks plus public online smoke tests.
+The online checks do not require login, do not use a valid invite, do not read
+real chat messages, and do not store or print cookies.
+
+Implemented online checks cover HTTP-to-HTTPS redirects, HSTS, visitor root
+fail-closed behavior, invalid invite host 404/410 behavior, unauthenticated
+`/api/auth/me`, and unauthenticated `/api/ws/admin` rejection.
+
+Still deferred: valid invite smoke tests, authenticated WebSocket 101 checks,
+and D1/R2 write-path checks.
 
 ## A. Local Repository Checks
 

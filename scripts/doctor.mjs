@@ -1,13 +1,28 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import tls from 'node:tls';
 
 const root = process.cwd();
 const skipDirs = new Set(['.git', 'node_modules', '.wrangler', '.wrangler-dry-run']);
 const statuses = [];
+const runOnline = process.argv.includes('--online');
+const publicRequestHeaders = {
+  'user-agent': 'support-chat-doctor/1.0',
+};
+const responseLeakKeywords = [
+  'CLOUDFLARE_API_TOKEN',
+  'CLOUDFLARE_API_KEY',
+  'CF_API_TOKEN',
+  'CF_API_KEY',
+  'SESSION_SECRET',
+  'Authorization',
+  'private key',
+];
 
 function rel(file) {
   return path.relative(root, file).replaceAll(path.sep, '/');
@@ -80,6 +95,49 @@ function keywordHits(files, keywords) {
     if (matched.length) hits.push({ file: rel(file), keywords: matched });
   }
   return hits;
+}
+
+function matchedKeywords(text, keywords) {
+  return keywords.filter((keyword) => {
+    const pattern = new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    return pattern.test(text);
+  });
+}
+
+function hasHsts(response) {
+  return Boolean(response.headers.get('strict-transport-security'));
+}
+
+function isReactSpa(text) {
+  return /<div\s+id=["']root["']/i.test(text) || /\/assets\/index-[A-Za-z0-9_-]+\.(js|css)/i.test(text);
+}
+
+async function fetchPublic(url, init = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), init.timeoutMs || 10000);
+  try {
+    return await fetch(url, {
+      method: init.method || 'GET',
+      redirect: init.redirect || 'manual',
+      headers: { ...publicRequestHeaders, ...(init.headers || {}) },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readBodyForChecks(response) {
+  try {
+    return await response.text();
+  } catch {
+    return '';
+  }
+}
+
+function failFetch(code, error, suggestion) {
+  const message = error?.name === 'AbortError' ? 'Request timed out.' : 'Request failed.';
+  result(code, 'fail', 'high', message, suggestion);
 }
 
 function checkGitStatus() {
@@ -231,7 +289,205 @@ function checkGitignore() {
   result('gitignore.required_entries', 'pass', 'info', '.gitignore contains required secret and local-script entries.', 'No action required.');
 }
 
-function main() {
+async function checkHttpRedirect(code, sourceUrl, expectedLocation, options = {}) {
+  try {
+    const response = await fetchPublic(sourceUrl, { redirect: 'manual' });
+    const body = await readBodyForChecks(response);
+    const location = response.headers.get('location') || '';
+    const statusOk = [301, 308].includes(response.status);
+    const locationOk = location === expectedLocation;
+    const spa = isReactSpa(body);
+
+    if (statusOk && locationOk && !spa) {
+      result(code, 'pass', 'high', `HTTP returned ${response.status} and redirected to the expected HTTPS URL.`, 'No action required.');
+      return;
+    }
+
+    const issues = [];
+    if (!statusOk) issues.push(`status ${response.status}`);
+    if (!locationOk) issues.push('unexpected Location header');
+    if (spa) issues.push('React SPA body');
+    result(code, 'fail', 'high', `HTTP redirect check failed: ${issues.join(', ')}.`, options.suggestion || 'Ensure the Worker redirects HTTP to HTTPS before serving application assets.');
+  } catch (error) {
+    failFetch(code, error, options.suggestion || 'Verify the public HTTP endpoint is reachable.');
+  }
+}
+
+async function checkHttpsStatusHsts(code, url, expectedStatuses, options = {}) {
+  try {
+    const response = await fetchPublic(url);
+    const body = await readBodyForChecks(response);
+    const statusOk = expectedStatuses.includes(response.status);
+    const hstsOk = hasHsts(response);
+    const spa = isReactSpa(body);
+    const shouldRejectSpa = Boolean(options.rejectSpa);
+
+    if (statusOk && hstsOk && (!shouldRejectSpa || !spa)) {
+      result(code, 'pass', 'high', `HTTPS returned ${response.status} with HSTS.`, 'No action required.');
+      return;
+    }
+
+    const issues = [];
+    if (!statusOk) issues.push(`status ${response.status}`);
+    if (!hstsOk) issues.push('missing HSTS');
+    if (shouldRejectSpa && spa) issues.push('React SPA body');
+    result(code, 'fail', 'high', `HTTPS boundary check failed: ${issues.join(', ')}.`, options.suggestion || 'Check Worker routing, host gate, and security headers.');
+  } catch (error) {
+    failFetch(code, error, options.suggestion || 'Verify the public HTTPS endpoint is reachable.');
+  }
+}
+
+async function checkAuthMe() {
+  const code = 'online.auth_me.unauthenticated';
+  try {
+    const response = await fetchPublic('https://denglu.kefuxitong.net/api/auth/me');
+    const body = await readBodyForChecks(response);
+    const leaks = matchedKeywords(body, responseLeakKeywords);
+    const contentType = response.headers.get('content-type') || '';
+    const acceptableStatus = response.status < 500;
+
+    if (leaks.length) {
+      result(code, 'fail', 'critical', `Unauthenticated auth check response contains high-risk keyword(s): ${leaks.join(', ')}.`, 'Remove sensitive data from unauthenticated API responses.');
+      return;
+    }
+
+    if (!acceptableStatus) {
+      result(code, 'fail', 'high', `/api/auth/me returned ${response.status} for an unauthenticated request.`, 'Return a safe unauthenticated response instead of a server error.');
+      return;
+    }
+
+    if (contentType.includes('application/json')) {
+      try {
+        const parsed = body ? JSON.parse(body) : null;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          result(code, 'pass', 'high', `/api/auth/me returned safe JSON with status ${response.status}.`, 'No action required.');
+          return;
+        }
+        result(code, 'warn', 'medium', `/api/auth/me returned JSON with status ${response.status}, but the structure was not an object.`, 'Keep unauthenticated auth responses structured and minimal.');
+        return;
+      } catch {
+        result(code, 'warn', 'medium', `/api/auth/me returned JSON content-type with invalid JSON and status ${response.status}.`, 'Return a small valid JSON object for unauthenticated auth checks.');
+        return;
+      }
+    }
+
+    result(code, 'warn', 'medium', `/api/auth/me returned ${response.status} without JSON content-type.`, 'Prefer a small JSON unauthenticated response.');
+  } catch (error) {
+    failFetch(code, error, 'Verify the public auth endpoint is reachable and does not require credentials for a safe me check.');
+  }
+}
+
+function requestWsUpgrade(host, requestPath) {
+  return new Promise((resolve, reject) => {
+    const key = randomBytes(16).toString('base64');
+    const socket = tls.connect({
+      host,
+      port: 443,
+      servername: host,
+      ALPNProtocols: ['http/1.1'],
+      timeout: 10000,
+    });
+    let data = '';
+    let settled = false;
+
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      reject(error);
+    };
+
+    socket.setEncoding('utf8');
+    socket.on('secureConnect', () => {
+      const request = [
+        `GET ${requestPath} HTTP/1.1`,
+        `Host: ${host}`,
+        'User-Agent: support-chat-doctor/1.0',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Key: ${key}`,
+        'Sec-WebSocket-Version: 13',
+        '',
+        '',
+      ].join('\r\n');
+      socket.write(request);
+    });
+    socket.on('data', (chunk) => {
+      data += chunk;
+      if (!data.includes('\r\n\r\n')) return;
+      const statusLine = data.split(/\r?\n/, 1)[0] || '';
+      const match = statusLine.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})\b/);
+      finish({ status: match ? Number(match[1]) : 0 });
+    });
+    socket.on('timeout', () => fail(Object.assign(new Error('timeout'), { name: 'AbortError' })));
+    socket.on('error', fail);
+  });
+}
+
+async function checkWsAdminUnauthenticated() {
+  const code = 'online.ws_admin.unauthenticated';
+  try {
+    const response = await requestWsUpgrade('denglu.kefuxitong.net', '/api/ws/admin');
+    if (response.status === 101) {
+      result(code, 'fail', 'critical', 'Unauthenticated WebSocket upgrade returned 101.', 'Require authentication before upgrading admin WebSocket connections.');
+      return;
+    }
+    if (response.status >= 500 || response.status === 0) {
+      result(code, 'fail', 'high', `Unauthenticated WebSocket check returned ${response.status}.`, 'Reject unauthenticated WebSocket requests without server errors.');
+      return;
+    }
+    result(code, 'pass', 'high', `Unauthenticated WebSocket upgrade was rejected with ${response.status}.`, 'No action required.');
+  } catch (error) {
+    failFetch(code, error, 'Verify the public admin WebSocket endpoint is reachable and rejects unauthenticated upgrades.');
+  }
+}
+
+async function runOnlineChecks() {
+  await checkHttpRedirect(
+    'online.admin_http.redirect_https',
+    'http://denglu.kefuxitong.net/',
+    'https://denglu.kefuxitong.net/',
+  );
+  await checkHttpsStatusHsts(
+    'online.admin_https.hsts',
+    'https://denglu.kefuxitong.net/',
+    [200],
+    { suggestion: 'Ensure the backend host serves the admin shell over HTTPS with HSTS.' },
+  );
+  await checkHttpRedirect(
+    'online.visitor_root_http.redirect_https',
+    'http://vx9qn7zr.org/',
+    'https://vx9qn7zr.org/',
+    { suggestion: 'Redirect the visitor root domain before any SPA asset handling.' },
+  );
+  await checkHttpsStatusHsts(
+    'online.visitor_root_https.not_found',
+    'https://vx9qn7zr.org/',
+    [404],
+    { rejectSpa: true, suggestion: 'Keep the visitor root domain fail-closed with HSTS.' },
+  );
+  await checkHttpRedirect(
+    'online.invalid_invite_http.redirect_https',
+    'http://0000000000000000000000000000000000000000.vx9qn7zr.org/',
+    'https://0000000000000000000000000000000000000000.vx9qn7zr.org/',
+  );
+  await checkHttpsStatusHsts(
+    'online.invalid_invite_https.not_found',
+    'https://0000000000000000000000000000000000000000.vx9qn7zr.org/',
+    [404, 410],
+    { rejectSpa: true, suggestion: 'Keep invalid invite hosts returning 404 or 410 with HSTS and no SPA body.' },
+  );
+  await checkAuthMe();
+  await checkWsAdminUnauthenticated();
+}
+
+async function main() {
   checkGitStatus();
   checkTrackedFile('git.dev_vars.untracked', '.dev.vars');
   checkTrackedFile('git.env_production.untracked', '.env.production');
@@ -247,10 +503,16 @@ function main() {
   checkFileExists('templates.deploy_example.exists', 'templates/deploy.example.bat');
   checkGitignore();
 
+  if (runOnline) await runOnlineChecks();
+
   for (const item of statuses) console.log(JSON.stringify(item));
 
   const shouldFail = statuses.some((item) => item.status === 'fail' && ['high', 'critical'].includes(item.severity));
   process.exitCode = shouldFail ? 1 : 0;
 }
 
-main();
+main().catch((error) => {
+  result('doctor.unhandled_error', 'fail', 'critical', error?.name === 'AbortError' ? 'Doctor timed out.' : 'Doctor failed unexpectedly.', 'Rerun doctor and inspect the local environment.');
+  for (const item of statuses) console.log(JSON.stringify(item));
+  process.exitCode = 1;
+});
