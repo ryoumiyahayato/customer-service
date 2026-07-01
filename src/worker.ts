@@ -16,6 +16,7 @@ const ADMIN_COOKIE = 'support_admin';
 const VISITOR_COOKIE = 'visitor_account';
 const GUEST_COOKIE = 'guest_session';
 const INVITE_TTL_MS = 24 * 60 * 60 * 1000;
+const HSTS_HEADER = 'max-age=31536000; includeSubDomains';
 const ERR_INVALID_INVITE = '\u94fe\u63a5\u5df2\u5931\u6548\uff0c\u8bf7\u8054\u7cfb\u5ba2\u670d\u91cd\u65b0\u83b7\u53d6';
 const ERR_INVITE_CREATE_FAILED = '\u4f1a\u8bdd\u521b\u5efa\u5931\u8d25\uff0c\u8bf7\u91cd\u65b0\u6253\u5f00\u9080\u8bf7\u94fe\u63a5\u6216\u8054\u7cfb\u5ba2\u670d';
 const ERR_NO_SESSION_ACCESS = '\u65e0\u6743\u8bbf\u95ee\u8be5\u4f1a\u8bdd';
@@ -34,7 +35,7 @@ const ERR_ACCOUNT_EXISTS = '\u8d26\u53f7\u5df2\u5b58\u5728';
 const enc = new TextEncoder();
 const now = () => new Date().toISOString();
 const rid = (prefix: string) => `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
-const json = (body: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(body), { ...init, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...(init.headers || {}) } });
+const json = (body: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(body), { ...init, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Strict-Transport-Security': HSTS_HEADER, ...(init.headers || {}) } });
 const getCookie = (req: Request, name: string) => (req.headers.get('cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith(`${name}=`))?.slice(name.length + 1);
 const setCookie = (name: string, value: string) => `${name}=${value}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure`;
 const clearCookie = (name: string) => `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure`;
@@ -186,13 +187,21 @@ async function api(req: Request, env: Env) {
 
 const BACKEND_HOST = 'denglu.kefuxitong.net';
 const HEX_INVITE_TOKEN = /^[a-f0-9]{40}$/;
-const noStoreHeaders = { 'cache-control': 'no-store' };
+const noStoreHeaders = { 'cache-control': 'no-store', 'strict-transport-security': HSTS_HEADER };
 const empty = (status: number) => new Response(null, { status, headers: noStoreHeaders });
+
+function isLocalDevHost(host: string) {
+  let normalized = host.toLowerCase();
+  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
+  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) normalized = normalized.slice(0, normalized.lastIndexOf(':'));
+  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1';
+}
 
 function withNoStore(response: Response) {
   if ((response as any).webSocket) return response;
   const headers = new Headers(response.headers);
   headers.set('cache-control', 'no-store');
+  headers.set('strict-transport-security', HSTS_HEADER);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -213,6 +222,11 @@ export default {
     try {
       const url = new URL(req.url);
       const host = url.hostname.toLowerCase();
+      const requestHost = (req.headers.get('host') || host).toLowerCase();
+      if (url.protocol === 'http:' && !isLocalDevHost(host) && !isLocalDevHost(requestHost)) {
+        url.protocol = 'https:';
+        return new Response(null, { status: 308, headers: { ...noStoreHeaders, Location: url.toString() } });
+      }
       const pathname = url.pathname;
       const visitorRoot = (env.VISITOR_ROOT_DOMAIN || 'vx9qn7zr.org').toLowerCase();
 
