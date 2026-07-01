@@ -20,6 +20,14 @@ fail-closed behavior, invalid invite host 404/410 behavior, unauthenticated
 Still deferred: valid invite smoke tests, authenticated WebSocket 101 checks,
 and D1/R2 write-path checks.
 
+`npm run bootstrap:cloudflare` runs a read-only Cloudflare deployment preflight.
+It checks local tool availability, package scripts, required documentation, and
+the expected Cloudflare bindings/routes in `wrangler.toml`. It does not create
+D1 databases, R2 buckets, routes, or secrets, and it does not deploy.
+
+Future setup phases may add guided creation for D1, R2, routes, and secrets
+after the read-only preflight is stable.
+
 ## A. Local Repository Checks
 
 1. `git.status.clean`

@@ -1,0 +1,10 @@
+{
+  "provider": "cloudflare",
+  "workerName": "support-chat-cloudflare",
+  "adminHost": "denglu.example.com",
+  "visitorRootDomain": "example-visitor-root.com",
+  "d1DatabaseName": "customer_chat_db",
+  "r2BucketName": "customer-chat-uploads",
+  "durableObjectBinding": "CHAT_ROOM",
+  "notes": "Example only. Do not put secrets in this file."
+}
