@@ -3,6 +3,9 @@
 This is the current deployment flow for the Cloudflare package path. The
 recommended wrapper runs the safety checks and build dry-run by default, and it
 only performs a real deployment when `--deploy` is explicitly provided.
+Cloudflare is currently the only implemented deployment target; Docker/VPS and
+multi-cloud deployment are still planning-stage targets and should not be
+presented as usable deployment options yet.
 
 ## Flow
 
