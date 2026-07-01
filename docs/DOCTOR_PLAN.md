@@ -25,8 +25,15 @@ It checks local tool availability, package scripts, required documentation, and
 the expected Cloudflare bindings/routes in `wrangler.toml`. It does not create
 D1 databases, R2 buckets, routes, or secrets, and it does not deploy.
 
-Future setup phases may add guided creation for D1, R2, routes, and secrets
-after the read-only preflight is stable.
+`npm run deploy:cloudflare` wraps the Cloudflare deployment flow. Its default
+mode is a dry-run preflight that runs `doctor`, `bootstrap:cloudflare`,
+`typecheck`, and `build`; it does not run `wrangler deploy`. A real deployment
+requires `npm run deploy:cloudflare -- --deploy`, which reruns the preflight,
+executes `npx wrangler deploy`, and then runs `doctor:online`.
+
+Future setup phases may add guided resource creation for D1, R2, routes, and
+secrets, migration readiness checks, and CI/CD workflows after the read-only
+preflight and local deploy wrapper are stable.
 
 ## A. Local Repository Checks
 

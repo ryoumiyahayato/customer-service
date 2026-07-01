@@ -1,8 +1,8 @@
 # Cloudflare Deployment MVP
 
-This is the current read-only deployment flow for the Cloudflare package path.
-The bootstrap command checks local prerequisites and `wrangler.toml`; it does
-not create resources, write secrets, run migrations, or deploy.
+This is the current deployment flow for the Cloudflare package path. The
+recommended wrapper runs the safety checks and build dry-run by default, and it
+only performs a real deployment when `--deploy` is explicitly provided.
 
 ## Flow
 
@@ -18,35 +18,29 @@ not create resources, write secrets, run migrations, or deploy.
    npx wrangler login
    ```
 
-3. Run local security checks:
+3. Run the local preflight and build dry-run:
 
    ```powershell
-   npm run doctor
+   npm run deploy:cloudflare
    ```
 
-4. Run Cloudflare preflight:
+   Default mode does not deploy. It runs:
+
+   - `npm run doctor`
+   - `npm run bootstrap:cloudflare`
+   - `npm run typecheck`
+   - `npm run build`
+
+4. Deploy only after reviewing the preflight result:
 
    ```powershell
-   npm run bootstrap:cloudflare
+   npm run deploy:cloudflare -- --deploy
    ```
 
-5. Build and dry-run package output:
+   Deploy mode runs the same preflight, then:
 
-   ```powershell
-   npm run build
-   ```
-
-6. Run public online smoke tests after a deployment is already live:
-
-   ```powershell
-   npm run doctor:online
-   ```
-
-7. Deploy only after reviewing the previous checks:
-
-   ```powershell
-   npx wrangler deploy
-   ```
+   - `npx wrangler deploy`
+   - `npm run doctor:online`
 
 ## Secrets
 
@@ -54,11 +48,16 @@ not create resources, write secrets, run migrations, or deploy.
 - Do not commit `.dev.vars`.
 - Do not commit `.env.production`.
 - Store Worker secrets with `npx wrangler secret put`.
+- Prefer `npx wrangler login` OAuth for local deployment.
 - CI/CD should inject Cloudflare credentials from its secret manager.
+- Do not design CI/CD around checked-in scripts that contain tokens; CI/CD
+  should be designed separately after the local deployment path is stable.
 - `templates/deploy.config.example.json` is only a placeholder template. Do not
   put real tokens, cookies, passwords, or secret values in it.
 
 ## Current Scope
 
-`npm run bootstrap:cloudflare` is read-only. Automatic D1, R2, route, and secret
-creation belongs to a later setup phase.
+`npm run bootstrap:cloudflare` is read-only. `npm run deploy:cloudflare` wraps
+the deployment flow, but it does not create D1 databases, R2 buckets, routes, or
+secrets, and it does not run migrations. Automatic resource creation belongs to
+a later setup phase.

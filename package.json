@@ -5,6 +5,7 @@
     "doctor": "node scripts/doctor.mjs",
     "doctor:online": "node scripts/doctor.mjs --online",
     "bootstrap:cloudflare": "node scripts/bootstrap-cloudflare.mjs",
+    "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
     "build": "vite build && wrangler deploy --dry-run --outdir .wrangler-dry-run",
     "deploy": "wrangler deploy",
     "cf:dev": "wrangler dev",
