@@ -74,7 +74,7 @@ function canManageSession(admin: Admin | null, session: any) { return canAccessS
 function canJoinConversationRoom(admin: Admin | null, session: any) { return canAccessSession(admin, session); }
 async function getSessionById(env: Env, sessionId: string) { return sessionId ? await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<any>() : null; }
 async function guestOwnsSession(env: Env, req: Request, session: any) { const guest = await currentGuestSession(env, req); return Boolean(guest && session && guest.session.id === session.id && guest.user.id === session.user_id); }
-async function guestPayload(env: Env, guest: any, init: ResponseInit = {}) { await env.DB.prepare("UPDATE messages SET is_read=1,status=CASE WHEN status='sent' THEN 'read' ELSE status END,read_at=COALESCE(read_at,?) WHERE session_id=? AND sender_type='OPERATOR' AND status!='recalled'").bind(now(), guest.session.id).run(); return json({ visitorId: guest.visitorKey, account: null, user: guest.user, session: guest.session, messages: await getMessages(env, guest.session.id) }, init); }
+async function guestPayload(env: Env, guest: any, init: ResponseInit = {}) { await markMessagesRead(env, guest.session.id, 'OPERATOR'); return json({ visitorId: guest.visitorKey, account: null, user: guest.user, session: guest.session, messages: await getMessages(env, guest.session.id) }, init); }
 async function createInviteLink(req: Request, env: Env) { const admin = await requireAdmin(env, req); const b: any = await readJson(req); let sourceOperatorId: string | null = admin.role === 'OPERATOR' ? admin.id : null; if (admin.role === 'SUPER_ADMIN' && b.sourceOperatorId) { const op = await env.DB.prepare("SELECT id FROM admins WHERE id=? AND role='OPERATOR' AND is_disabled=0").bind(String(b.sourceOperatorId)).first<any>(); if (!op) return json({ error: ERR_OPERATOR_NOT_FOUND }, { status: 400 }); sourceOperatorId = op.id; } const token = randomToken(); const t = now(); const exp = new Date(Date.now() + INVITE_TTL_MS).toISOString(); const id = rid('inv'); await env.DB.prepare('INSERT INTO invite_links(id,token_hash,source_operator_id,created_by_admin_id,expires_at,created_at) VALUES(?,?,?,?,?,?)').bind(id, await inviteTokenHash(env, token), sourceOperatorId, admin.id, exp, t).run(); return json({ invite: { id, token, url: `/g/${token}`, expires_at: exp, source_operator_id: sourceOperatorId } }); }
 async function consumeInvite(req: Request, env: Env, token: string) {
   const guest = await currentGuestSession(env, req);
@@ -128,6 +128,21 @@ async function upsertVisitor(env: Env, visitorId?: string, account?: VisitorAcco
 async function latestSession(env: Env, userId: string) { return await env.DB.prepare("SELECT * FROM sessions WHERE user_id=? AND status!='ARCHIVED' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1").bind(userId).first<any>(); }
 async function getOrCreateSession(env: Env, userId: string) { let session = await latestSession(env, userId); if (!session || session.status === 'CLOSED') { const t = now(); const sid = rid('sess'); await env.DB.prepare('INSERT INTO sessions(id,user_id,status,created_at,updated_at,last_operator_id) VALUES(?,?,?,?,?,NULL)').bind(sid, userId, 'PENDING', t, t).run(); session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sid).first<any>(); } return session; }
 async function getMessages(env: Env, sessionId: string, after?: string | null) { const q = after ? env.DB.prepare('SELECT * FROM messages WHERE session_id=? AND created_at>? ORDER BY created_at').bind(sessionId, after) : env.DB.prepare('SELECT * FROM messages WHERE session_id=? ORDER BY created_at').bind(sessionId); return (await q.all<any>()).results || []; }
+async function markMessagesRead(env: Env, sessionId: string, senderType: 'VISITOR' | 'OPERATOR', requestedMessageIds: string[] = []) {
+  const ids = Array.from(new Set(requestedMessageIds.map((id) => String(id || '').trim()).filter(Boolean))).slice(0, 200);
+  const idClause = ids.length ? ` AND id IN (${ids.map(() => '?').join(',')})` : '';
+  const rows = (await env.DB.prepare(`SELECT id FROM messages WHERE session_id=? AND sender_type=? AND is_read=0 AND status!='recalled'${idClause}`).bind(sessionId, senderType, ...ids).all<any>()).results || [];
+  const readMessageIds = rows.map((row: any) => String(row.id || '')).filter(Boolean);
+  if (!readMessageIds.length) return;
+  const t = now();
+  await env.DB.prepare(`UPDATE messages SET is_read=1,status=CASE WHEN status='sent' THEN 'read' ELSE status END,read_at=COALESCE(read_at,?) WHERE session_id=? AND sender_type=? AND is_read=0 AND status!='recalled'${idClause}`).bind(t, sessionId, senderType, ...ids).run();
+  try {
+    if (senderType === 'OPERATOR') await broadcast(env, `conversation:${sessionId}`, { type: 'messages:read', conversationId: sessionId, messageIds: readMessageIds, readAt: t, senderType });
+    if (senderType === 'VISITOR') await notifyAdmins(env);
+  } catch (e) {
+    console.error('Failed to broadcast read status update', e);
+  }
+}
 async function visitorOwnsSession(env: Env, req: Request, session: any) { return guestOwnsSession(env, req, session); }
 function attachmentKeyFromPath(path?: string | null) { const prefix = '/api/attachments/'; return path?.startsWith(prefix) ? decodeURIComponent(path.slice(prefix.length)) : ''; }
 async function broadcast(env: Env, room: string, payload: unknown) {
@@ -159,7 +174,9 @@ async function api(req: Request, env: Env) {
   if (path === '/api/messages' && req.method === 'POST') return createMessage(req, env);
   if (path === '/api/sessions' && req.method === 'GET') { const admin = await requireAdmin(env, req); return json({ sessions: await listSessions(env, admin, url.searchParams.get('includeDeleted') === '1') }); }
   const sm = path.match(/^\/api\/sessions\/([^/]+)\/messages$/);
-  if (sm) { const session = await getSessionById(env, sm[1]); if (!session || session.deleted_at) return json({ messages: [] }); const admin = await currentAdmin(env, req); if (admin) { if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); await env.DB.prepare("UPDATE messages SET is_read=1,status='read',read_at=COALESCE(read_at,?) WHERE session_id=? AND sender_type='VISITOR'").bind(now(), session.id).run(); } else if (!(await guestOwnsSession(env, req, session))) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); return json({ messages: await getMessages(env, session.id, url.searchParams.get('after')) }); }
+  if (sm) { const session = await getSessionById(env, sm[1]); if (!session || session.deleted_at) return json({ messages: [] }); const admin = await currentAdmin(env, req); if (admin) { if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); await markMessagesRead(env, session.id, 'VISITOR'); } else if (await guestOwnsSession(env, req, session)) await markMessagesRead(env, session.id, 'OPERATOR'); else return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); return json({ messages: await getMessages(env, session.id, url.searchParams.get('after')) }); }
+  const cr = path.match(/^\/api\/sessions\/([^/]+)\/customer-read$/);
+  if (cr && req.method === 'POST') { const session = await getSessionById(env, cr[1]); if (!session || session.deleted_at) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); if (!(await guestOwnsSession(env, req, session))) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); const b: any = await readJson(req); const ids = Array.isArray(b.messageIds) ? b.messageIds : []; await markMessagesRead(env, session.id, 'OPERATOR', ids); return json({ ok: true }); }
   const sa = path.match(/^\/api\/sessions\/([^/]+)\/(assign|close|delete|restore)$/);
   if (sa && req.method === 'POST') return sessionAction(req, env, sa[1], sa[2]);
   const rec = path.match(/^\/api\/messages\/([^/]+)\/recall$/);

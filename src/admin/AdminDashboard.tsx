@@ -34,6 +34,20 @@ const chatMetric = (name: string, started: number, extra?: Record<string, number
   try { console.debug('[chat_metric]', name, Math.round(performance.now() - started), extra || {}); } catch {}
 };
 const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
+const fallbackCustomerName = (session?: Session | null) => {
+  const source = String(session?.visitor_key || session?.user_id || session?.id || '');
+  if (!source) return '客户';
+  let hash = 0;
+  for (const ch of source) hash = (hash * 31 + ch.charCodeAt(0)) % 10000;
+  return `客户${String(hash || 1).padStart(4, '0')}`;
+};
+const applyReadReceipt = (messages: Message[], messageIds: string[] = [], readAt?: string) => {
+  if (!messageIds.length) return messages;
+  const ids = new Set(messageIds);
+  return messages.map((message) => ids.has(message.id)
+    ? { ...message, is_read: 1, status: message.status === 'sent' ? 'read' : message.status, read_at: message.read_at || readAt || new Date().toISOString() }
+    : message);
+};
 
 /* ========== ADMIN DASHBOARD ========== */
 export default function AdminDashboard() {
@@ -69,6 +83,10 @@ export default function AdminDashboard() {
   const [convOnline, setConvOnline] = useState(false);
   const isSuper = admin?.role === 'SUPER_ADMIN';
   const currentSessionEnded = sessionEnded(cur);
+  const customerName = useCallback((session?: Session | null) => fallbackCustomerName(session), []);
+  const customerAvatar = useCallback((session?: Session | null) => customerName(session).replace(/\D/g, '').slice(-1) || '客', [customerName]);
+  const currentCustomerName = customerName(cur);
+  const currentCustomerAvatar = customerAvatar(cur);
   const sendingRef = useRef(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -104,7 +122,7 @@ export default function AdminDashboard() {
 
   const fetchMsgs = async (sid: string) => {
     setLoadingMsgs(sid);
-    try { const res: any = await apiFetch(`/api/sessions/${sid}/messages`); setSelectedMsgs(mergeMessages([], res.messages || [])); } catch {}
+    try { const res: any = await apiFetch(`/api/sessions/${sid}/messages`); setSelectedMsgs(mergeMessages([], res.messages || [])); setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s)); } catch {}
     setLoadingMsgs(null);
   };
 
@@ -116,6 +134,7 @@ export default function AdminDashboard() {
     const count = Array.isArray(res?.messages) ? res.messages.length : 0;
     chatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
     if (count) setSelectedMsgs(prev => mergeMessages(prev, res.messages));
+    setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s));
     return count;
   }, []);
 
@@ -140,6 +159,7 @@ export default function AdminDashboard() {
         const d = JSON.parse(e.data);
         if (isMessageCreatedEvent(d.type)) { setSelectedMsgs(prev => mergeMessage(prev, d.message)); if (d.session) { setCur((c: any) => c?.id === d.session.id ? d.session : c); } }
         else if (d.type === 'message:updated') { setSelectedMsgs(prev => mergeMessage(prev, d.message)); }
+        else if (d.type === 'messages:read') { setSelectedMsgs(prev => applyReadReceipt(prev, d.messageIds, d.readAt)); }
         else if (d.type === 'message:deleted') { setSelectedMsgs(prev => prev.map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
         else if (d.type === 'session:updated') { setCur((c: any) => c?.id === d.session?.id ? d.session : c); }
       } catch {}
@@ -281,6 +301,26 @@ export default function AdminDashboard() {
     return items;
   };
 
+  const renderSelectedMessage = (m: Message) => {
+    const own = isOwnMsg(m);
+    return (
+      <div key={m.id} className={`msg-row${own ? ' own' : ''}`}>
+        {!own && <div className="message-avatar customer-avatar" aria-hidden="true">{currentCustomerAvatar}</div>}
+        {m.deleted_at ? (
+          <div className={'msg ' + (own ? 'me' : '')}><span className="recalled">消息已删除</span></div>
+        ) : (
+          <div className={'msg ' + (own ? 'me' : '')}
+            onContextMenu={(e) => handleContextMenu(e, m)}
+            onTouchStart={handleLongPress(m)}>
+            {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
+            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="聊天图片" loading="lazy" /></a> : <span>{m.content || '[未知消息]'}</span>}
+            <div className="time">{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败' : `${formatTime(m.created_at)} ${own ? (m.is_read ? '客户已读' : '未读') : ''}`}</div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const assignSession = async (s: Session) => {
     try { await apiFetch(`/api/sessions/${s.id}/assign`, { method: 'POST' }); } catch {}
   };
@@ -403,8 +443,8 @@ export default function AdminDashboard() {
           <div className="folder-body">
             {sessions.slice(0, isNarrow ? sessions.length : 30).map(s => (
               <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
-                <div className="avatar-dot">{s.display_name?.[0] || '访'}</div>
-                <div className="session-main"><b>{s.display_name || '访客'}</b><p>{s.status}</p></div>
+                <div className="avatar-dot">{customerAvatar(s)}</div>
+                <div className="session-main"><b>{customerName(s)}</b><p>{s.status}</p></div>
                 <div className="session-meta">
                   <small>{formatTime(s.updated_at)}</small>
                   {s.unread_count > 0 && <span className="badge">{s.unread_count}</span>}
@@ -420,7 +460,7 @@ export default function AdminDashboard() {
       {isNarrow && (
         <div className="mobile-admin-topbar">
           <button type="button" className="mobile-dir-btn" onClick={() => setDirOpen(true)}>☰ 目录</button>
-          <div className="mobile-topbar-title">{view === 'sessions' ? (cur ? cur.display_name || '访客' : '会话') : view === 'operators' ? '客服管理' : '内部消息'}</div>
+          <div className="mobile-topbar-title">{view === 'sessions' ? (cur ? currentCustomerName : '会话') : view === 'operators' ? '客服管理' : '内部消息'}</div>
           <div className="mobile-topbar-actions">
             <button type="button" onClick={() => setMobileInviteOpen(true)}>{'\u9080\u8bf7'}</button>
             {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="primary-action" onClick={() => assignSession(cur)}>接管</button>}
@@ -463,8 +503,8 @@ export default function AdminDashboard() {
                 <div className="session-list-area">
                   {sessions.map(s => (
                     <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
-                      <div className="avatar-dot">{s.display_name?.[0] || '访'}</div>
-                      <div className="session-main"><b>{s.display_name || '访客'}</b><p>{s.status}</p></div>
+                      <div className="avatar-dot">{customerAvatar(s)}</div>
+                      <div className="session-main"><b>{customerName(s)}</b><p>{s.status}</p></div>
                       <div className="session-meta">
                         <small>{formatTime(s.updated_at)}</small>
                         {s.unread_count > 0 && <span className="badge">{s.unread_count}</span>}
@@ -480,26 +520,14 @@ export default function AdminDashboard() {
               <div className="mobile-chat-workspace">
                 <section className="chat-panel">
                   <div className="session-action-bar">
-                    <div><b>{cur.display_name || '访客'}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
+                    <div><b>{currentCustomerName}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
                     {!currentSessionEnded ? <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
                   </div>
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
                     {loadingMsgs === cur.id && <div className="empty-state"><span className="spinner" /> 加载中</div>}
                     {selectedMsgs.length === 0 && !loadingMsgs && <div className="empty-state">暂无消息</div>}
-                    {selectedMsgs.map(m => (
-                      m.deleted_at ? (
-                        <div key={m.id} className={'msg ' + (isOwnMsg(m) ? 'me' : '')}><span className="recalled">消息已删除</span></div>
-                      ) : (
-                        <div key={m.id} className={'msg ' + (isOwnMsg(m) ? 'me' : '')}
-                          onContextMenu={(e) => handleContextMenu(e, m)}
-                          onTouchStart={handleLongPress(m)}>
-                          {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
-                          {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <img src={m.image_path} alt="聊天图片" loading="lazy" /> : <span>{m.content || '[未知消息]'}</span>}
-                          <div className="time">{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败' : `${formatTime(m.created_at)} ${m.sender_type === 'OPERATOR' ? (m.is_read ? '已读' : '未读') : ''}`}</div>
-                        </div>
-                      )
-                    ))}
+                    {selectedMsgs.map(renderSelectedMessage)}
                   </div>
                   {currentSessionEnded ? <div className="session-ended-state">会话已结束</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
@@ -563,7 +591,7 @@ export default function AdminDashboard() {
               <div className="workspace">
                 <section className="chat-panel">
                   {cur ? <div className="session-action-bar">
-                    <div><b>{cur.display_name || '访客'}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
+                    <div><b>{currentCustomerName}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
                     {!currentSessionEnded ? <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
                   </div> : null}
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
@@ -571,19 +599,7 @@ export default function AdminDashboard() {
                     {loadingMsgs === cur?.id ? <div className="empty-state"><span className="spinner" /> 正在加载消息</div> : null}
                     {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <div className="empty-state">暂无消息</div> : null}
                     {!cur ? <div className="empty-state">请选择一个会话</div> : null}
-                    {selectedMsgs.map(m => (
-                      m.deleted_at ? (
-                        <div key={m.id} className={'msg ' + (isOwnMsg(m) ? 'me' : '')}><span className="recalled">消息已删除</span></div>
-                      ) : (
-                        <div key={m.id} className={'msg ' + (isOwnMsg(m) ? 'me' : '')}
-                          onContextMenu={(e) => handleContextMenu(e, m)}
-                          onTouchStart={handleLongPress(m)}>
-                          {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
-                          {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <img src={m.image_path} alt="聊天图片" loading="lazy" /> : <span>{m.content || '[未知消息]'}</span>}
-                          <div className="time">{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败' : `${formatTime(m.created_at)} ${m.sender_type === 'OPERATOR' ? (m.is_read ? '已读' : '未读') : ''}`}</div>
-                        </div>
-                      )
-                    ))}
+                    {selectedMsgs.map(renderSelectedMessage)}
                   </div>
                   {cur && !currentSessionEnded ? (
                     <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>

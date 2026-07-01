@@ -11,6 +11,7 @@ const INVITE_NOT_FOUND = 'invite-not-found';
 const SERVER_ERROR_TEXT = '\u670d\u52a1\u5668\u9519\u8bef\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5';
 const SESSION_ENDED_ERROR = '\u4f1a\u8bdd\u5df2\u7ed3\u675f';
 const inviteConsumeRequests = new Map<string, Promise<any>>();
+const INIT_RETRY_DELAYS = [800, 1600, 3000];
 const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
 const localMessageId = (clientMessageId: string) => `local-${clientMessageId}`;
 const isMessageCreatedEvent = (type?: string) => type === 'message:new' || type === 'message_created';
@@ -31,11 +32,31 @@ const lastServerMessageTime = (messages: Message[]) => messages.reduce((latest, 
   if (!msg.created_at || String(msg.id || '').startsWith('local-') || msg.status === 'sending' || msg.status === 'failed') return latest;
   return !latest || msg.created_at > latest ? msg.created_at : latest;
 }, '');
+const isUnreadOperatorMessage = (msg: Message, sessionId?: string) =>
+    msg?.id &&
+    !String(msg.id).startsWith('local-') &&
+    (!sessionId || msg.session_id === sessionId) &&
+    msg.sender_type === 'OPERATOR' &&
+    !msg.is_read &&
+    msg.status !== 'sending' &&
+    msg.status !== 'failed' &&
+    msg.status !== 'recalled' &&
+    !msg.deleted_at;
+const unreadOperatorMessageIds = (messages: Message[], sessionId?: string) => messages
+  .filter((msg) => isUnreadOperatorMessage(msg, sessionId))
+  .map((msg) => String(msg.id));
+const markMessagesCustomerRead = (messages: Message[], messageIds: string[], readAt = new Date().toISOString()) => {
+  const idSet = new Set(messageIds.map((id) => String(id)));
+  return messages.map((msg) => idSet.has(String(msg.id))
+    ? { ...msg, is_read: 1, status: msg.status === 'sent' ? 'read' : msg.status, read_at: msg.read_at || readAt }
+    : msg);
+};
 const fallbackDelay = (misses: number) => misses < 3 ? 2000 : misses < 12 ? 5000 : 10000;
 const chatMetric = (name: string, started: number, extra?: Record<string, number | string>) => {
   try { console.debug('[chat_metric]', name, Math.round(performance.now() - started), extra || {}); } catch {}
 };
 const isNotFoundStatus = (status?: number) => status === 401 || status === 403 || status === 404 || status === 410;
+const isInviteGoneStatus = (status?: number) => status === 404 || status === 410;
 const isSessionGoneError = (error: any) => isNotFoundStatus(error?.status) || (error?.status === 400 && error?.data?.error === SESSION_ENDED_ERROR);
 const sessionUnavailable = (session?: any) => !session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED';
 
@@ -75,6 +96,11 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<any>(null);
   const fallbackTimer = useRef<any>(null);
+  const initRetryTimer = useRef<any>(null);
+  const customerReadTimer = useRef<any>(null);
+  const customerReadInFlight = useRef(false);
+  const customerReadSchedulerRef = useRef<(delay?: number) => void>(() => {});
+  const initRetryCountRef = useRef(0);
 
   useEffect(() => { const on = () => setIsMobile(window.innerWidth < 768); addEventListener('resize', on); return () => removeEventListener('resize', on); }, []);
   useEffect(() => { const tou = () => setIsMobile(true); addEventListener('touchstart', tou, { once: true }); return () => removeEventListener('touchstart', tou); }, []);
@@ -92,12 +118,17 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     setText('');
     setQuote(null);
     localStorage.removeItem('chat_session_id');
+    clearTimeout(initRetryTimer.current);
     clearTimeout(reconnectTimer.current);
     clearTimeout(fallbackTimer.current);
+    clearTimeout(customerReadTimer.current);
     wsRef.current?.close();
   }, []);
 
   const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); }, []);
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    requestAnimationFrame(() => messagesEnd.current?.scrollIntoView({ behavior, block: 'end' }));
+  }, []);
   const focusMessageInput = useCallback(() => {
     messageInputRef.current?.focus();
     requestAnimationFrame(() => {
@@ -105,6 +136,42 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       setTimeout(() => messageInputRef.current?.focus(), 0);
     });
   }, []);
+  const handleComposerFocus = useCallback(() => {
+    setTimeout(() => scrollToBottom('auto'), 80);
+    setTimeout(() => scrollToBottom('auto'), 260);
+  }, [scrollToBottom]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const updateViewport = () => {
+      const viewport = window.visualViewport;
+      const height = Math.max(320, Math.floor(viewport?.height || window.innerHeight));
+      const offsetTop = Math.max(0, Math.floor(viewport?.offsetTop || 0));
+      const keyboardOffset = Math.max(0, Math.floor(window.innerHeight - height - offsetTop));
+      root.style.setProperty('--app-viewport-height', `${height}px`);
+      root.style.setProperty('--keyboard-bottom-offset', `${keyboardOffset}px`);
+    };
+    const delayedScroll = () => {
+      updateViewport();
+      setTimeout(() => scrollToBottom('auto'), 80);
+      setTimeout(() => scrollToBottom('auto'), 260);
+    };
+    updateViewport();
+    window.visualViewport?.addEventListener('resize', delayedScroll);
+    window.visualViewport?.addEventListener('scroll', delayedScroll);
+    addEventListener('resize', delayedScroll);
+    addEventListener('orientationchange', delayedScroll);
+    messageInputRef.current?.addEventListener('focus', delayedScroll);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', delayedScroll);
+      window.visualViewport?.removeEventListener('scroll', delayedScroll);
+      removeEventListener('resize', delayedScroll);
+      removeEventListener('orientationchange', delayedScroll);
+      messageInputRef.current?.removeEventListener('focus', delayedScroll);
+      root.style.removeProperty('--app-viewport-height');
+      root.style.removeProperty('--keyboard-bottom-offset');
+    };
+  }, [scrollToBottom]);
 
   const connect = useCallback(async () => {
     try {
@@ -121,6 +188,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
         inviteConsumeRequests.set(resolvedInviteToken, request);
       }
       const res: any = await request;
+      if (!res.session) throw new Error(SERVER_ERROR_TEXT);
       if (sessionUnavailable(res.session)) {
         showNotFound();
         return null;
@@ -130,22 +198,53 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       if (res.messages) setMessages(mergeMessages([], res.messages));
       sessionClosedRef.current = false;
       setSessionClosed(false);
+      initRetryCountRef.current = 0;
+      clearTimeout(initRetryTimer.current);
       setAccessError(''); setOnline(false); setConnecting(false);
       return res.session?.id;
     } catch (e: any) {
-      if (!isNotFoundStatus(e?.status)) inviteConsumeRequests.delete(resolvedInviteToken);
-      if (isNotFoundStatus(e?.status)) {
+      const retryable = !isInviteGoneStatus(e?.status);
+      if (retryable) {
+        inviteConsumeRequests.delete(resolvedInviteToken);
+        consumeStartedRef.current = false;
+      }
+      if (isInviteGoneStatus(e?.status)) {
         showNotFound();
         return null;
       }
-      setAccessError(e?.message || SERVER_ERROR_TEXT);
+      const retryIndex = initRetryCountRef.current;
+      if (retryIndex < INIT_RETRY_DELAYS.length) {
+        initRetryCountRef.current += 1;
+        setAccessError('连接失败，正在重试...');
+        setConnecting(false);
+        setOnline(false);
+        clearTimeout(initRetryTimer.current);
+        initRetryTimer.current = setTimeout(() => {
+          setConnecting(true);
+          connect();
+        }, INIT_RETRY_DELAYS[retryIndex]);
+        return null;
+      }
+      setAccessError(e?.message || '连接失败，请检查网络后点击重试');
       setConnecting(false);
       setOnline(false);
       return null;
     }
   }, [visitorId, resolvedInviteToken, sessionId, showNotFound]);
 
-  useEffect(() => { connect(); }, [connect]);
+  useEffect(() => { connect(); return () => clearTimeout(initRetryTimer.current); }, [connect]);
+
+  const retryConnect = useCallback(() => {
+    if (accessError === INVITE_NOT_FOUND || sessionClosed) return;
+    clearTimeout(initRetryTimer.current);
+    initRetryCountRef.current = 0;
+    consumeStartedRef.current = false;
+    inviteConsumeRequests.delete(resolvedInviteToken);
+    setAccessError('');
+    setNetworkBanner(false);
+    setConnecting(true);
+    connect();
+  }, [accessError, connect, resolvedInviteToken, sessionClosed]);
 
   const wsConnect = useCallback((sid: string) => {
     if (!sid) return;
@@ -157,9 +256,18 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
-        if (isMessageCreatedEvent(d.type)) { setMessages(prev => mergeMessage(prev, d.message)); }
-        else if (d.type === 'message:updated') { setMessages(prev => mergeMessage(prev, d.message)); }
-        else if (d.type === 'message:deleted') { setMessages(prev => prev.map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
+        if (isMessageCreatedEvent(d.type)) {
+          setMessages(prev => {
+            const next = mergeMessage(prev, d.message);
+            messagesRef.current = next;
+            return next;
+          });
+          if (document.visibilityState === 'visible' && isUnreadOperatorMessage(d.message, sid)) {
+            setTimeout(() => customerReadSchedulerRef.current(180), 0);
+          }
+        }
+        else if (d.type === 'message:updated') { setMessages(prev => { const next = mergeMessage(prev, d.message); messagesRef.current = next; return next; }); }
+        else if (d.type === 'message:deleted') { setMessages(prev => { const next = prev.map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m); messagesRef.current = next; return next; }); }
         else if (d.type === 'session:updated' && sessionUnavailable(d.session)) { showNotFound(); ws.close(); }
       } catch {}
     };
@@ -176,9 +284,43 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     const res: any = await apiFetch(url, { retryGet: false });
     const count = Array.isArray(res?.messages) ? res.messages.length : 0;
     chatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
-    if (count) setMessages(prev => mergeMessages(prev, res.messages));
+    if (count) {
+      setMessages(prev => {
+        const next = mergeMessages(prev, res.messages);
+        messagesRef.current = next;
+        return next;
+      });
+      if (document.visibilityState === 'visible' && unreadOperatorMessageIds(res.messages, sid).length) {
+        setTimeout(() => customerReadSchedulerRef.current(180), 0);
+      }
+    }
     return count;
   }, []);
+
+  const markLoadedOperatorMessagesRead = useCallback(async () => {
+    if (!sessionId || accessError || sessionClosed || document.visibilityState !== 'visible' || customerReadInFlight.current) return;
+    const ids = unreadOperatorMessageIds(messagesRef.current, sessionId);
+    if (!ids.length) return;
+    customerReadInFlight.current = true;
+    try {
+      await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/customer-read`, { method: 'POST', body: JSON.stringify({ messageIds: ids }) });
+      setMessages(prev => {
+        const next = markMessagesCustomerRead(prev, ids);
+        messagesRef.current = next;
+        return next;
+      });
+    } catch (e: any) {
+      if (isSessionGoneError(e)) showNotFound();
+    } finally {
+      customerReadInFlight.current = false;
+    }
+  }, [accessError, sessionClosed, sessionId, showNotFound]);
+
+  const scheduleCustomerRead = useCallback((delay = 250) => {
+    clearTimeout(customerReadTimer.current);
+    customerReadTimer.current = setTimeout(() => { markLoadedOperatorMessagesRead(); }, delay);
+  }, [markLoadedOperatorMessagesRead]);
+  customerReadSchedulerRef.current = scheduleCustomerRead;
 
   const scheduleFallback = useCallback((sid: string, delay = 0) => {
     clearTimeout(fallbackTimer.current);
@@ -205,16 +347,40 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
 
   useEffect(() => {
     const syncIfVisible = () => {
-      if (document.visibilityState === 'hidden' || !sessionId || online || sessionClosed || accessError) return;
+      if (document.visibilityState === 'hidden') return;
+      setTimeout(() => scrollToBottom('auto'), 120);
+      scheduleCustomerRead(120);
+      if (!sessionId || online || sessionClosed || accessError) return;
       syncMessages(sessionId).catch((e: any) => { if (isSessionGoneError(e)) showNotFound(); });
     };
     addEventListener('focus', syncIfVisible);
     document.addEventListener('visibilitychange', syncIfVisible);
     return () => { removeEventListener('focus', syncIfVisible); document.removeEventListener('visibilitychange', syncIfVisible); };
-  }, [accessError, online, sessionClosed, sessionId, showNotFound, syncMessages]);
+  }, [accessError, online, scheduleCustomerRead, scrollToBottom, sessionClosed, sessionId, showNotFound, syncMessages]);
+
+  useEffect(() => {
+    if (!unreadOperatorMessageIds(messages, sessionId).length) return;
+    scheduleCustomerRead();
+    return () => clearTimeout(customerReadTimer.current);
+  }, [messages, scheduleCustomerRead, sessionId]);
+
+  useEffect(() => {
+    const retryIfVisible = () => {
+      if (document.visibilityState === 'hidden' || !accessError || accessError === INVITE_NOT_FOUND || sessionClosed) return;
+      retryConnect();
+    };
+    addEventListener('online', retryIfVisible);
+    addEventListener('focus', retryIfVisible);
+    document.addEventListener('visibilitychange', retryIfVisible);
+    return () => {
+      removeEventListener('online', retryIfVisible);
+      removeEventListener('focus', retryIfVisible);
+      document.removeEventListener('visibilitychange', retryIfVisible);
+    };
+  }, [accessError, retryConnect, sessionClosed]);
 
   useEffect(() => { const f = (e: StorageEvent) => { if (e.key === 'chat_visitor_id' && e.newValue && e.newValue !== visitorId) window.location.reload(); }; addEventListener('storage', f); return () => removeEventListener('storage', f); }, [visitorId]);
-  useEffect(() => { messagesEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { scrollToBottom('smooth'); }, [messages, scrollToBottom]);
   useEffect(() => { if (networkBanner) { const t = setTimeout(() => setNetworkBanner(false), 10000); return () => clearTimeout(t); } }, [networkBanner]);
 
   const send = async () => {
@@ -298,10 +464,29 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     return items;
   };
 
+  const renderVisitorMessage = (m: Message) => {
+    const own = isOwn(m);
+    return (
+      <div key={m.id} className={`msg-row${own ? ' own' : ''}`}>
+        {!own && <div className="message-avatar agent-avatar" aria-hidden="true">客</div>}
+        {m.deleted_at ? (
+          <div className={'msg ' + (own ? 'user' : 'agent')}><span className="recalled">消息已删除</span></div>
+        ) : (
+          <div className={'msg ' + (own ? 'user' : 'agent')} onContextMenu={(e) => handleContextMenu(e, m)}
+            onTouchStart={isMobile && !m.deleted_at ? handleLongPress(m) : undefined}>
+            {m.quote_message_id && <div className="quote-box">{[messages.find(x => x.id === m.quote_message_id)].map(q => q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : q.content || '[未知消息]') : '引用消息不可用').join('')}</div>}
+            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="图片" loading="lazy" /></a> : <span>{m.content || '[未知消息]'}</span>}
+            {(m.status === 'sending' || m.status === 'failed') && <div className="time">{m.status === 'sending' ? '发送中...' : '发送失败'}</div>}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (accessError === INVITE_NOT_FOUND || sessionClosed) return <LinkExpired />;
-  // Do not render loading/spinner before token/session validation
-  if (connecting) return null;
-  if (accessError) return <div className="chat-gate-page">{accessError}</div>;
+  // Keep transient network failures recoverable instead of showing a blank page.
+  if (connecting) return <div className="chat-gate-page"><div className="chat-gate-card"><span className="spinner" /> <p>正在连接...</p></div></div>;
+  if (accessError) return <div className="chat-gate-page"><div className="chat-gate-card"><p>{accessError}</p><button type="button" onClick={retryConnect}>点击重试</button></div></div>;
 
   return (
     <div className={`chat-page${!isMobile ? ' is-desktop' : ''}`}>
@@ -314,25 +499,14 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       {toast && <div className="network-banner">{toast} <button onClick={() => setToast('')}>关闭</button></div>}
       <div className="msgs">
         {messages.length === 0 && <div className="empty-state">你好！有什么可以帮助你的？</div>}
-        {messages.map(m => (
-          m.deleted_at ? (
-            <div key={m.id} className={'msg ' + (isOwn(m) ? 'user' : 'agent')}><span className="recalled">消息已删除</span></div>
-          ) : (
-            <div key={m.id} className={'msg ' + (isOwn(m) ? 'user' : 'agent')} onContextMenu={(e) => handleContextMenu(e, m)}
-              onTouchStart={isMobile && !m.deleted_at ? handleLongPress(m) : undefined}>
-              {m.quote_message_id && <div className="quote-box">{[messages.find(x => x.id === m.quote_message_id)].map(q => q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : q.content || '[未知消息]') : '引用消息不可用').join('')}</div>}
-              {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <img src={m.image_path} alt="图片" loading="lazy" /> : <span>{m.content || '[未知消息]'}</span>}
-              {(m.status === 'sending' || m.status === 'failed') && <div className="time">{m.status === 'sending' ? '发送中...' : '发送失败'}</div>}
-            </div>
-          )
-        ))}
+        {messages.map(renderVisitorMessage)}
         {sending === 'image' && <div className="msg user sending-msg"><span className="spinner" /> 发送图片中...</div>}
         <div ref={messagesEnd} />
       </div>
       <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
         {quote && <div className="quote-compose" style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 10, padding: 8, color: 'var(--muted)', fontSize: 12 }}>{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)} <button type="button" onClick={() => setQuote(null)} style={{ minHeight: 'auto', padding: '3px 8px', borderRadius: 8, fontSize: 12, background: '#64748b' }}>取消</button></div>}
         <label className="upload-btn"><input ref={uploadRef} type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sessionClosed || !!accessError || !sessionId || sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />📎</label>
-        <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId} placeholder="输入消息" rows={1} />
+        <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onFocus={handleComposerFocus} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId} placeholder="输入消息" rows={1} />
         <button type="submit" className="send-btn" onMouseDown={e => e.preventDefault()} disabled={sessionClosed || !!accessError || !sessionId || (!text.trim() && !quote)}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg></button>
       </form>
 
