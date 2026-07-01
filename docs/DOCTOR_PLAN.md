@@ -4,6 +4,12 @@
 not print secret values, cookies, administrator passwords, Cloudflare tokens, or
 chat message bodies.
 
+## MVP Implementation Status
+
+The current MVP implements local repository checks in `scripts/doctor.mjs`.
+It does not run online smoke tests yet. HTTPS/HSTS checks, invite 404/410
+checks, and WebSocket 101 checks are planned for a later iteration.
+
 ## A. Local Repository Checks
 
 1. `git.status.clean`
