@@ -71,6 +71,7 @@ export default function AdminDashboard() {
   const currentSessionEnded = sessionEnded(cur);
   const sendingRef = useRef(false);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedMsgsRef = useRef<Message[]>([]);
   const convOnlineRef = useRef(false);
   const messageFallbackMissesRef = useRef(0);
@@ -79,6 +80,13 @@ export default function AdminDashboard() {
   const messageFallbackTimer = useRef<any>(null);
 
   const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); }, []);
+  const focusMessageInput = useCallback(() => {
+    messageInputRef.current?.focus();
+    requestAnimationFrame(() => {
+      messageInputRef.current?.focus();
+      setTimeout(() => messageInputRef.current?.focus(), 0);
+    });
+  }, []);
 
   useEffect(() => { const on = () => setIsNarrow(window.innerWidth <= 820); addEventListener('resize', on); return () => removeEventListener('resize', on); }, []);
   useEffect(() => { selectedMsgsRef.current = selectedMsgs; }, [selectedMsgs]);
@@ -210,6 +218,7 @@ export default function AdminDashboard() {
     setSelectedMsgs(prev => mergeMessage(prev, optimisticMessage));
     setText('');
     setQuote(null);
+    focusMessageInput();
     try {
       const postStarted = performance.now();
       const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: cur.id, clientMessageId, content, senderType: 'OPERATOR', quoteMessageId: currentQuote?.id || null }) });
@@ -495,8 +504,8 @@ export default function AdminDashboard() {
                   {currentSessionEnded ? <div className="session-ended-state">会话已结束</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
                     <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
-                    <textarea name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
-                    <button type="submit" disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
+                    <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
+                    <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                   </form>}
                 </section>
               </div>
@@ -580,8 +589,8 @@ export default function AdminDashboard() {
                     <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                       {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button type="button" onClick={() => setQuote(null)}>取消</button></div> : null}
                       <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
-                      <textarea name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
-                      <button type="submit" disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
+                      <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
+                      <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                     </form>
                   ) : (
                     <div className="empty-state">{cur ? '会话已结束' : '请选择一个访客会话'}</div>

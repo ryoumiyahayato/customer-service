@@ -67,6 +67,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const consumeStartedRef = useRef(false);
   const sessionClosedRef = useRef(false);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<Message[]>([]);
   const onlineRef = useRef(false);
@@ -97,6 +98,13 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   }, []);
 
   const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); }, []);
+  const focusMessageInput = useCallback(() => {
+    messageInputRef.current?.focus();
+    requestAnimationFrame(() => {
+      messageInputRef.current?.focus();
+      setTimeout(() => messageInputRef.current?.focus(), 0);
+    });
+  }, []);
 
   const connect = useCallback(async () => {
     try {
@@ -234,6 +242,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     setMessages(prev => mergeMessage(prev, optimisticMessage));
     setText('');
     setQuote(null);
+    focusMessageInput();
     try {
       const postStarted = performance.now();
       const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content, senderType: 'VISITOR', quoteMessageId: currentQuote?.id || null }) });
@@ -323,8 +332,8 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
         {quote && <div className="quote-compose" style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 10, padding: 8, color: 'var(--muted)', fontSize: 12 }}>{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)} <button type="button" onClick={() => setQuote(null)} style={{ minHeight: 'auto', padding: '3px 8px', borderRadius: 8, fontSize: 12, background: '#64748b' }}>取消</button></div>}
         <label className="upload-btn"><input ref={uploadRef} type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sessionClosed || !!accessError || !sessionId || sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />📎</label>
-        <textarea name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId} placeholder="输入消息" rows={1} />
-        <button type="submit" className="send-btn" disabled={sessionClosed || !!accessError || !sessionId || (!text.trim() && !quote)}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg></button>
+        <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId} placeholder="输入消息" rows={1} />
+        <button type="submit" className="send-btn" onMouseDown={e => e.preventDefault()} disabled={sessionClosed || !!accessError || !sessionId || (!text.trim() && !quote)}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg></button>
       </form>
 
       {/* Context menu */}
