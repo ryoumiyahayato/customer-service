@@ -101,6 +101,14 @@
 .admin{display:grid;grid-template-columns:280px minmax(0,1fr);height:100dvh;min-height:0;overflow:hidden;background:var(--bg)}
 .admin-global-toast{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:220;display:flex;align-items:center;gap:10px;max-width:min(520px,calc(100vw - 24px));padding:10px 12px;border-radius:12px;background:#0f766e;color:#fff;box-shadow:0 14px 40px var(--shadow);font-size:13px}
 .admin-global-toast button{min-height:26px;padding:2px 8px;border-radius:8px;background:#ffffff22;color:#fff}
+.modal-backdrop{position:fixed;inset:0;z-index:240;display:grid;place-items:center;background:rgba(15,23,42,.52);padding:18px}
+.danger-modal{width:min(460px,100%);background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;box-shadow:0 20px 60px var(--shadow);padding:18px;display:grid;gap:12px}
+.danger-modal h3{margin:0;font-size:18px}
+.danger-modal p{margin:0;color:var(--muted);font-size:13px;line-height:1.5}
+.danger-modal input{width:100%;box-sizing:border-box;border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:10px;min-height:42px;padding:10px 12px}
+.clear-history-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.clear-history-counts span{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:9px;text-align:center;font-size:12px}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px}
 .admin .side{height:calc(100dvh - 24px);margin:12px;border-radius:18px;min-height:0;overflow-y:auto;overscroll-behavior:contain;background:var(--side);color:#fff;padding:18px}
 .admin .desktop-side{display:flex;flex-direction:column}
 .brand{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px}

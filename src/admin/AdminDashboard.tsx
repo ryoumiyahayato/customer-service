@@ -90,6 +90,9 @@ export default function AdminDashboard() {
   const [logoutLoading, setLogoutLoading] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null);
+  const [clearHistoryPlan, setClearHistoryPlan] = useState<any>(null);
+  const [clearHistoryConfirm, setClearHistoryConfirm] = useState('');
+  const [clearHistoryLoading, setClearHistoryLoading] = useState(false);
   const [convOnline, setConvOnline] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
   const [remarkSaving, setRemarkSaving] = useState(false);
@@ -459,8 +462,62 @@ export default function AdminDashboard() {
     }
   };
 
+  const canClearHistorySession = (session?: Session | null) => Boolean(isSuper && session && (session.deleted_at || isArchivedSession(session) || session.status === 'CLOSED'));
+
+  const startClearHistory = async (session: Session) => {
+    if (!canClearHistorySession(session) || clearHistoryLoading) return;
+    setClearHistoryLoading(true);
+    try {
+      const res: any = await apiFetch(`/api/sessions/${session.id}/clear-history/dry-run`, { method: 'POST' });
+      setClearHistoryPlan({ session, counts: res.counts || { messages: 0, attachments: 0, r2Objects: 0 } });
+      setClearHistoryConfirm('');
+    } catch (e: any) {
+      showToast(e?.message || '清空历史预检查失败');
+    } finally {
+      setClearHistoryLoading(false);
+    }
+  };
+
+  const executeClearHistory = async () => {
+    if (!clearHistoryPlan || clearHistoryConfirm !== 'CLEAR_HISTORY' || clearHistoryLoading) return;
+    const sessionId = clearHistoryPlan.session.id;
+    setClearHistoryLoading(true);
+    try {
+      const res: any = await apiFetch(`/api/sessions/${sessionId}/clear-history`, { method: 'POST', body: JSON.stringify({ confirm: 'CLEAR_HISTORY' }) });
+      await fetchSessions();
+      if (cur?.id === sessionId) await fetchMsgs(sessionId);
+      setClearHistoryPlan(null);
+      setClearHistoryConfirm('');
+      const failed = Number(res?.failed?.r2Objects || 0);
+      showToast(failed ? `历史已部分清空，${failed} 个附件清理失败，可重试` : '历史已清空');
+    } catch (e: any) {
+      showToast(e?.message || '清空历史失败');
+    } finally {
+      setClearHistoryLoading(false);
+    }
+  };
+
+  const renderClearHistoryButton = (session?: Session | null) => {
+    if (!canClearHistorySession(session)) return null;
+    return <button type="button" className="danger session-action-btn" onClick={() => startClearHistory(session)} disabled={clearHistoryLoading}>清空历史</button>;
+  };
+
   const renderSessionLifecycleActions = (session?: Session | null) => {
     if (!session) return null;
+    if (session.deleted_at) return <>
+      <button type="button" className="secondary session-action-btn" onClick={() => restoreDeletedSession(session)} disabled={sessionActionLoading === `restore:${session.id}`}>{sessionActionLoading === `restore:${session.id}` ? '恢复中...' : '恢复'}</button>
+      {renderClearHistoryButton(session)}
+    </>;
+    if (isArchivedSession(session)) return <>
+      <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
+      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      {renderClearHistoryButton(session)}
+    </>;
+    if (session.status === 'CLOSED') return <>
+      <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>
+      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      {renderClearHistoryButton(session)}
+    </>;
     if (session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => restoreDeletedSession(session)} disabled={sessionActionLoading === `restore:${session.id}`}>{sessionActionLoading === `restore:${session.id}` ? '恢复中...' : '恢复'}</button>;
     if (isArchivedSession(session)) return <>
       <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
@@ -588,6 +645,22 @@ export default function AdminDashboard() {
   return (
     <div className={`admin${isNarrow ? ' is-narrow' : ''}`}>
       {toast && <div className="admin-global-toast">{toast}<button type="button" onClick={() => setToast('')}>×</button></div>}
+      {clearHistoryPlan && <div className="modal-backdrop">
+        <div className="danger-modal">
+          <h3>清空历史</h3>
+          <p>此操作会删除当前会话的客户聊天历史和附件记录，并删除对应文件。会话本身、邀请、客户资料和备注会保留。</p>
+          <div className="clear-history-counts">
+            <span>消息 <b>{clearHistoryPlan.counts.messages}</b> 条</span>
+            <span>附件 <b>{clearHistoryPlan.counts.attachments}</b> 个</span>
+            <span>文件 <b>{clearHistoryPlan.counts.r2Objects}</b> 个</span>
+          </div>
+          <input value={clearHistoryConfirm} onChange={e => setClearHistoryConfirm(e.target.value)} placeholder="输入 CLEAR_HISTORY 确认" autoComplete="off" />
+          <div className="modal-actions">
+            <button type="button" className="secondary" onClick={() => { setClearHistoryPlan(null); setClearHistoryConfirm(''); }} disabled={clearHistoryLoading}>取消</button>
+            <button type="button" className="danger" onClick={executeClearHistory} disabled={clearHistoryLoading || clearHistoryConfirm !== 'CLEAR_HISTORY'}>{clearHistoryLoading ? '清空中...' : '确认清空'}</button>
+          </div>
+        </div>
+      </div>}
       {/* Desktop sidebar */}
       <aside className="side desktop-side">
         <div className="brand">
@@ -704,7 +777,7 @@ export default function AdminDashboard() {
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
                     {loadingMsgs === cur.id && <div className="empty-state"><span className="spinner" /> 加载中</div>}
-                    {selectedMsgs.length === 0 && !loadingMsgs && <div className="empty-state">暂无消息</div>}
+                    {selectedMsgs.length === 0 && !loadingMsgs && <div className="empty-state">{currentSessionEnded ? '历史已清空' : '暂无消息'}</div>}
                     {selectedMsgs.map(renderSelectedMessage)}
                   </div>
                   {currentSessionEnded ? <div className="session-ended-state">会话已结束</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
@@ -776,7 +849,7 @@ export default function AdminDashboard() {
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
                     {loadingMsgs === cur?.id ? <div className="empty-state"><span className="spinner" /> 正在加载消息</div> : null}
-                    {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <div className="empty-state">暂无消息</div> : null}
+                    {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <div className="empty-state">{currentSessionEnded ? '历史已清空' : '暂无消息'}</div> : null}
                     {!cur ? <div className="empty-state">请选择一个会话</div> : null}
                     {selectedMsgs.map(renderSelectedMessage)}
                   </div>

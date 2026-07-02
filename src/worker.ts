@@ -160,13 +160,105 @@ async function markMessagesRead(env: Env, sessionId: string, senderType: 'VISITO
   }
 }
 async function visitorOwnsSession(env: Env, req: Request, session: any) { return guestOwnsSession(env, req, session); }
-function attachmentKeyFromPath(path?: string | null) { const prefix = '/api/attachments/'; return path?.startsWith(prefix) ? decodeURIComponent(path.slice(prefix.length)) : ''; }
+const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
+function parseAttachmentPath(path?: string | null) {
+  if (typeof path !== 'string' || !path.startsWith(ATTACHMENT_PATH_PREFIX)) return { matched: false, key: '' };
+  const rawKey = path.slice(ATTACHMENT_PATH_PREFIX.length);
+  if (!rawKey || rawKey.includes('/') || rawKey.includes('?') || rawKey.includes('#')) return { matched: true, key: '' };
+  try {
+    const key = decodeURIComponent(rawKey);
+    if (!key || key.length > 300 || /[\\/\u0000-\u001f\u007f]/.test(key)) return { matched: true, key: '' };
+    return { matched: true, key };
+  } catch {
+    return { matched: true, key: '' };
+  }
+}
+function attachmentKeyFromPath(path?: string | null) { return parseAttachmentPath(path).key; }
 async function broadcast(env: Env, room: string, payload: unknown) {
   if (!env.CHAT_ROOM) throw new Error('CHAT_ROOM Durable Object binding is missing. Check wrangler.toml and deployment config.');
   await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room)).fetch('https://room/broadcast', { method: 'POST', body: JSON.stringify(payload) });
 }
 const notifyAdmins = (env: Env) => broadcast(env, 'admin-feed', { type: 'sessions:changed', ts: Date.now() });
-async function listSessions(env: Env, admin: Admin, includeDeleted: boolean) { const where = includeDeleted ? 'WHERE EXISTS (SELECT 1 FROM messages mx WHERE mx.session_id=s.id)' : 'WHERE s.deleted_at IS NULL AND EXISTS (SELECT 1 FROM messages mx WHERE mx.session_id=s.id)'; const scoped = admin.role === 'SUPER_ADMIN' ? '' : ' AND s.assigned_operator_id=?'; const sql = `SELECT s.*,u.visitor_key,u.display_name,cr.remark_name customer_remark_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN customer_remarks cr ON cr.user_id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ${where}${scoped} ORDER BY COALESCE(s.deleted_at,s.updated_at) DESC`; const stmt = env.DB.prepare(sql); return (admin.role === 'SUPER_ADMIN' ? (await stmt.all<any>()).results : (await stmt.bind(admin.id).all<any>()).results) || []; }
+async function listSessions(env: Env, admin: Admin, includeDeleted: boolean) { const visible = "(EXISTS (SELECT 1 FROM messages mx WHERE mx.session_id=s.id) OR s.status='CLOSED' OR s.status='ARCHIVED' OR s.archived_at IS NOT NULL OR s.deleted_at IS NOT NULL)"; const where = includeDeleted ? `WHERE ${visible}` : `WHERE s.deleted_at IS NULL AND ${visible}`; const scoped = admin.role === 'SUPER_ADMIN' ? '' : ' AND s.assigned_operator_id=?'; const sql = `SELECT s.*,u.visitor_key,u.display_name,cr.remark_name customer_remark_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN customer_remarks cr ON cr.user_id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ${where}${scoped} ORDER BY COALESCE(s.deleted_at,s.updated_at) DESC`; const stmt = env.DB.prepare(sql); return (admin.role === 'SUPER_ADMIN' ? (await stmt.all<any>()).results : (await stmt.bind(admin.id).all<any>()).results) || []; }
+function canClearHistory(session: any) { return Boolean(session && (session.status === 'CLOSED' || session.status === 'ARCHIVED' || session.archived_at || session.deleted_at)); }
+function clearHistoryR2Keys(messages: any[], attachments: any[]) {
+  const keys = new Set<string>();
+  for (const attachment of attachments) {
+    const key = String(attachment.object_key || '');
+    if (key) keys.add(key);
+  }
+  for (const message of messages) {
+    const parsed = parseAttachmentPath(message.image_path);
+    if (parsed.key) keys.add(parsed.key);
+  }
+  return keys;
+}
+const clearHistoryCounts = (messages: any[], attachments: any[]) => ({ messages: messages.length, attachments: attachments.length, r2Objects: clearHistoryR2Keys(messages, attachments).size });
+async function clearHistoryContext(env: Env, sessionId: string) {
+  const session = await getSessionById(env, sessionId);
+  if (!session) return { error: json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }) };
+  if (!canClearHistory(session)) return { error: json({ error: ERR_SESSION_ENDED }, { status: 400 }) };
+  const messages = (await env.DB.prepare('SELECT id,image_path FROM messages WHERE session_id=?').bind(sessionId).all<any>()).results || [];
+  const attachments = (await env.DB.prepare('SELECT id,message_id,object_key FROM attachments WHERE conversation_id=? OR message_id IN (SELECT id FROM messages WHERE session_id=?)').bind(sessionId, sessionId).all<any>()).results || [];
+  return { session, messages, attachments };
+}
+async function deleteByIds(env: Env, table: 'attachments' | 'messages', ids: string[]) {
+  for (let i = 0; i < ids.length; i += 80) {
+    const chunk = ids.slice(i, i + 80);
+    if (chunk.length) await env.DB.prepare(`DELETE FROM ${table} WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
+  }
+}
+function isR2NotFoundError(error: unknown) {
+  const err = error as { status?: number; statusCode?: number; code?: string; name?: string; message?: string };
+  const message = typeof err?.message === 'string' ? err.message : '';
+  return err?.status === 404 || err?.statusCode === 404 || err?.code === 'NoSuchKey' || err?.code === 'NotFound' || err?.name === 'NoSuchKey' || err?.name === 'NotFound' || /\b404\b|not found|no such key/i.test(message);
+}
+async function deleteR2Object(env: Env, key: string) {
+  try {
+    await env.UPLOADS.delete(key);
+    return true;
+  } catch (error) {
+    return isR2NotFoundError(error);
+  }
+}
+async function clearSessionHistory(req: Request, env: Env, sessionId: string, dryRun: boolean) {
+  await requireSuper(env, req);
+  const ctx = await clearHistoryContext(env, sessionId);
+  if ('error' in ctx) return ctx.error || json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
+  const counts = clearHistoryCounts(ctx.messages, ctx.attachments);
+  if (dryRun) return json({ ok: true, eligible: true, counts });
+  const body: any = await readJson(req);
+  if (body.confirm !== 'CLEAR_HISTORY') return json({ error: 'Invalid confirmation' }, { status: 400 });
+  const successAttachmentIds: string[] = [];
+  const failedMessageIds = new Set<string>();
+  const failedObjectKeys = new Set<string>();
+  const successfulObjectKeys = new Set<string>();
+  const objectKeys = clearHistoryR2Keys(ctx.messages, ctx.attachments);
+  for (const key of objectKeys) {
+    if (await deleteR2Object(env, key)) successfulObjectKeys.add(key);
+    else failedObjectKeys.add(key);
+  }
+  for (const attachment of ctx.attachments) {
+    const key = String(attachment.object_key || '');
+    if (!key) continue;
+    if (successfulObjectKeys.has(key)) {
+      successAttachmentIds.push(String(attachment.id));
+    } else if (failedObjectKeys.has(key) && attachment.message_id) {
+      failedMessageIds.add(String(attachment.message_id));
+    }
+  }
+  for (const message of ctx.messages) {
+    const parsed = parseAttachmentPath(message.image_path);
+    if (parsed.matched && !parsed.key) failedMessageIds.add(String(message.id));
+    if (parsed.key && failedObjectKeys.has(parsed.key)) failedMessageIds.add(String(message.id));
+  }
+  const deleteMessageIds = ctx.messages.map((m: any) => String(m.id)).filter((id: string) => id && !failedMessageIds.has(id));
+  await deleteByIds(env, 'attachments', successAttachmentIds);
+  await deleteByIds(env, 'messages', deleteMessageIds);
+  await env.DB.prepare('UPDATE sessions SET updated_at=? WHERE id=?').bind(now(), sessionId).run();
+  await notifyAdmins(env);
+  return json({ ok: true, deleted: { messages: deleteMessageIds.length, attachments: successAttachmentIds.length, r2Objects: successfulObjectKeys.size }, failed: { r2Objects: failedObjectKeys.size } });
+}
 async function updateCustomerRemark(req: Request, env: Env, sessionId: string) {
   const admin = await requireAdmin(env, req);
   const session = await getSessionById(env, sessionId);
@@ -219,6 +311,10 @@ async function api(req: Request, env: Env) {
   if (cr && req.method === 'POST') { const session = await getSessionById(env, cr[1]); if (!session || session.deleted_at) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); if (!(await guestOwnsSession(env, req, session))) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); const b: any = await readJson(req); const ids = Array.isArray(b.messageIds) ? b.messageIds : []; await markMessagesRead(env, session.id, 'OPERATOR', ids); return json({ ok: true }); }
   const remark = path.match(/^\/api\/sessions\/([^/]+)\/customer-remark$/);
   if (remark && req.method === 'PATCH') return updateCustomerRemark(req, env, remark[1]);
+  const clearDryRun = path.match(/^\/api\/sessions\/([^/]+)\/clear-history\/dry-run$/);
+  if (clearDryRun && req.method === 'POST') return clearSessionHistory(req, env, clearDryRun[1], true);
+  const clearHistory = path.match(/^\/api\/sessions\/([^/]+)\/clear-history$/);
+  if (clearHistory && req.method === 'POST') return clearSessionHistory(req, env, clearHistory[1], false);
   const sa = path.match(/^\/api\/sessions\/([^/]+)\/(assign|close|archive|unarchive|delete|restore)$/);
   if (sa && req.method === 'POST') return sessionAction(req, env, sa[1], sa[2]);
   const rec = path.match(/^\/api\/messages\/([^/]+)\/recall$/);
