@@ -180,6 +180,30 @@ async function broadcast(env: Env, room: string, payload: unknown) {
 }
 const notifyAdmins = (env: Env) => broadcast(env, 'admin-feed', { type: 'sessions:changed', ts: Date.now() });
 async function listSessions(env: Env, admin: Admin, includeDeleted: boolean) { const visible = "(EXISTS (SELECT 1 FROM messages mx WHERE mx.session_id=s.id) OR s.status='CLOSED' OR s.status='ARCHIVED' OR s.archived_at IS NOT NULL OR s.deleted_at IS NOT NULL)"; const where = includeDeleted ? `WHERE ${visible}` : `WHERE s.deleted_at IS NULL AND ${visible}`; const scoped = admin.role === 'SUPER_ADMIN' ? '' : ' AND s.assigned_operator_id=?'; const sql = `SELECT s.*,u.visitor_key,u.display_name,cr.remark_name customer_remark_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN customer_remarks cr ON cr.user_id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ${where}${scoped} ORDER BY COALESCE(s.deleted_at,s.updated_at) DESC`; const stmt = env.DB.prepare(sql); return (admin.role === 'SUPER_ADMIN' ? (await stmt.all<any>()).results : (await stmt.bind(admin.id).all<any>()).results) || []; }
+type LifecycleDryRunStats = {
+  cutoff: string | null;
+  autoArchiveCount: number;
+  autoRecycleCount: number;
+  autoClearHistorySessionCount: number;
+  autoClearHistoryMessageCount: number;
+  autoClearHistoryAttachmentCount: number;
+};
+async function collectLifecycleDryRunStats(env: Env): Promise<LifecycleDryRunStats> {
+  const cutoff = await env.DB.prepare("SELECT datetime('now', '-24 hours') AS cutoff").first<any>();
+  const archive = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE status='CLOSED' AND closed_at <= datetime('now', '-24 hours') AND archived_at IS NULL AND deleted_at IS NULL").first<any>();
+  const recycle = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE archived_at IS NOT NULL AND deleted_at IS NULL AND archived_at <= datetime('now', '-24 hours')").first<any>();
+  const clearSessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL").first<any>();
+  const clearMessages = await env.DB.prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL)").first<any>();
+  const clearAttachments = await env.DB.prepare("SELECT COUNT(*) AS count FROM attachments WHERE conversation_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL) OR message_id IN (SELECT id FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL))").first<any>();
+  return {
+    cutoff: cutoff?.cutoff || null,
+    autoArchiveCount: Number(archive?.count || 0),
+    autoRecycleCount: Number(recycle?.count || 0),
+    autoClearHistorySessionCount: Number(clearSessions?.count || 0),
+    autoClearHistoryMessageCount: Number(clearMessages?.count || 0),
+    autoClearHistoryAttachmentCount: Number(clearAttachments?.count || 0),
+  };
+}
 function canClearHistory(session: any) { return Boolean(session && (session.status === 'CLOSED' || session.status === 'ARCHIVED' || session.archived_at || session.deleted_at)); }
 function clearHistoryR2Keys(messages: any[], attachments: any[]) {
   const keys = new Set<string>();
@@ -381,6 +405,27 @@ async function validateInviteHost(env: Env, token: string) {
 }
 
 export default {
+  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext) {
+    try {
+      const stats = await collectLifecycleDryRunStats(env);
+      console.log(JSON.stringify({
+        mode: 'lifecycle:scheduled-dry-run',
+        trigger: 'scheduled',
+        ...stats,
+        readOnly: true,
+        writesExecuted: false,
+      }));
+    } catch {
+      console.error(JSON.stringify({
+        mode: 'lifecycle:scheduled-dry-run',
+        trigger: 'scheduled',
+        ok: false,
+        error: 'scheduled dry-run failed',
+        readOnly: true,
+        writesExecuted: false,
+      }));
+    }
+  },
   async fetch(req: Request, env: Env, ctx: ExecutionContext) {
     try {
       const url = new URL(req.url);
