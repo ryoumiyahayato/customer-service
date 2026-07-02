@@ -117,8 +117,26 @@ export default function AdminDashboard() {
   const wsRefs = useRef<{ admin?: WebSocket; conv?: WebSocket; staff?: WebSocket }>({});
   const reconnectTimers = useRef<{ admin?: any; conv?: any; staff?: any }>({});
   const messageFallbackTimer = useRef<any>(null);
+  const resetAdminState = useCallback(() => {
+    wsRefs.current.admin?.close();
+    wsRefs.current.conv?.close();
+    wsRefs.current.staff?.close();
+    setAdmin(null);
+    setSessions([]);
+    setCur(null);
+    setSelectedMsgs([]);
+    setStaffMsgs([]);
+    setView('sessions');
+    setMobileView('dir');
+    setDirOpen(false);
+    setMobileInviteOpen(false);
+  }, []);
 
   const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); }, []);
+  const handleAuthExpired = useCallback(() => {
+    resetAdminState();
+    showToast('登录已过期，请重新登录');
+  }, [resetAdminState, showToast]);
   const focusMessageInput = useCallback(() => {
     messageInputRef.current?.focus();
     requestAnimationFrame(() => {
@@ -133,18 +151,18 @@ export default function AdminDashboard() {
   useEffect(() => { setRemarkDraft(String(cur?.customer_remark_name || '').slice(0, 40)); }, [cur?.id, cur?.customer_remark_name]);
 
   const fetchAdmin = useCallback(async () => {
-    try { const res: any = await apiFetch('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (e: any) { if (e?.status !== 401) showToast(e?.message || '获取管理员信息失败'); } setLoading(false);
-  }, [showToast]);
+    try { const res: any = await apiFetch('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (e: any) { if (e?.status === 401) resetAdminState(); else showToast(e?.message || '获取管理员信息失败'); } setLoading(false);
+  }, [resetAdminState, showToast]);
   useEffect(() => { fetchAdmin(); }, [fetchAdmin]);
 
   const fetchSessions = async () => {
-    try { const res: any = await apiFetch('/api/sessions'); setSessions(res.sessions || []); } catch {}
+    try { const res: any = await apiFetch('/api/sessions'); setSessions(res.sessions || []); } catch (e: any) { if (e?.status === 401) handleAuthExpired(); }
   };
   useEffect(() => { if (admin) fetchSessions(); }, [admin]);
 
   const fetchMsgs = async (sid: string) => {
     setLoadingMsgs(sid);
-    try { const res: any = await apiFetch(`/api/sessions/${sid}/messages`); setSelectedMsgs(mergeMessages([], res.messages || [])); setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s)); } catch {}
+    try { const res: any = await apiFetch(`/api/sessions/${sid}/messages`); setSelectedMsgs(mergeMessages([], res.messages || [])); setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s)); } catch (e: any) { if (e?.status === 401) handleAuthExpired(); }
     setLoadingMsgs(null);
   };
 
@@ -508,18 +526,7 @@ export default function AdminDashboard() {
     setLogoutLoading(true);
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });
-      wsRefs.current.admin?.close();
-      wsRefs.current.conv?.close();
-      wsRefs.current.staff?.close();
-      setAdmin(null);
-      setSessions([]);
-      setCur(null);
-      setSelectedMsgs([]);
-      setStaffMsgs([]);
-      setView('sessions');
-      setMobileView('dir');
-      setDirOpen(false);
-      setMobileInviteOpen(false);
+      resetAdminState();
     } catch (e: any) {
       showToast(e?.message || '\u9000\u51fa\u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u5237\u65b0\u540e\u91cd\u8bd5');
     } finally {
