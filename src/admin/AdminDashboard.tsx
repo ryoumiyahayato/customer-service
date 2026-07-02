@@ -91,7 +91,6 @@ export default function AdminDashboard() {
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null);
   const [clearHistoryPlan, setClearHistoryPlan] = useState<any>(null);
-  const [clearHistoryConfirm, setClearHistoryConfirm] = useState('');
   const [clearHistoryLoading, setClearHistoryLoading] = useState(false);
   const [convOnline, setConvOnline] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
@@ -470,7 +469,6 @@ export default function AdminDashboard() {
     try {
       const res: any = await apiFetch(`/api/sessions/${session.id}/clear-history/dry-run`, { method: 'POST' });
       setClearHistoryPlan({ session, counts: res.counts || { messages: 0, attachments: 0, r2Objects: 0 } });
-      setClearHistoryConfirm('');
     } catch (e: any) {
       showToast(e?.message || '清空历史预检查失败');
     } finally {
@@ -479,7 +477,7 @@ export default function AdminDashboard() {
   };
 
   const executeClearHistory = async () => {
-    if (!clearHistoryPlan || clearHistoryConfirm !== 'CLEAR_HISTORY' || clearHistoryLoading) return;
+    if (!clearHistoryPlan || clearHistoryLoading) return;
     const sessionId = clearHistoryPlan.session.id;
     setClearHistoryLoading(true);
     try {
@@ -487,7 +485,6 @@ export default function AdminDashboard() {
       await fetchSessions();
       if (cur?.id === sessionId) await fetchMsgs(sessionId);
       setClearHistoryPlan(null);
-      setClearHistoryConfirm('');
       const failed = Number(res?.failed?.r2Objects || 0);
       showToast(failed ? `历史已部分清空，${failed} 个附件清理失败，可重试` : '历史已清空');
     } catch (e: any) {
@@ -648,16 +645,14 @@ export default function AdminDashboard() {
       {clearHistoryPlan && <div className="modal-backdrop">
         <div className="danger-modal">
           <h3>清空历史</h3>
-          <p>此操作会删除当前会话的客户聊天历史和附件记录，并删除对应文件。会话本身、邀请、客户资料和备注会保留。</p>
-          <div className="clear-history-counts">
-            <span>消息 <b>{clearHistoryPlan.counts.messages}</b> 条</span>
-            <span>附件 <b>{clearHistoryPlan.counts.attachments}</b> 个</span>
-            <span>文件 <b>{clearHistoryPlan.counts.r2Objects}</b> 个</span>
+          <p>将清空该会话的历史消息及相关附件。此操作不可撤销。</p>
+          <div className="clear-history-summary">
+            <span>消息数量：<b>{clearHistoryPlan.counts.messages}</b></span>
+            <small>相关附件也会被清理。</small>
           </div>
-          <input value={clearHistoryConfirm} onChange={e => setClearHistoryConfirm(e.target.value)} placeholder="输入 CLEAR_HISTORY 确认" autoComplete="off" />
           <div className="modal-actions">
-            <button type="button" className="secondary" onClick={() => { setClearHistoryPlan(null); setClearHistoryConfirm(''); }} disabled={clearHistoryLoading}>取消</button>
-            <button type="button" className="danger" onClick={executeClearHistory} disabled={clearHistoryLoading || clearHistoryConfirm !== 'CLEAR_HISTORY'}>{clearHistoryLoading ? '清空中...' : '确认清空'}</button>
+            <button type="button" className="secondary" onClick={() => setClearHistoryPlan(null)} disabled={clearHistoryLoading}>取消</button>
+            <button type="button" className="danger" onClick={executeClearHistory} disabled={clearHistoryLoading}>{clearHistoryLoading ? '清空中...' : '确认清空'}</button>
           </div>
         </div>
       </div>}
