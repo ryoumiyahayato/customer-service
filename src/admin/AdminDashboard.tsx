@@ -7,7 +7,7 @@ import '../styles.css';
 type Message = any;
 type Session = any;
 type Admin = any;
-type SessionGroup = 'active' | 'ended' | 'archived';
+type SessionGroup = 'active' | 'ended' | 'archived' | 'deleted';
 
 const formatTime = (ts?: string) => (ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
@@ -37,7 +37,8 @@ const chatMetric = (name: string, started: number, extra?: Record<string, number
 const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
 const isArchivedSession = (session?: Session | null) => Boolean(session?.archived_at || session?.status === 'ARCHIVED');
 const sessionGroupOf = (session?: Session | null): SessionGroup | null => {
-  if (!session || session.deleted_at) return null;
+  if (!session) return null;
+  if (session.deleted_at) return 'deleted';
   if (isArchivedSession(session)) return 'archived';
   if (session.status === 'CLOSED') return 'ended';
   return 'active';
@@ -98,6 +99,7 @@ export default function AdminDashboard() {
     active: sessions.filter(s => sessionGroupOf(s) === 'active').length,
     ended: sessions.filter(s => sessionGroupOf(s) === 'ended').length,
     archived: sessions.filter(s => sessionGroupOf(s) === 'archived').length,
+    deleted: sessions.filter(s => sessionGroupOf(s) === 'deleted').length,
   }), [sessions]);
   const visibleSessions = useMemo(() => sessions.filter(s => sessionGroupOf(s) === sessionGroup), [sessionGroup, sessions]);
   const customerName = useCallback((session?: Session | null) => String(session?.customer_remark_name || '').trim() || fallbackCustomerName(session), []);
@@ -156,7 +158,7 @@ export default function AdminDashboard() {
   useEffect(() => { fetchAdmin(); }, [fetchAdmin]);
 
   const fetchSessions = async () => {
-    try { const res: any = await apiFetch('/api/sessions'); setSessions(res.sessions || []); } catch (e: any) { if (e?.status === 401) handleAuthExpired(); }
+    try { const res: any = await apiFetch('/api/sessions?includeDeleted=1'); setSessions(res.sessions || []); } catch (e: any) { if (e?.status === 401) handleAuthExpired(); }
   };
   useEffect(() => { if (admin) fetchSessions(); }, [admin]);
 
@@ -425,8 +427,49 @@ export default function AdminDashboard() {
     }
   };
 
+  const moveSessionToTrash = async (s: Session) => {
+    if (!s || sessionActionLoading || s.deleted_at || (!isArchivedSession(s) && s.status !== 'CLOSED')) return;
+    setSessionActionLoading(`delete:${s.id}`);
+    try {
+      const res: any = await apiFetch(`/api/sessions/${s.id}/delete`, { method: 'POST' });
+      applySessionUpdate(res.session);
+      setSessionGroup('deleted');
+      await fetchSessions();
+      showToast('会话已移入回收站');
+    } catch (e: any) {
+      showToast(e?.message || '移入回收站失败');
+    } finally {
+      setSessionActionLoading(null);
+    }
+  };
+
+  const restoreDeletedSession = async (s: Session) => {
+    if (!s || sessionActionLoading || !s.deleted_at) return;
+    setSessionActionLoading(`restore:${s.id}`);
+    try {
+      const res: any = await apiFetch(`/api/sessions/${s.id}/restore`, { method: 'POST' });
+      applySessionUpdate(res.session);
+      setSessionGroup(sessionGroupOf(res.session) || 'active');
+      await fetchSessions();
+      showToast('会话已恢复');
+    } catch (e: any) {
+      showToast(e?.message || '恢复失败');
+    } finally {
+      setSessionActionLoading(null);
+    }
+  };
+
   const renderSessionLifecycleActions = (session?: Session | null) => {
     if (!session) return null;
+    if (session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => restoreDeletedSession(session)} disabled={sessionActionLoading === `restore:${session.id}`}>{sessionActionLoading === `restore:${session.id}` ? '恢复中...' : '恢复'}</button>;
+    if (isArchivedSession(session)) return <>
+      <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
+      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+    </>;
+    if (session.status === 'CLOSED') return <>
+      <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>
+      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+    </>;
     if (isArchivedSession(session)) return <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>;
     if (session.status === 'CLOSED' && !session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>;
     if (!currentSessionEnded) return <button type="button" className="danger close-session-btn" onClick={() => closeSession(session)} disabled={closingSessionId === session.id}>{closingSessionId === session.id ? '结束中...' : '结束会话'}</button>;
@@ -565,6 +608,7 @@ export default function AdminDashboard() {
             <button type="button" className={sessionGroup === 'active' ? 'active' : ''} onClick={() => setSessionGroup('active')}>进行中 <b>{sessionGroupCounts.active}</b></button>
             <button type="button" className={sessionGroup === 'ended' ? 'active' : ''} onClick={() => setSessionGroup('ended')}>已结束 <b>{sessionGroupCounts.ended}</b></button>
             <button type="button" className={sessionGroup === 'archived' ? 'active' : ''} onClick={() => setSessionGroup('archived')}>已归档 <b>{sessionGroupCounts.archived}</b></button>
+            <button type="button" className={sessionGroup === 'deleted' ? 'active' : ''} onClick={() => setSessionGroup('deleted')}>已删除 <b>{sessionGroupCounts.deleted}</b></button>
           </div>
           <div className="folder-body">
             {visibleSessions.slice(0, isNarrow ? visibleSessions.length : 30).map(s => (
@@ -632,6 +676,7 @@ export default function AdminDashboard() {
                     <button type="button" className={sessionGroup === 'active' ? 'active' : ''} onClick={() => setSessionGroup('active')}>进行中 <b>{sessionGroupCounts.active}</b></button>
                     <button type="button" className={sessionGroup === 'ended' ? 'active' : ''} onClick={() => setSessionGroup('ended')}>已结束 <b>{sessionGroupCounts.ended}</b></button>
                     <button type="button" className={sessionGroup === 'archived' ? 'active' : ''} onClick={() => setSessionGroup('archived')}>已归档 <b>{sessionGroupCounts.archived}</b></button>
+                    <button type="button" className={sessionGroup === 'deleted' ? 'active' : ''} onClick={() => setSessionGroup('deleted')}>已删除 <b>{sessionGroupCounts.deleted}</b></button>
                   </div>
                   {visibleSessions.map(s => (
                     <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>

@@ -122,7 +122,7 @@
 .folder-head{display:flex;align-items:center;border-radius:12px;padding:10px 12px;min-height:44px;font-size:13px}
 .folder-head b{background:#243852;border-radius:999px;padding:2px 8px;font-size:12px;margin-left:8px}
 .folder-body{padding:4px 0 8px}
-.session-group-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:0 0 6px}
+.session-group-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:0 0 6px}
 .session-group-tabs button{min-width:0;min-height:34px;padding:6px 7px;border-radius:10px;background:#1e293b;color:#cbd5e1;font-size:12px;white-space:nowrap}
 .session-group-tabs button.active{background:#0d6efd;color:#fff}
 .session-group-tabs b{font-size:11px;font-weight:700}
