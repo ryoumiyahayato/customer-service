@@ -172,10 +172,14 @@
 .notice{margin:10px 14px 0;padding:10px 12px;border-radius:12px;background:#e8f1ff;color:#1659b8;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px}
 .notice-dismiss{background:transparent;color:inherit;padding:4px 8px;min-height:28px;border-radius:8px;font-size:14px;border:1px solid currentColor;opacity:.6}
 .admin-panel.wide{max-height:100%;overflow:auto}
-.session-action-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+.session-action-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
 .session-action-bar>div{display:grid;gap:2px;min-width:0}
 .session-action-bar b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .session-action-bar span{font-size:12px;color:var(--muted)}
+.customer-remark-form{display:flex;align-items:center;gap:6px;min-width:180px;max-width:360px;flex:1 1 260px}
+.customer-remark-form label{font-size:12px;color:var(--muted);white-space:nowrap}
+.customer-remark-form input{min-width:0;flex:1;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);color:var(--text);padding:8px 10px;font-size:13px}
+.customer-remark-form button{min-height:34px;padding:6px 10px;border-radius:10px;font-size:12px;white-space:nowrap}
 .close-session-btn{min-height:36px;padding:7px 12px;border-radius:10px;white-space:nowrap}
 .ended-chip{display:inline-flex;align-items:center;min-height:30px;padding:5px 10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);font-size:12px;white-space:nowrap}
 .session-ended-state{padding:14px;text-align:center;color:var(--muted);border-top:1px solid var(--line);background:var(--panel);font-size:14px}
@@ -278,6 +282,9 @@ html,body{overflow-x:hidden}
 .admin.is-narrow .notice{margin:8px 10px;background:#0d3b66;color:#dbeafe;border:1px solid #38bdf866;font-size:13px}
 .admin.is-narrow .session-action-bar{background:#0b1d32;border-bottom-color:#1e3a5f;color:#f8fafc;padding:8px 10px}
 .admin.is-narrow .session-action-bar span{color:#cbd5e1}
+.admin.is-narrow .customer-remark-form{order:3;flex:1 0 100%;max-width:none;min-width:0}
+.admin.is-narrow .customer-remark-form input{background:#10233a;border-color:#2b4f75;color:#f8fafc}
+.admin.is-narrow .customer-remark-form label{color:#cbd5e1}
 .admin.is-narrow .close-session-btn{min-height:36px;padding:7px 10px;font-size:13px}
 .admin.is-narrow .ended-chip{background:#10233a;border-color:#2b4f75;color:#cbd5e1}
 .admin.is-narrow .session-ended-state{background:#0b1d32;border-top-color:#1e3a5f;color:#cbd5e1}

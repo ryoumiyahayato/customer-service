@@ -81,10 +81,16 @@ export default function AdminDashboard() {
   const [logoutLoading, setLogoutLoading] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [convOnline, setConvOnline] = useState(false);
+  const [remarkDraft, setRemarkDraft] = useState('');
+  const [remarkSaving, setRemarkSaving] = useState(false);
   const isSuper = admin?.role === 'SUPER_ADMIN';
   const currentSessionEnded = sessionEnded(cur);
-  const customerName = useCallback((session?: Session | null) => fallbackCustomerName(session), []);
-  const customerAvatar = useCallback((session?: Session | null) => customerName(session).replace(/\D/g, '').slice(-1) || '客', [customerName]);
+  const customerName = useCallback((session?: Session | null) => String(session?.customer_remark_name || '').trim() || fallbackCustomerName(session), []);
+  const customerAvatar = useCallback((session?: Session | null) => {
+    const remark = String(session?.customer_remark_name || '').trim();
+    if (remark) return remark.slice(0, 1);
+    return customerName(session).replace(/\D/g, '').slice(-1) || '客';
+  }, [customerName]);
   const currentCustomerName = customerName(cur);
   const currentCustomerAvatar = customerAvatar(cur);
   const sendingRef = useRef(false);
@@ -109,6 +115,7 @@ export default function AdminDashboard() {
   useEffect(() => { const on = () => setIsNarrow(window.innerWidth <= 820); addEventListener('resize', on); return () => removeEventListener('resize', on); }, []);
   useEffect(() => { selectedMsgsRef.current = selectedMsgs; }, [selectedMsgs]);
   useEffect(() => { convOnlineRef.current = convOnline; }, [convOnline]);
+  useEffect(() => { setRemarkDraft(String(cur?.customer_remark_name || '').slice(0, 40)); }, [cur?.id, cur?.customer_remark_name]);
 
   const fetchAdmin = useCallback(async () => {
     try { const res: any = await apiFetch('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (e: any) { if (e?.status !== 401) showToast(e?.message || '获取管理员信息失败'); } setLoading(false);
@@ -346,6 +353,52 @@ export default function AdminDashboard() {
     }
   };
 
+  const applyCustomerRemark = useCallback((sessionId: string, remarkName: string | null) => {
+    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, customer_remark_name: remarkName } : s));
+    setCur((c: Session | null) => c?.id === sessionId ? { ...c, customer_remark_name: remarkName } : c);
+  }, []);
+
+  const saveCustomerRemark = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!cur || remarkSaving) return;
+    const remarkName = remarkDraft.trim().slice(0, 40);
+    setRemarkSaving(true);
+    try {
+      const res: any = await apiFetch(`/api/sessions/${cur.id}/customer-remark`, { method: 'PATCH', body: JSON.stringify({ remarkName }) });
+      const nextRemark = res?.session?.customer_remark_name || null;
+      applyCustomerRemark(cur.id, nextRemark);
+      setRemarkDraft(nextRemark || '');
+      showToast(nextRemark ? '备注已保存' : '备注已清除');
+      fetchSessions();
+    } catch (e: any) {
+      showToast(e?.message || '备注保存失败');
+    } finally {
+      setRemarkSaving(false);
+    }
+  };
+
+  const renderCustomerRemarkEditor = () => {
+    if (!cur) return null;
+    const currentRemark = String(cur.customer_remark_name || '');
+    const changed = remarkDraft.trim() !== currentRemark;
+    return (
+      <form className="customer-remark-form" onSubmit={saveCustomerRemark} autoComplete="off">
+        <label htmlFor="customer-remark-input">备注</label>
+        <input
+          id="customer-remark-input"
+          name="customerRemark"
+          type="text"
+          value={remarkDraft}
+          maxLength={40}
+          placeholder={fallbackCustomerName(cur)}
+          onChange={e => setRemarkDraft(e.target.value.slice(0, 40))}
+          disabled={remarkSaving}
+        />
+        <button type="submit" disabled={remarkSaving || !changed}>{remarkSaving ? '保存中...' : '保存'}</button>
+      </form>
+    );
+  };
+
   const updateProfile = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault(); setProfileLoading(true);
     const fd = new FormData(e.currentTarget);
@@ -521,6 +574,7 @@ export default function AdminDashboard() {
                 <section className="chat-panel">
                   <div className="session-action-bar">
                     <div><b>{currentCustomerName}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
+                    {renderCustomerRemarkEditor()}
                     {!currentSessionEnded ? <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
                   </div>
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
@@ -592,6 +646,7 @@ export default function AdminDashboard() {
                 <section className="chat-panel">
                   {cur ? <div className="session-action-bar">
                     <div><b>{currentCustomerName}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
+                    {renderCustomerRemarkEditor()}
                     {!currentSessionEnded ? <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
                   </div> : null}
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
