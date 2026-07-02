@@ -214,6 +214,16 @@ async function autoArchiveClosedSessions(env: Env, limit = 20) {
   const result: any = await env.DB.prepare(`UPDATE sessions SET archived_at=?,archived_by=NULL,updated_at=? WHERE id IN (${ids.map(() => '?').join(',')}) AND status='CLOSED' AND closed_at <= datetime('now', '-24 hours') AND archived_at IS NULL AND deleted_at IS NULL`).bind(t, t, ...ids).run();
   return { archiveLimit, archivedCount: Number(result?.meta?.changes || 0) };
 }
+async function autoRecycleArchivedSessions(env: Env, limit = 20) {
+  const recycleLimit = Math.max(0, Math.min(20, Math.floor(limit)));
+  if (!recycleLimit) return { recycleLimit, recycledCount: 0 };
+  const candidates = (await env.DB.prepare("SELECT id FROM sessions WHERE archived_at IS NOT NULL AND deleted_at IS NULL AND archived_at <= datetime('now', '-24 hours') ORDER BY archived_at ASC LIMIT ?").bind(recycleLimit).all<any>()).results || [];
+  const ids = candidates.map((row: any) => String(row.id || '')).filter(Boolean);
+  if (!ids.length) return { recycleLimit, recycledCount: 0 };
+  const t = now();
+  const result: any = await env.DB.prepare(`UPDATE sessions SET deleted_at=?,deleted_by=NULL,updated_at=? WHERE id IN (${ids.map(() => '?').join(',')}) AND archived_at IS NOT NULL AND deleted_at IS NULL AND archived_at <= datetime('now', '-24 hours')`).bind(t, t, ...ids).run();
+  return { recycleLimit, recycledCount: Number(result?.meta?.changes || 0) };
+}
 function canClearHistory(session: any) { return Boolean(session && (session.status === 'CLOSED' || session.status === 'ARCHIVED' || session.archived_at || session.deleted_at)); }
 function clearHistoryR2Keys(messages: any[], attachments: any[]) {
   const keys = new Set<string>();
@@ -416,29 +426,44 @@ async function validateInviteHost(env: Env, token: string) {
 
 export default {
   async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext) {
+    let stage = 'dry-run';
+    let autoArchiveProcessedCount = 0;
+    let autoRecycleProcessedCount = 0;
+    let writesExecuted = false;
     try {
       const stats = await collectLifecycleDryRunStats(env);
+      stage = 'auto-archive';
       const archiveResult = await autoArchiveClosedSessions(env, 20);
+      autoArchiveProcessedCount = archiveResult.archivedCount;
+      writesExecuted = autoArchiveProcessedCount > 0;
+      stage = 'auto-recycle';
+      const recycleResult = await autoRecycleArchivedSessions(env, 20);
+      autoRecycleProcessedCount = recycleResult.recycledCount;
+      writesExecuted = autoArchiveProcessedCount + autoRecycleProcessedCount > 0;
       console.log(JSON.stringify({
         mode: 'lifecycle:scheduled',
         trigger: 'scheduled',
         cutoff: stats.cutoff,
         autoArchiveCandidateCount: stats.autoArchiveCount,
-        autoArchiveProcessedCount: archiveResult.archivedCount,
-        autoRecycleCount: stats.autoRecycleCount,
+        autoArchiveProcessedCount,
+        autoRecycleCandidateCount: stats.autoRecycleCount,
+        autoRecycleProcessedCount,
         autoClearHistorySessionCount: stats.autoClearHistorySessionCount,
         autoClearHistoryMessageCount: stats.autoClearHistoryMessageCount,
         autoClearHistoryAttachmentCount: stats.autoClearHistoryAttachmentCount,
         archiveLimit: archiveResult.archiveLimit,
-        writesExecuted: archiveResult.archivedCount > 0,
+        recycleLimit: recycleResult.recycleLimit,
+        writesExecuted,
       }));
     } catch {
       console.error(JSON.stringify({
         mode: 'lifecycle:scheduled',
         trigger: 'scheduled',
-        ok: false,
+        stage,
+        autoArchiveProcessedCount,
+        autoRecycleProcessedCount,
+        writesExecuted,
         error: 'scheduled lifecycle failed',
-        writesExecuted: false,
       }));
     }
   },
