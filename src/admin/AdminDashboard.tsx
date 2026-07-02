@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { apiFetch } from '../api';
 import InviteLinkPanel from './InviteLinkPanel';
 import AdminLogin from './AdminLogin';
@@ -7,6 +7,7 @@ import '../styles.css';
 type Message = any;
 type Session = any;
 type Admin = any;
+type SessionGroup = 'active' | 'ended' | 'archived';
 
 const formatTime = (ts?: string) => (ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
@@ -34,6 +35,13 @@ const chatMetric = (name: string, started: number, extra?: Record<string, number
   try { console.debug('[chat_metric]', name, Math.round(performance.now() - started), extra || {}); } catch {}
 };
 const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
+const isArchivedSession = (session?: Session | null) => Boolean(session?.archived_at || session?.status === 'ARCHIVED');
+const sessionGroupOf = (session?: Session | null): SessionGroup | null => {
+  if (!session || session.deleted_at) return null;
+  if (isArchivedSession(session)) return 'archived';
+  if (session.status === 'CLOSED') return 'ended';
+  return 'active';
+};
 const fallbackCustomerName = (session?: Session | null) => {
   const source = String(session?.visitor_key || session?.user_id || session?.id || '');
   if (!source) return '客户';
@@ -75,16 +83,23 @@ export default function AdminDashboard() {
   const [staffMsgs, setStaffMsgs] = useState<any[]>([]);
   const [contextMenu, setContextMenu] = useState<{ msg: Message; x: number; y: number } | null>(null);
   const [toast, setToast] = useState('');
-  const [includeDeleted, setIncludeDeleted] = useState(false);
+  const [sessionGroup, setSessionGroup] = useState<SessionGroup>('active');
   const [dirOpen, setDirOpen] = useState(false);
   const [mobileInviteOpen, setMobileInviteOpen] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
+  const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null);
   const [convOnline, setConvOnline] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
   const [remarkSaving, setRemarkSaving] = useState(false);
   const isSuper = admin?.role === 'SUPER_ADMIN';
   const currentSessionEnded = sessionEnded(cur);
+  const sessionGroupCounts = useMemo(() => ({
+    active: sessions.filter(s => sessionGroupOf(s) === 'active').length,
+    ended: sessions.filter(s => sessionGroupOf(s) === 'ended').length,
+    archived: sessions.filter(s => sessionGroupOf(s) === 'archived').length,
+  }), [sessions]);
+  const visibleSessions = useMemo(() => sessions.filter(s => sessionGroupOf(s) === sessionGroup), [sessionGroup, sessions]);
   const customerName = useCallback((session?: Session | null) => String(session?.customer_remark_name || '').trim() || fallbackCustomerName(session), []);
   const customerAvatar = useCallback((session?: Session | null) => {
     const remark = String(session?.customer_remark_name || '').trim();
@@ -123,9 +138,9 @@ export default function AdminDashboard() {
   useEffect(() => { fetchAdmin(); }, [fetchAdmin]);
 
   const fetchSessions = async () => {
-    try { const res: any = await apiFetch(`/api/sessions${includeDeleted ? '?includeDeleted=1' : ''}`); setSessions(res.sessions || []); } catch {}
+    try { const res: any = await apiFetch('/api/sessions'); setSessions(res.sessions || []); } catch {}
   };
-  useEffect(() => { if (admin) fetchSessions(); }, [admin, includeDeleted]);
+  useEffect(() => { if (admin) fetchSessions(); }, [admin]);
 
   const fetchMsgs = async (sid: string) => {
     setLoadingMsgs(sid);
@@ -168,7 +183,7 @@ export default function AdminDashboard() {
         else if (d.type === 'message:updated') { setSelectedMsgs(prev => mergeMessage(prev, d.message)); }
         else if (d.type === 'messages:read') { setSelectedMsgs(prev => applyReadReceipt(prev, d.messageIds, d.readAt)); }
         else if (d.type === 'message:deleted') { setSelectedMsgs(prev => prev.map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
-        else if (d.type === 'session:updated') { setCur((c: any) => c?.id === d.session?.id ? d.session : c); }
+        else if (d.type === 'session:updated') { setCur((c: any) => c?.id === d.session?.id ? { ...c, ...d.session } : c); }
       } catch {}
     };
     ws.onerror = () => ws.close();
@@ -345,12 +360,59 @@ export default function AdminDashboard() {
       setQuote(null);
       await fetchSessions();
       setCur((c: Session | null) => c?.id === s.id ? { ...c, status: 'CLOSED', assigned_operator_id: null } : c);
+      setSessionGroup('ended');
       showToast('会话已结束');
     } catch (e: any) {
       showToast(e?.message || '结束会话失败，请稍后重试');
     } finally {
       setClosingSessionId(null);
     }
+  };
+
+  const applySessionUpdate = useCallback((session?: Session | null) => {
+    if (!session?.id) return;
+    setSessions(prev => prev.map(s => s.id === session.id ? { ...s, ...session } : s));
+    setCur((c: Session | null) => c?.id === session.id ? { ...c, ...session } : c);
+  }, []);
+
+  const archiveSession = async (s: Session) => {
+    if (!s || sessionActionLoading || s.deleted_at || isArchivedSession(s) || s.status !== 'CLOSED') return;
+    setSessionActionLoading(`archive:${s.id}`);
+    try {
+      const res: any = await apiFetch(`/api/sessions/${s.id}/archive`, { method: 'POST' });
+      applySessionUpdate(res.session);
+      setSessionGroup('archived');
+      await fetchSessions();
+      showToast('会话已归档');
+    } catch (e: any) {
+      showToast(e?.message || '归档失败');
+    } finally {
+      setSessionActionLoading(null);
+    }
+  };
+
+  const unarchiveSession = async (s: Session) => {
+    if (!s || sessionActionLoading || !isArchivedSession(s)) return;
+    setSessionActionLoading(`unarchive:${s.id}`);
+    try {
+      const res: any = await apiFetch(`/api/sessions/${s.id}/unarchive`, { method: 'POST' });
+      applySessionUpdate(res.session);
+      setSessionGroup('ended');
+      await fetchSessions();
+      showToast('会话已恢复到已结束');
+    } catch (e: any) {
+      showToast(e?.message || '恢复失败');
+    } finally {
+      setSessionActionLoading(null);
+    }
+  };
+
+  const renderSessionLifecycleActions = (session?: Session | null) => {
+    if (!session) return null;
+    if (isArchivedSession(session)) return <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>;
+    if (session.status === 'CLOSED' && !session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>;
+    if (!currentSessionEnded) return <button type="button" className="danger close-session-btn" onClick={() => closeSession(session)} disabled={closingSessionId === session.id}>{closingSessionId === session.id ? '结束中...' : '结束会话'}</button>;
+    return <span className="ended-chip">会话已结束</span>;
   };
 
   const applyCustomerRemark = useCallback((sessionId: string, remarkName: string | null) => {
@@ -489,12 +551,16 @@ export default function AdminDashboard() {
         </nav>
         <InviteLinkPanel adminRole={admin?.role} operators={operators} />
         {view === 'sessions' && <div className="folder">
-          <div className="folder-head" onClick={() => setIncludeDeleted(!includeDeleted)}>
-            会话列表 <b>{sessions.length}</b>
-            <span style={{ marginLeft: 'auto', fontSize: 11 }}>{includeDeleted ? '含已删除' : '活跃'}</span>
+          <div className="folder-head">
+            会话列表 <b>{visibleSessions.length}</b>
+          </div>
+          <div className="session-group-tabs">
+            <button type="button" className={sessionGroup === 'active' ? 'active' : ''} onClick={() => setSessionGroup('active')}>进行中 <b>{sessionGroupCounts.active}</b></button>
+            <button type="button" className={sessionGroup === 'ended' ? 'active' : ''} onClick={() => setSessionGroup('ended')}>已结束 <b>{sessionGroupCounts.ended}</b></button>
+            <button type="button" className={sessionGroup === 'archived' ? 'active' : ''} onClick={() => setSessionGroup('archived')}>已归档 <b>{sessionGroupCounts.archived}</b></button>
           </div>
           <div className="folder-body">
-            {sessions.slice(0, isNarrow ? sessions.length : 30).map(s => (
+            {visibleSessions.slice(0, isNarrow ? visibleSessions.length : 30).map(s => (
               <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
                 <div className="avatar-dot">{customerAvatar(s)}</div>
                 <div className="session-main"><b>{customerName(s)}</b><p>{s.status}</p></div>
@@ -505,6 +571,7 @@ export default function AdminDashboard() {
                 </div>
               </button>
             ))}
+            {visibleSessions.length === 0 && <div className="empty-state small-empty">暂无会话</div>}
           </div>
         </div>}
       </aside>
@@ -554,7 +621,12 @@ export default function AdminDashboard() {
             {view === 'sessions' && mobileView === 'dir' && (
               <div className="mobile-session-list-view">
                 <div className="session-list-area">
-                  {sessions.map(s => (
+                  <div className="session-group-tabs mobile-session-tabs">
+                    <button type="button" className={sessionGroup === 'active' ? 'active' : ''} onClick={() => setSessionGroup('active')}>进行中 <b>{sessionGroupCounts.active}</b></button>
+                    <button type="button" className={sessionGroup === 'ended' ? 'active' : ''} onClick={() => setSessionGroup('ended')}>已结束 <b>{sessionGroupCounts.ended}</b></button>
+                    <button type="button" className={sessionGroup === 'archived' ? 'active' : ''} onClick={() => setSessionGroup('archived')}>已归档 <b>{sessionGroupCounts.archived}</b></button>
+                  </div>
+                  {visibleSessions.map(s => (
                     <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
                       <div className="avatar-dot">{customerAvatar(s)}</div>
                       <div className="session-main"><b>{customerName(s)}</b><p>{s.status}</p></div>
@@ -565,7 +637,7 @@ export default function AdminDashboard() {
                       </div>
                     </button>
                   ))}
-                  {sessions.length === 0 && <div className="empty-state">暂无会话</div>}
+                  {visibleSessions.length === 0 && <div className="empty-state">暂无会话</div>}
                 </div>
               </div>
             )}
@@ -575,7 +647,7 @@ export default function AdminDashboard() {
                   <div className="session-action-bar">
                     <div><b>{currentCustomerName}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
                     {renderCustomerRemarkEditor()}
-                    {!currentSessionEnded ? <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
+                    {renderSessionLifecycleActions(cur)}
                   </div>
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
@@ -647,7 +719,7 @@ export default function AdminDashboard() {
                   {cur ? <div className="session-action-bar">
                     <div><b>{currentCustomerName}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
                     {renderCustomerRemarkEditor()}
-                    {!currentSessionEnded ? <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中...' : '结束会话'}</button> : <span className="ended-chip">会话已结束</span>}
+                    {renderSessionLifecycleActions(cur)}
                   </div> : null}
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">

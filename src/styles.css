@@ -122,6 +122,10 @@
 .folder-head{display:flex;align-items:center;border-radius:12px;padding:10px 12px;min-height:44px;font-size:13px}
 .folder-head b{background:#243852;border-radius:999px;padding:2px 8px;font-size:12px;margin-left:8px}
 .folder-body{padding:4px 0 8px}
+.session-group-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:0 0 6px}
+.session-group-tabs button{min-width:0;min-height:34px;padding:6px 7px;border-radius:10px;background:#1e293b;color:#cbd5e1;font-size:12px;white-space:nowrap}
+.session-group-tabs button.active{background:#0d6efd;color:#fff}
+.session-group-tabs b{font-size:11px;font-weight:700}
 .session{width:100%;text-align:left;padding:12px;margin:8px 0;border-radius:14px;background:var(--side-3);color:#fff;display:grid;grid-template-columns:1fr auto;gap:4px}
 .session.active{outline:2px solid #38bdf8;background:#233854}
 .session p{grid-column:1/-1;margin:0;color:#b6c4d6;font-size:12px}
@@ -180,6 +184,7 @@
 .customer-remark-form label{font-size:12px;color:var(--muted);white-space:nowrap}
 .customer-remark-form input{min-width:0;flex:1;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);color:var(--text);padding:8px 10px;font-size:13px}
 .customer-remark-form button{min-height:34px;padding:6px 10px;border-radius:10px;font-size:12px;white-space:nowrap}
+.session-action-btn{min-height:36px;padding:7px 12px;border-radius:10px;white-space:nowrap}
 .close-session-btn{min-height:36px;padding:7px 12px;border-radius:10px;white-space:nowrap}
 .ended-chip{display:inline-flex;align-items:center;min-height:30px;padding:5px 10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);font-size:12px;white-space:nowrap}
 .session-ended-state{padding:14px;text-align:center;color:var(--muted);border-top:1px solid var(--line);background:var(--panel);font-size:14px}
