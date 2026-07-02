@@ -193,14 +193,13 @@ function clearHistoryR2Keys(messages: any[], attachments: any[]) {
   }
   return keys;
 }
-const clearHistoryCounts = (messages: any[], attachments: any[]) => ({ messages: messages.length, attachments: attachments.length, r2Objects: clearHistoryR2Keys(messages, attachments).size });
-async function clearHistoryContext(env: Env, sessionId: string) {
-  const session = await getSessionById(env, sessionId);
-  if (!session) return { error: json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }) };
-  if (!canClearHistory(session)) return { error: json({ error: ERR_SESSION_ENDED }, { status: 400 }) };
+const clearHistoryCounts = (messages: any[], attachments: any[], r2Keys = clearHistoryR2Keys(messages, attachments)) => ({ messages: messages.length, attachments: attachments.length, r2Objects: r2Keys.size });
+async function collectClearHistoryContext(env: Env, session: any) {
+  const sessionId = String(session.id || '');
   const messages = (await env.DB.prepare('SELECT id,image_path FROM messages WHERE session_id=?').bind(sessionId).all<any>()).results || [];
   const attachments = (await env.DB.prepare('SELECT id,message_id,object_key FROM attachments WHERE conversation_id=? OR message_id IN (SELECT id FROM messages WHERE session_id=?)').bind(sessionId, sessionId).all<any>()).results || [];
-  return { session, messages, attachments };
+  const r2Keys = clearHistoryR2Keys(messages, attachments);
+  return { session, messages, attachments, r2Keys, counts: clearHistoryCounts(messages, attachments, r2Keys) };
 }
 async function deleteByIds(env: Env, table: 'attachments' | 'messages', ids: string[]) {
   for (let i = 0; i < ids.length; i += 80) {
@@ -221,20 +220,12 @@ async function deleteR2Object(env: Env, key: string) {
     return isR2NotFoundError(error);
   }
 }
-async function clearSessionHistory(req: Request, env: Env, sessionId: string, dryRun: boolean) {
-  await requireSuper(env, req);
-  const ctx = await clearHistoryContext(env, sessionId);
-  if ('error' in ctx) return ctx.error || json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
-  const counts = clearHistoryCounts(ctx.messages, ctx.attachments);
-  if (dryRun) return json({ ok: true, eligible: true, counts });
-  const body: any = await readJson(req);
-  if (body.confirm !== 'CLEAR_HISTORY') return json({ error: 'Invalid confirmation' }, { status: 400 });
+async function clearSessionHistoryInternal(env: Env, ctx: Awaited<ReturnType<typeof collectClearHistoryContext>>) {
   const successAttachmentIds: string[] = [];
   const failedMessageIds = new Set<string>();
   const failedObjectKeys = new Set<string>();
   const successfulObjectKeys = new Set<string>();
-  const objectKeys = clearHistoryR2Keys(ctx.messages, ctx.attachments);
-  for (const key of objectKeys) {
+  for (const key of ctx.r2Keys) {
     if (await deleteR2Object(env, key)) successfulObjectKeys.add(key);
     else failedObjectKeys.add(key);
   }
@@ -255,9 +246,21 @@ async function clearSessionHistory(req: Request, env: Env, sessionId: string, dr
   const deleteMessageIds = ctx.messages.map((m: any) => String(m.id)).filter((id: string) => id && !failedMessageIds.has(id));
   await deleteByIds(env, 'attachments', successAttachmentIds);
   await deleteByIds(env, 'messages', deleteMessageIds);
-  await env.DB.prepare('UPDATE sessions SET updated_at=? WHERE id=?').bind(now(), sessionId).run();
+  await env.DB.prepare('UPDATE sessions SET updated_at=? WHERE id=?').bind(now(), ctx.session.id).run();
+  return { deleted: { messages: deleteMessageIds.length, attachments: successAttachmentIds.length, r2Objects: successfulObjectKeys.size }, failed: { r2Objects: failedObjectKeys.size } };
+}
+async function clearSessionHistory(req: Request, env: Env, sessionId: string, dryRun: boolean) {
+  await requireSuper(env, req);
+  const session = await getSessionById(env, sessionId);
+  if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
+  if (!canClearHistory(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 });
+  const ctx = await collectClearHistoryContext(env, session);
+  if (dryRun) return json({ ok: true, eligible: true, counts: ctx.counts });
+  const body: any = await readJson(req);
+  if (body.confirm !== 'CLEAR_HISTORY') return json({ error: 'Invalid confirmation' }, { status: 400 });
+  const result = await clearSessionHistoryInternal(env, ctx);
   await notifyAdmins(env);
-  return json({ ok: true, deleted: { messages: deleteMessageIds.length, attachments: successAttachmentIds.length, r2Objects: successfulObjectKeys.size }, failed: { r2Objects: failedObjectKeys.size } });
+  return json({ ok: true, ...result });
 }
 async function updateCustomerRemark(req: Request, env: Env, sessionId: string) {
   const admin = await requireAdmin(env, req);
