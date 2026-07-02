@@ -204,6 +204,16 @@ async function collectLifecycleDryRunStats(env: Env): Promise<LifecycleDryRunSta
     autoClearHistoryAttachmentCount: Number(clearAttachments?.count || 0),
   };
 }
+async function autoArchiveClosedSessions(env: Env, limit = 20) {
+  const archiveLimit = Math.max(0, Math.min(20, Math.floor(limit)));
+  if (!archiveLimit) return { archiveLimit, archivedCount: 0 };
+  const candidates = (await env.DB.prepare("SELECT id FROM sessions WHERE status='CLOSED' AND closed_at <= datetime('now', '-24 hours') AND archived_at IS NULL AND deleted_at IS NULL ORDER BY closed_at ASC LIMIT ?").bind(archiveLimit).all<any>()).results || [];
+  const ids = candidates.map((row: any) => String(row.id || '')).filter(Boolean);
+  if (!ids.length) return { archiveLimit, archivedCount: 0 };
+  const t = now();
+  const result: any = await env.DB.prepare(`UPDATE sessions SET archived_at=?,archived_by=NULL,updated_at=? WHERE id IN (${ids.map(() => '?').join(',')}) AND status='CLOSED' AND closed_at <= datetime('now', '-24 hours') AND archived_at IS NULL AND deleted_at IS NULL`).bind(t, t, ...ids).run();
+  return { archiveLimit, archivedCount: Number(result?.meta?.changes || 0) };
+}
 function canClearHistory(session: any) { return Boolean(session && (session.status === 'CLOSED' || session.status === 'ARCHIVED' || session.archived_at || session.deleted_at)); }
 function clearHistoryR2Keys(messages: any[], attachments: any[]) {
   const keys = new Set<string>();
@@ -408,20 +418,26 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext) {
     try {
       const stats = await collectLifecycleDryRunStats(env);
+      const archiveResult = await autoArchiveClosedSessions(env, 20);
       console.log(JSON.stringify({
-        mode: 'lifecycle:scheduled-dry-run',
+        mode: 'lifecycle:scheduled',
         trigger: 'scheduled',
-        ...stats,
-        readOnly: true,
-        writesExecuted: false,
+        cutoff: stats.cutoff,
+        autoArchiveCandidateCount: stats.autoArchiveCount,
+        autoArchiveProcessedCount: archiveResult.archivedCount,
+        autoRecycleCount: stats.autoRecycleCount,
+        autoClearHistorySessionCount: stats.autoClearHistorySessionCount,
+        autoClearHistoryMessageCount: stats.autoClearHistoryMessageCount,
+        autoClearHistoryAttachmentCount: stats.autoClearHistoryAttachmentCount,
+        archiveLimit: archiveResult.archiveLimit,
+        writesExecuted: archiveResult.archivedCount > 0,
       }));
     } catch {
       console.error(JSON.stringify({
-        mode: 'lifecycle:scheduled-dry-run',
+        mode: 'lifecycle:scheduled',
         trigger: 'scheduled',
         ok: false,
-        error: 'scheduled dry-run failed',
-        readOnly: true,
+        error: 'scheduled lifecycle failed',
         writesExecuted: false,
       }));
     }
