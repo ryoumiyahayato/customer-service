@@ -4,6 +4,7 @@
     "dev:spa": "vite --host 127.0.0.1",
     "doctor": "node scripts/doctor.mjs",
     "doctor:online": "node scripts/doctor.mjs --online",
+    "lifecycle:dry-run": "node scripts/lifecycle-dry-run.mjs",
     "bootstrap:cloudflare": "node scripts/bootstrap-cloudflare.mjs",
     "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
     "build": "vite build && wrangler deploy --dry-run --outdir .wrangler-dry-run",
