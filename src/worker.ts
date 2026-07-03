@@ -5,6 +5,7 @@ export interface Env {
   CHAT_ROOM: DurableObjectNamespace;
   ASSETS: Fetcher;
   SESSION_SECRET: string;
+  SETUP_TOKEN?: string;
   SUPER_ADMIN_USERNAME?: string;
   SUPER_ADMIN_PASSWORD?: string;
   VISITOR_ROOT_DOMAIN?: string;
@@ -53,6 +54,7 @@ async function createAdminSession(env: Env, adminId: string) { const id = rid('a
 async function createVisitorSession(env: Env, accountId: string, visitorKey?: string) { const id = rid('vsess'); await env.DB.prepare('INSERT INTO visitor_sessions(id,visitor_account_id,visitor_key,token_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)').bind(id, accountId, visitorKey || null, await tokenHash(env, id), now(), expiresAt()).run(); return await makeToken(env, id); }
 async function hashPassword(password: string) { const salt = crypto.getRandomValues(new Uint8Array(16)); const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, key, 256); return `pbkdf2:100000:${b64(salt)}:${b64(new Uint8Array(bits))}`; }
 async function verifyPassword(password: string, stored: string) { if (!stored?.startsWith('pbkdf2:')) return false; const [, iterRaw, saltRaw, hashRaw] = stored.split(':'); const salt = unb64(saltRaw); const expected = unb64(hashRaw); const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: Number(iterRaw), hash: 'SHA-256' }, key, expected.length * 8); const actual = new Uint8Array(bits); let diff = actual.length ^ expected.length; for (let i = 0; i < Math.min(actual.length, expected.length); i++) diff |= actual[i] ^ expected[i]; return diff === 0; }
+function constantTimeEqual(a: string, b: string) { const left = enc.encode(a); const right = enc.encode(b); let diff = left.length ^ right.length; const len = Math.max(left.length, right.length); for (let i = 0; i < len; i++) diff |= (left[i] || 0) ^ (right[i] || 0); return diff === 0; }
 async function ensureBootstrap(env: Env) { const row = await env.DB.prepare("SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1").first(); if (row) return; const username = env.SUPER_ADMIN_USERNAME?.trim(); const password = env.SUPER_ADMIN_PASSWORD; if (!username || !password) return; const t = now(); await env.DB.prepare('INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(rid('admin'), username, username, await hashPassword(password), 'SUPER_ADMIN', 0, 0, t, t, t).run(); }
 function isAdminSessionExpired(session: any, at = Date.now()) {
   const createdAt = Date.parse(session?.created_at || '');
@@ -362,15 +364,99 @@ async function logoutAdmin(req: Request, env: Env) {
   }
   return json({ ok: true }, { headers: { 'Set-Cookie': clearCookie(ADMIN_COOKIE) } });
 }
+function setupError(reason: 'already_configured' | 'missing_setup_token' | 'invalid_setup_token' | 'invalid_input' | 'setup_failed', status = 400) {
+  return json({ ok: false, error: 'setup_failed', reason }, { status });
+}
+function isLocalSetupRequest(req: Request) {
+  const url = new URL(req.url);
+  const host = url.hostname.toLowerCase();
+  const requestHost = (req.headers.get('host') || host).toLowerCase();
+  return isLocalDevHost(host) || isLocalDevHost(requestHost);
+}
+function isSetupApiHostAllowed(req: Request) {
+  const url = new URL(req.url);
+  const host = url.hostname.toLowerCase();
+  const requestHost = (req.headers.get('host') || host).toLowerCase();
+  return host === BACKEND_HOST || requestHost === BACKEND_HOST || isLocalDevHost(host) || isLocalDevHost(requestHost);
+}
+async function hasAnyAdmin(env: Env) {
+  const row = await env.DB.prepare('SELECT id FROM admins LIMIT 1').first<any>();
+  return Boolean(row?.id);
+}
+function setupTokenRequired(env: Env, req: Request) {
+  return !isLocalSetupRequest(req) || Boolean(env.SETUP_TOKEN?.trim());
+}
+async function validSetupToken(env: Env, provided: unknown) {
+  const expected = env.SETUP_TOKEN?.trim();
+  if (!expected) return false;
+  const actual = typeof provided === 'string' ? provided.trim() : '';
+  if (!actual) return false;
+  return constantTimeEqual(await hmac(env.SESSION_SECRET, 'setup:' + actual), await hmac(env.SESSION_SECRET, 'setup:' + expected));
+}
+async function setupStatus(req: Request, env: Env) {
+  if (await hasAnyAdmin(env)) return json({ ok: true, setupAvailable: false, requiresSetupToken: false, reason: 'already_configured' });
+  const tokenRequired = setupTokenRequired(env, req);
+  if (tokenRequired && !env.SETUP_TOKEN?.trim()) return json({ ok: true, setupAvailable: false, requiresSetupToken: true, reason: 'missing_setup_token' });
+  return json({ ok: true, setupAvailable: true, requiresSetupToken: tokenRequired, reason: 'no_admins' });
+}
+async function initializeSetup(req: Request, env: Env) {
+  if (await hasAnyAdmin(env)) return setupError('already_configured', 409);
+
+  const tokenRequired = setupTokenRequired(env, req);
+  if (tokenRequired && !env.SETUP_TOKEN?.trim()) return setupError('missing_setup_token', 403);
+  const body: any = await readJson(req);
+  if (tokenRequired && !(await validSetupToken(env, body.setupToken))) return setupError('invalid_setup_token', 403);
+
+  const username = String(body.username || '').trim();
+  const displayNameRaw = String(body.displayName || '').trim();
+  const displayName = displayNameRaw || username;
+  const password = typeof body.password === 'string' ? body.password : '';
+  const confirmPassword = typeof body.confirmPassword === 'string' ? body.confirmPassword : '';
+
+  if (!/^[A-Za-z0-9_.@-]{3,64}$/.test(username)) return setupError('invalid_input');
+  if (!displayName || displayName.length > 80) return setupError('invalid_input');
+  if (password.length < 12 || password !== confirmPassword) return setupError('invalid_input');
+  if (await hasAnyAdmin(env)) return setupError('already_configured', 409);
+
+  const adminId = rid('admin');
+  const t = now();
+  try {
+    await env.DB.prepare('INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,NULL)').bind(adminId, username, displayName, await hashPassword(password), 'SUPER_ADMIN', 0, 0, t, t).run();
+  } catch {
+    console.warn('setup initialize insert rejected');
+    return (await hasAnyAdmin(env)) ? setupError('already_configured', 409) : setupError('setup_failed', 500);
+  }
+
+  const created = await env.DB.prepare("SELECT id FROM admins WHERE id=? AND role='SUPER_ADMIN'").bind(adminId).first<any>();
+  if (!created?.id) return setupError('setup_failed', 500);
+  return json({ ok: true, initialized: true, next: 'login', message: 'setup_complete_rotate_token' });
+}
+async function setupApi(req: Request, env: Env) {
+  if (!isSetupApiHostAllowed(req)) return empty(404);
+  const path = new URL(req.url).pathname;
+  try {
+    if (req.method !== 'GET') {
+      const limited = await rateLimit(env, req);
+      if (limited) return limited;
+    }
+    if (path === '/api/setup/status' && req.method === 'GET') return setupStatus(req, env);
+    if (path === '/api/setup/initialize' && req.method === 'POST') return initializeSetup(req, env);
+    return empty(404);
+  } catch {
+    console.error('setup api failed');
+    return setupError('setup_failed', 500);
+  }
+}
 async function visitorLogin(req: Request, env: Env, username: string, password: string) { const account = await env.DB.prepare('SELECT * FROM visitor_accounts WHERE username=?').bind(username).first<any>(); if (!account || !(await verifyPassword(password, account.password_hash))) return json({ error: 'Invalid credentials' }, { status: 401 }); const t = now(); await env.DB.prepare('UPDATE visitor_accounts SET last_login_at=?,updated_at=? WHERE id=?').bind(t, t, account.id).run(); const safe = { id: account.id, username: account.username, display_name: account.display_name, last_login_at: t }; return json({ type: 'user', account: safe }, { headers: { 'Set-Cookie': setCookie(VISITOR_COOKIE, await createVisitorSession(env, account.id)) } }); }
 async function createMessage(req: Request, env: Env) { const b: any = await readJson(req); const admin = await currentAdmin(env, req); const senderType = ((b.senderType || (admin ? 'OPERATOR' : 'VISITOR')) === 'OPERATOR' ? 'OPERATOR' : 'VISITOR') as 'VISITOR' | 'OPERATOR'; let senderId = ''; let sessionId = String(b.sessionId || ''); let session: any = null; if (senderType === 'OPERATOR') { if (!admin) return json({ error: ERR_LOGIN_REQUIRED }, { status: 401 }); session = await getSessionById(env, sessionId); if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (!canSendMessage(admin, session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); senderId = admin.id; } else { const guest = await currentGuestSession(env, req); if (!guest) return invalidInvite(); sessionId = sessionId || guest.session.id; session = await getSessionById(env, sessionId); if (!session || guest.session.id !== session.id || guest.user.id !== session.user_id) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (sessionEnded(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); senderId = guest.visitorKey; } const rawClientId = typeof b.clientMessageId === 'string' ? b.clientMessageId.trim() : ''; const clientMessageId = rawClientId ? rawClientId.slice(0, 120) : `server:${rid('cmid')}`; const existing = await env.DB.prepare('SELECT * FROM messages WHERE session_id=? AND sender_type=? AND sender_id=? AND client_message_id=?').bind(sessionId, senderType, senderId, clientMessageId).first<any>(); if (existing) return json({ message: existing, session: sessionForAudience(session, admin), deduped: true }); const t = now(); const msg = { id: rid('msg'), session_id: sessionId, sender_type: senderType, sender_id: senderId, content: String(b.content || ''), message_type: b.messageType === 'image' ? 'image' : 'text', image_path: b.imagePath || null, status: 'sent', created_at: t, read_at: null, is_read: 0, quote_message_id: b.quoteMessageId || null, recalled_at: null, image_purged_at: null, client_message_id: clientMessageId }; try { await env.DB.prepare('INSERT INTO messages(id,session_id,sender_type,sender_id,content,message_type,image_path,status,created_at,read_at,is_read,quote_message_id,recalled_at,image_purged_at,client_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(msg.id, msg.session_id, msg.sender_type, msg.sender_id, msg.content, msg.message_type, msg.image_path, msg.status, msg.created_at, msg.read_at, msg.is_read, msg.quote_message_id, msg.recalled_at, msg.image_purged_at, msg.client_message_id).run(); } catch (e) { const row = await env.DB.prepare('SELECT * FROM messages WHERE session_id=? AND sender_type=? AND sender_id=? AND client_message_id=?').bind(sessionId, senderType, senderId, clientMessageId).first<any>(); if (row) return json({ message: row, session: sessionForAudience(session, admin), deduped: true }); throw e; } const attachmentKey = msg.message_type === 'image' ? attachmentKeyFromPath(msg.image_path) : ''; if (attachmentKey) await env.DB.prepare('UPDATE attachments SET message_id=? WHERE conversation_id=? AND object_key=? AND created_by_type=? AND created_by_id=? AND message_id IS NULL').bind(msg.id, sessionId, attachmentKey, senderType, senderId).run(); await env.DB.prepare('UPDATE sessions SET updated_at=? WHERE id=?').bind(t, sessionId).run(); session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<any>(); await broadcast(env, `conversation:${sessionId}`, { type: 'message:new', conversationId: sessionId, message: msg, session: publicGuestSession(session) }); await notifyAdmins(env); return json({ message: msg, session: sessionForAudience(session, admin) }); }
 async function sessionAction(req: Request, env: Env, sessionId: string, action: string) { const admin = await requireAdmin(env, req); const sessionBefore = await getSessionById(env, sessionId); if (!sessionBefore) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); if (!canManageSession(admin, sessionBefore)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); const t = now(); if (action === 'assign') { if (sessionEnded(sessionBefore)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare("UPDATE sessions SET assigned_operator_id=?,last_operator_id=?,status='OPEN',updated_at=? WHERE id=? AND deleted_at IS NULL").bind(admin.id, admin.id, t, sessionId).run(); } if (action === 'close') await env.DB.prepare("UPDATE sessions SET status='CLOSED',closed_at=COALESCE(closed_at,?),updated_at=? WHERE id=? AND deleted_at IS NULL").bind(t, t, sessionId).run(); if (action === 'archive') { if (sessionBefore.deleted_at || sessionBefore.status !== 'CLOSED') return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare('UPDATE sessions SET archived_at=?,archived_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND status=?').bind(t, admin.id, t, sessionId, 'CLOSED').run(); } if (action === 'unarchive') { if (sessionBefore.deleted_at) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare("UPDATE sessions SET archived_at=NULL,archived_by=NULL,status='CLOSED',updated_at=? WHERE id=? AND (archived_at IS NOT NULL OR status='ARCHIVED')").bind(t, sessionId).run(); } if (action === 'delete') { if (sessionBefore.deleted_at || (sessionBefore.status !== 'CLOSED' && sessionBefore.status !== 'ARCHIVED' && !sessionBefore.archived_at)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare('UPDATE sessions SET deleted_at=?,deleted_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL').bind(t, admin.id, t, sessionId).run(); } if (action === 'restore') await env.DB.prepare('UPDATE sessions SET deleted_at=NULL,deleted_by=NULL,updated_at=? WHERE id=?').bind(t, sessionId).run(); const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<any>(); await broadcast(env, `conversation:${sessionId}`, { type: 'session:updated', conversationId: sessionId, session: publicGuestSession(session) }); await notifyAdmins(env); return json({ ok: true, session }); }
 async function bindGuest(env: Env, visitorKey: string, account: VisitorAccount) { if (!visitorKey.startsWith('visitor_')) return; const accountKey = `acct_${account.id}`; const t = now(); const accountUser = await env.DB.prepare('SELECT id FROM users WHERE visitor_key=?').bind(accountKey).first<any>(); const guestUser = await env.DB.prepare('SELECT id FROM users WHERE visitor_key=?').bind(visitorKey).first<any>(); if (!guestUser) return; if (accountUser) { await env.DB.prepare('UPDATE sessions SET user_id=?,updated_at=? WHERE user_id=?').bind(accountUser.id, t, guestUser.id).run(); await env.DB.prepare('DELETE FROM users WHERE id=?').bind(guestUser.id).run(); } else await env.DB.prepare('UPDATE users SET visitor_key=?,account_id=?,display_name=?,updated_at=? WHERE id=?').bind(accountKey, account.id, account.display_name, t, guestUser.id).run(); }
 async function upload(req: Request, env: Env) { const url = new URL(req.url); const sessionId = String(url.searchParams.get('sessionId') || ''); if (!sessionId) return json({ error: ERR_MISSING_SESSION }, { status: 400 }); const session = await getSessionById(env, sessionId); if (!session) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); const admin = await currentAdmin(env, req); let createdByType: 'VISITOR' | 'OPERATOR' = 'VISITOR'; let createdById = ''; if (admin) { if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (!canUploadAttachment(admin, session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); createdByType = 'OPERATOR'; createdById = admin.id; } else { const guest = await currentGuestSession(env, req); if (!guest || guest.session.id !== session.id || guest.user.id !== session.user_id) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (sessionEnded(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); createdById = guest.visitorKey; } const form = await req.formData(); const file = form.get('file'); if (!(file instanceof File)) return json({ error: ERR_PICK_IMAGE }, { status: 400 }); const allowed: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }; if (!allowed[file.type]) return json({ error: ERR_IMAGE_TYPE }, { status: 400 }); if (file.size > 5 * 1024 * 1024) return json({ error: ERR_IMAGE_SIZE }, { status: 413 }); const key = `${crypto.randomUUID()}.${allowed[file.type]}`; await env.UPLOADS.put(key, file.stream(), { httpMetadata: { contentType: file.type } }); const t = now(); await env.DB.prepare('INSERT INTO attachments(id,message_id,conversation_id,object_key,file_name,mime_type,byte_size,created_at,created_by_type,created_by_id,expires_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL)').bind(rid('att'), null, session.id, key, null, file.type, file.size, t, createdByType, createdById, expiresAt(7)).run(); return json({ path: `/api/attachments/${key}` }); }
 async function api(req: Request, env: Env) {
-  await ensureBootstrap(env);
   const url = new URL(req.url);
   const path = url.pathname;
+  if (path.startsWith('/api/setup/')) return setupApi(req, env);
+  await ensureBootstrap(env);
   if (req.method !== 'GET' && !path.startsWith('/api/ws')) { const limited = await rateLimit(env, req); if (limited) return limited; }
   if (path === '/api/auth/me') { const admin = await currentAdmin(env, req, true); if (admin?.is_disabled) return json({ admin: null, disabled: true }, { status: 403, headers: { 'Set-Cookie': clearCookie(ADMIN_COOKIE) } }); return json({ admin }); }
   if (path === '/api/auth/logout' && req.method === 'POST') return logoutAdmin(req, env);
@@ -532,10 +618,14 @@ export default {
       }
       const pathname = url.pathname;
       const visitorRoot = (env.VISITOR_ROOT_DOMAIN || 'vx9qn7zr.org').toLowerCase();
+      const isLocalHost = isLocalDevHost(host) || isLocalDevHost(requestHost);
+      const isSetupApiPath = pathname.startsWith('/api/setup/');
+      const isBackendHost = host === BACKEND_HOST;
+
+      if (isSetupApiPath && !isBackendHost && !isLocalHost) return empty(404);
 
       if (host === visitorRoot) return empty(404);
 
-      const isBackendHost = host === BACKEND_HOST;
       const isVisitorSubdomain = host.endsWith('.' + visitorRoot);
       let visitorToken: string | null = null;
 
@@ -547,7 +637,7 @@ export default {
         if (inviteStatus !== 200) return empty(inviteStatus);
       }
 
-      if (!isBackendHost && !visitorToken) return empty(404);
+      if (!isBackendHost && !visitorToken && !(isSetupApiPath && isLocalHost)) return empty(404);
 
       if (pathname === '/ws') {
         return isBackendHost ? new Response('Forbidden', { status: 403, headers: noStoreHeaders }) : empty(404);
