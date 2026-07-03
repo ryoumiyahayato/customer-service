@@ -104,6 +104,23 @@ function matchedKeywords(text, keywords) {
   });
 }
 
+function hasAll(text, patterns) {
+  return patterns.every((pattern) => pattern.test(text));
+}
+
+function setupTokenKey() {
+  return ['SETUP', 'TOKEN'].join('_');
+}
+
+function frontendSourceFiles() {
+  return walkFiles(path.join(root, 'src')).filter((file) => {
+    const name = rel(file);
+    if (name === 'src/worker.ts') return false;
+    if (name.startsWith('src/durable-objects/')) return false;
+    return /\.(?:tsx?|jsx?)$/.test(name);
+  });
+}
+
 function hasHsts(response) {
   return Boolean(response.headers.get('strict-transport-security'));
 }
@@ -348,6 +365,159 @@ function checkLifecycleAutomation() {
   checkLifecycleScheduledHandler();
 }
 
+function checkSetupBackendApi() {
+  const text = readTextIfExists(path.join(root, 'src/worker.ts'));
+  if (text === null) {
+    result('setup.backend_api', 'fail', 'high', 'src/worker.ts is missing, so setup API static checks could not run.', 'Restore the Worker entrypoint with the setup API implementation.');
+    return;
+  }
+
+  const requirements = [
+    { name: 'status endpoint', ok: text.includes('/api/setup/status') },
+    { name: 'initialize endpoint', ok: text.includes('/api/setup/initialize') },
+    { name: 'runtime setup token env access', ok: new RegExp(`\\b${setupTokenKey()}\\b`).test(text) },
+    { name: 'existing admin disables setup', ok: hasAll(text, [/\bhasAnyAdmin\b/, /already_configured/]) },
+    { name: 'missing production setup token is rejected', ok: hasAll(text, [/\bsetupTokenRequired\b/, /missing_setup_token/]) },
+  ];
+  const missing = requirements.filter((item) => !item.ok).map((item) => item.name);
+  if (!missing.length) {
+    result('setup.backend_api', 'pass', 'high', 'Setup API endpoints and guard structures are present in the Worker.', 'No action required.');
+    return;
+  }
+
+  result('setup.backend_api', 'fail', 'high', `Setup API static check is missing: ${missing.join(', ')}.`, 'Restore the setup status and initialize endpoints with admin-exists and setup-token guards.');
+}
+
+function checkSetupFrontendRoute() {
+  const routing = readTextIfExists(path.join(root, 'src/routing.ts'));
+  const app = readTextIfExists(path.join(root, 'src/App.tsx'));
+  const pkgText = readTextIfExists(path.join(root, 'package.json'));
+  if (routing === null || app === null || pkgText === null) {
+    result('setup.frontend_route', 'fail', 'high', 'Frontend routing files or package.json are missing, so setup route static checks could not run.', 'Restore src/routing.ts, src/App.tsx, and package.json.');
+    return;
+  }
+
+  let pkg = {};
+  try {
+    pkg = JSON.parse(pkgText);
+  } catch {
+    result('setup.frontend_route', 'fail', 'high', 'package.json could not be parsed during setup route checks.', 'Fix package.json syntax.');
+    return;
+  }
+
+  const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  const hasNewRouterDependency = Object.keys(deps).some((name) => /^react-router(?:-dom)?$/.test(name));
+  const requirements = [
+    { name: 'setup mode or /setup route recognition', ok: /\bsetup\b/.test(routing) && /\/setup/.test(routing) },
+    { name: 'SetupPage rendered for setup mode', ok: /SetupPage/.test(app) && /mode\.type\s*===\s*['"]setup['"]/.test(app) },
+    { name: 'no router dependency introduced', ok: !hasNewRouterDependency },
+  ];
+  const missing = requirements.filter((item) => !item.ok).map((item) => item.name);
+  if (!missing.length) {
+    result('setup.frontend_route', 'pass', 'high', 'Setup frontend route is wired through the existing routing flow without a router dependency.', 'No action required.');
+    return;
+  }
+
+  result('setup.frontend_route', 'fail', 'high', `Setup frontend route static check is missing: ${missing.join(', ')}.`, 'Wire /setup through the existing routing mode and avoid adding a router dependency.');
+}
+
+function checkSetupFrontendPage() {
+  const text = readTextIfExists(path.join(root, 'src/admin/SetupPage.tsx'));
+  if (text === null) {
+    result('setup.frontend_page', 'fail', 'high', 'src/admin/SetupPage.tsx is missing.', 'Add the setup page component.');
+    return;
+  }
+
+  const requirements = [
+    { name: 'status request', ok: text.includes('/api/setup/status') },
+    { name: 'initialize request', ok: text.includes('/api/setup/initialize') },
+    { name: 'password field logic', ok: /\bpassword\b/.test(text) && /\bconfirmPassword\b/.test(text) && /\bsetupToken\b/.test(text) },
+    { name: 'no automatic login call', ok: !/\/api\/auth\/login|\/api\/login/.test(text) },
+    { name: 'login navigation after success', ok: /前往登录|next.*login|\/admin/.test(text) },
+    { name: 'rotate or remove setup token prompt', ok: /删除|轮换/.test(text) && /getSetupTokenConfigName/.test(text) },
+  ];
+  const missing = requirements.filter((item) => !item.ok).map((item) => item.name);
+  if (!missing.length) {
+    result('setup.frontend_page', 'pass', 'high', 'Setup page requests status, submits only from the form, and shows safe completion guidance.', 'No action required.');
+    return;
+  }
+
+  result('setup.frontend_page', 'fail', 'high', `Setup page static check is missing: ${missing.join(', ')}.`, 'Restore the setup form, safe status handling, and completion guidance.');
+}
+
+function checkSetupNoPlaintextSecret() {
+  const key = setupTokenKey();
+  const wrangler = readTextIfExists(path.join(root, 'wrangler.toml'));
+  if (wrangler === null) {
+    result('setup.no_plaintext_secret', 'fail', 'high', 'wrangler.toml is missing, so setup secret placement could not be checked.', 'Restore wrangler.toml and keep setup initialization secrets in Wrangler secrets.');
+    return;
+  }
+
+  const frontendFiles = frontendSourceFiles();
+  const envReferenceHits = [];
+  const hardcodedTokenHits = [];
+  const hardcodedTokenPattern = /\b(?:setupToken|setup[_-]?token)\b\s*[:=]\s*['"][A-Za-z0-9_./+=-]{16,}['"]/i;
+  for (const file of frontendFiles) {
+    const text = readTextIfExists(file) || '';
+    if (new RegExp(`import\\.meta\\.env\\.${key}\\b`).test(text)) envReferenceHits.push(rel(file));
+    if (hardcodedTokenPattern.test(text)) hardcodedTokenHits.push(rel(file));
+  }
+
+  const issues = [];
+  if (new RegExp(`\\b${key}\\b`).test(wrangler)) issues.push('wrangler.toml contains setup token configuration');
+  if (envReferenceHits.length) issues.push(`frontend env reference in ${envReferenceHits.join(', ')}`);
+  if (hardcodedTokenHits.length) issues.push(`possible hardcoded setup token in ${hardcodedTokenHits.join(', ')}`);
+
+  if (!issues.length) {
+    result('setup.no_plaintext_secret', 'pass', 'high', 'No plaintext setup initialization secret placement was found in wrangler.toml or frontend source files.', 'Use Wrangler secrets for setup initialization and keep frontend code free of setup secret values.');
+    return;
+  }
+
+  result('setup.no_plaintext_secret', 'fail', 'high', `Plaintext setup secret risk found: ${issues.join('; ')}.`, 'Move setup initialization secrets to Wrangler secrets and do not expose them through frontend env variables.');
+}
+
+function checkSetupDistSecretScan() {
+  const distDir = path.join(root, 'dist');
+  const tracked = gitTracked(['dist']);
+  if (!existsSync(distDir)) {
+    result('setup.dist_secret_scan', 'warn', 'low', 'dist does not exist, so setup dist secret scan was skipped.', 'Run npm run build and rerun doctor before publishing artifacts.');
+    return;
+  }
+  if (!tracked.length) {
+    result('setup.dist_secret_scan', 'warn', 'low', 'dist is not tracked by Git, so setup dist secret scan was skipped for tracked artifacts.', 'Run npm run build and scan any published artifact directory.');
+    return;
+  }
+
+  const files = walkFiles(distDir);
+  const highRisk = [setupTokenKey(), 'password_hash', `import.meta.env.${setupTokenKey()}`];
+  const counts = Object.fromEntries(highRisk.map((keyword) => [keyword, 0]));
+  let setupTokenFieldNameFiles = 0;
+  for (const file of files) {
+    const text = readTextIfExists(file) || '';
+    for (const keyword of highRisk) {
+      if (text.includes(keyword)) counts[keyword] += 1;
+    }
+    if (text.includes('setupToken')) setupTokenFieldNameFiles += 1;
+  }
+
+  const failures = Object.entries(counts).filter(([, count]) => count > 0).map(([keyword, count]) => `${keyword} in ${count} file(s)`);
+  if (!failures.length) {
+    const suffix = setupTokenFieldNameFiles ? ` setupToken field name appears in ${setupTokenFieldNameFiles} file(s) and is treated as an API field name, not a secret value.` : '';
+    result('setup.dist_secret_scan', 'pass', 'high', `No setup high-risk keywords were found in tracked dist artifacts.${suffix}`, 'Keep scanning built artifacts before publishing.');
+    return;
+  }
+
+  result('setup.dist_secret_scan', 'fail', 'high', `Setup high-risk keyword(s) found in dist: ${failures.join(', ')}.`, 'Remove setup secret material from frontend inputs, rebuild dist, and rerun doctor.');
+}
+
+function checkSetupReadiness() {
+  checkSetupBackendApi();
+  checkSetupFrontendRoute();
+  checkSetupFrontendPage();
+  checkSetupNoPlaintextSecret();
+  checkSetupDistSecretScan();
+}
+
 function checkGitignore() {
   const file = path.join(root, '.gitignore');
   const text = readTextIfExists(file);
@@ -576,6 +746,7 @@ async function main() {
   checkWranglerSecrets();
   checkPackageScripts();
   checkLifecycleAutomation();
+  checkSetupReadiness();
   checkFileExists('docs.security_baseline.exists', 'docs/SECURITY_BASELINE.md');
   checkFileExists('docs.doctor_plan.exists', 'docs/DOCTOR_PLAN.md');
   checkFileExists('templates.deploy_example.exists', 'templates/deploy.example.bat');

@@ -263,6 +263,49 @@ function checkLifecycleAutomation() {
   checkLifecycleScheduledHandler();
 }
 
+function setupTokenKey() {
+  return ['SETUP', 'TOKEN'].join('_');
+}
+
+function checkSetupDeploymentGuidance() {
+  const key = setupTokenKey();
+  result(
+    'setup.secret.worker_secret',
+    'warn',
+    'medium',
+    `For production setup initialization, configure ${key} as a Worker secret before using /setup.`,
+    `Run: wrangler secret put ${key}`,
+  );
+  result(
+    'setup.secret.not_in_wrangler_vars',
+    'pass',
+    'info',
+    `Do not place ${key} in wrangler.toml [vars].`,
+    'Keep setup initialization secrets in Wrangler secrets only.',
+  );
+  result(
+    'setup.secret.not_frontend_env',
+    'pass',
+    'info',
+    `Do not place ${key} in frontend .env files or import.meta.env.`,
+    'The setup page should accept the initialization credential only from the form.',
+  );
+  result(
+    'setup.secret.rotate_after_initialize',
+    'warn',
+    'medium',
+    `After initialization succeeds, delete or rotate ${key}.`,
+    `Use Wrangler secret management to remove or rotate ${key}; this preflight does not modify secrets.`,
+  );
+  result(
+    'setup.initialization.path',
+    'pass',
+    'info',
+    'Preferred first-admin initialization path is now /setup.',
+    'Existing bootstrap admin environment support remains compatibility behavior and should not be removed in this preflight.',
+  );
+}
+
 function main() {
   checkNode();
   checkNpm();
@@ -275,6 +318,7 @@ function main() {
   checkPackageScripts();
   checkWranglerToml();
   checkLifecycleAutomation();
+  checkSetupDeploymentGuidance();
   checkExists('docs.security_baseline.exists', 'docs/SECURITY_BASELINE.md');
   checkExists('docs.doctor_plan.exists', 'docs/DOCTOR_PLAN.md');
   checkExists('templates.deploy_example.exists', 'templates/deploy.example.bat');
