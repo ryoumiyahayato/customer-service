@@ -271,6 +271,83 @@ function checkFileExists(code, file, severity = 'medium') {
   result(code, 'fail', severity, `${file} is missing.`, `Add ${file}.`);
 }
 
+function checkLifecycleTriggerConfig() {
+  const text = readTextIfExists(path.join(root, 'wrangler.toml'));
+  if (text === null) {
+    result('lifecycle.trigger_config', 'fail', 'high', 'wrangler.toml is missing, so lifecycle cron configuration could not be checked.', 'Add [triggers] crons = ["0 * * * *"] to wrangler.toml.');
+    return;
+  }
+
+  const configured = /^\s*\[triggers\]\s*$(?:\r?\n(?!\s*\[)[^\r\n]*)*?\r?\n\s*crons\s*=\s*\[\s*"0 \* \* \* \*"\s*\]\s*$/m.test(text);
+  if (configured) {
+    result('lifecycle.trigger_config', 'pass', 'info', 'Lifecycle cron trigger is configured for hourly execution.', 'No action required.');
+    return;
+  }
+
+  result('lifecycle.trigger_config', 'fail', 'high', 'Lifecycle cron trigger is missing or not configured as crons = ["0 * * * *"].', 'Add [triggers] crons = ["0 * * * *"] to wrangler.toml.');
+}
+
+function checkLifecycleDryRunScript() {
+  const file = path.join(root, 'package.json');
+  const text = readTextIfExists(file);
+  if (text === null) {
+    result('lifecycle.dry_run_script', 'fail', 'high', 'package.json is missing, so lifecycle:dry-run could not be checked.', 'Restore package.json with a lifecycle:dry-run script.');
+    return;
+  }
+
+  let pkg;
+  try {
+    pkg = JSON.parse(text);
+  } catch {
+    result('lifecycle.dry_run_script', 'fail', 'high', 'package.json could not be parsed, so lifecycle:dry-run could not be checked.', 'Fix package.json syntax.');
+    return;
+  }
+
+  const hasPackageScript = Boolean(pkg.scripts?.['lifecycle:dry-run']);
+  const hasScriptFile = existsSync(path.join(root, 'scripts/lifecycle-dry-run.mjs'));
+  if (hasPackageScript && hasScriptFile) {
+    result('lifecycle.dry_run_script', 'pass', 'info', 'Lifecycle dry-run package script and script file exist.', 'No action required.');
+    return;
+  }
+
+  const missing = [];
+  if (!hasPackageScript) missing.push('package script lifecycle:dry-run');
+  if (!hasScriptFile) missing.push('scripts/lifecycle-dry-run.mjs');
+  result('lifecycle.dry_run_script', 'fail', 'high', `Missing lifecycle dry-run requirement(s): ${missing.join(', ')}.`, 'Add the lifecycle dry-run script before relying on lifecycle automation checks.');
+}
+
+function checkLifecycleMigrationFields() {
+  const file = 'migrations/0008_session_lifecycle_fields.sql';
+  if (existsSync(path.join(root, file))) {
+    result('lifecycle.migration_fields', 'pass', 'info', `${file} exists.`, 'No action required.');
+    return;
+  }
+
+  result('lifecycle.migration_fields', 'fail', 'high', `${file} is missing.`, 'Add the lifecycle fields migration file before enabling lifecycle automation.');
+}
+
+function checkLifecycleScheduledHandler() {
+  const text = readTextIfExists(path.join(root, 'src/worker.ts'));
+  if (text === null) {
+    result('lifecycle.scheduled_handler', 'fail', 'high', 'src/worker.ts is missing, so the scheduled handler could not be checked.', 'Restore the Worker entrypoint with a scheduled handler.');
+    return;
+  }
+
+  if (/\basync\s+scheduled\s*\(/.test(text) || /\bscheduled\s*\([^)]*\)\s*\{/.test(text)) {
+    result('lifecycle.scheduled_handler', 'pass', 'info', 'Worker scheduled handler exists.', 'No action required.');
+    return;
+  }
+
+  result('lifecycle.scheduled_handler', 'fail', 'high', 'Worker scheduled handler is missing.', 'Add a scheduled handler before relying on lifecycle cron automation.');
+}
+
+function checkLifecycleAutomation() {
+  checkLifecycleTriggerConfig();
+  checkLifecycleDryRunScript();
+  checkLifecycleMigrationFields();
+  checkLifecycleScheduledHandler();
+}
+
 function checkGitignore() {
   const file = path.join(root, '.gitignore');
   const text = readTextIfExists(file);
@@ -498,6 +575,7 @@ async function main() {
   checkDistSecrets();
   checkWranglerSecrets();
   checkPackageScripts();
+  checkLifecycleAutomation();
   checkFileExists('docs.security_baseline.exists', 'docs/SECURITY_BASELINE.md');
   checkFileExists('docs.doctor_plan.exists', 'docs/DOCTOR_PLAN.md');
   checkFileExists('templates.deploy_example.exists', 'templates/deploy.example.bat');

@@ -123,6 +123,15 @@ function checkTomlRegex(code, text, regex, message, suggestion, severity = 'high
   result(code, 'fail', severity, message.replace('is configured', 'is missing'), suggestion);
 }
 
+function checkLifecycleTriggerConfig(text) {
+  const configured = /^\s*\[triggers\]\s*$(?:\r?\n(?!\s*\[)[^\r\n]*)*?\r?\n\s*crons\s*=\s*\[\s*"0 \* \* \* \*"\s*\]\s*$/m.test(text);
+  if (configured) {
+    result('lifecycle.trigger_config', 'pass', 'info', 'Lifecycle cron trigger is configured for hourly execution.', 'No action required.');
+    return;
+  }
+  result('lifecycle.trigger_config', 'fail', 'high', 'Lifecycle cron trigger is missing or not configured as crons = ["0 * * * *"].', 'Add [triggers] crons = ["0 * * * *"] to wrangler.toml.');
+}
+
 function checkWranglerToml() {
   const text = readText('wrangler.toml');
   if (text === null) {
@@ -192,6 +201,66 @@ function checkWranglerToml() {
     'Visitor wildcard route is configured.',
     'Add the visitor wildcard route to wrangler.toml.',
   );
+  checkLifecycleTriggerConfig(text);
+}
+
+function checkLifecycleDryRunScript() {
+  const text = readText('package.json');
+  if (text === null) {
+    result('lifecycle.dry_run_script', 'fail', 'high', 'package.json is missing, so lifecycle:dry-run could not be checked.', 'Restore package.json with a lifecycle:dry-run script.');
+    return;
+  }
+
+  let pkg;
+  try {
+    pkg = JSON.parse(text);
+  } catch {
+    result('lifecycle.dry_run_script', 'fail', 'high', 'package.json could not be parsed, so lifecycle:dry-run could not be checked.', 'Fix package.json syntax.');
+    return;
+  }
+
+  const hasPackageScript = Boolean(pkg.scripts?.['lifecycle:dry-run']);
+  const hasScriptFile = existsSync(path.join(root, 'scripts/lifecycle-dry-run.mjs'));
+  if (hasPackageScript && hasScriptFile) {
+    result('lifecycle.dry_run_script', 'pass', 'info', 'Lifecycle dry-run package script and script file exist.', 'No action required.');
+    return;
+  }
+
+  const missing = [];
+  if (!hasPackageScript) missing.push('package script lifecycle:dry-run');
+  if (!hasScriptFile) missing.push('scripts/lifecycle-dry-run.mjs');
+  result('lifecycle.dry_run_script', 'fail', 'high', `Missing lifecycle dry-run requirement(s): ${missing.join(', ')}.`, 'Add the lifecycle dry-run script before relying on lifecycle automation checks.');
+}
+
+function checkLifecycleMigrationFields() {
+  const file = 'migrations/0008_session_lifecycle_fields.sql';
+  if (existsSync(path.join(root, file))) {
+    result('lifecycle.migration_fields', 'pass', 'info', `${file} exists.`, 'No action required.');
+    return;
+  }
+
+  result('lifecycle.migration_fields', 'fail', 'high', `${file} is missing.`, 'Add the lifecycle fields migration file before enabling lifecycle automation.');
+}
+
+function checkLifecycleScheduledHandler() {
+  const text = readText('src/worker.ts');
+  if (text === null) {
+    result('lifecycle.scheduled_handler', 'fail', 'high', 'src/worker.ts is missing, so the scheduled handler could not be checked.', 'Restore the Worker entrypoint with a scheduled handler.');
+    return;
+  }
+
+  if (/\basync\s+scheduled\s*\(/.test(text) || /\bscheduled\s*\([^)]*\)\s*\{/.test(text)) {
+    result('lifecycle.scheduled_handler', 'pass', 'info', 'Worker scheduled handler exists.', 'No action required.');
+    return;
+  }
+
+  result('lifecycle.scheduled_handler', 'fail', 'high', 'Worker scheduled handler is missing.', 'Add a scheduled handler before relying on lifecycle cron automation.');
+}
+
+function checkLifecycleAutomation() {
+  checkLifecycleDryRunScript();
+  checkLifecycleMigrationFields();
+  checkLifecycleScheduledHandler();
 }
 
 function main() {
@@ -205,6 +274,7 @@ function main() {
 
   checkPackageScripts();
   checkWranglerToml();
+  checkLifecycleAutomation();
   checkExists('docs.security_baseline.exists', 'docs/SECURITY_BASELINE.md');
   checkExists('docs.doctor_plan.exists', 'docs/DOCTOR_PLAN.md');
   checkExists('templates.deploy_example.exists', 'templates/deploy.example.bat');
