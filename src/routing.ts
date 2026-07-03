@@ -1,5 +1,6 @@
 export type AppMode =
   | { type: 'admin' }
+  | { type: 'setup' }
   | { type: 'visitor'; token: string; source: 'long-token' | 'legacy-g' | 'subdomain' }
   | { type: 'reserved-short-link'; code: string }
   | { type: 'not-found' };
@@ -80,6 +81,11 @@ export function resolveAppMode(locationLike: Pick<Location, 'hostname' | 'pathna
   }
 
   // 3. Admin host routing
+  if (pathname === '/setup') {
+    if (isVisitorHost(hostname)) return { type: 'not-found' };
+    return { type: 'setup' };
+  }
+
   if (pathname === '/' || pathname === '/admin') {
     if (isVisitorHost(hostname)) return { type: 'not-found' };
     return { type: 'admin' };
@@ -107,5 +113,6 @@ export function resolveAppMode(locationLike: Pick<Location, 'hostname' | 'pathna
 }
 
 export function isAdminMode(locationLike: Pick<Location, 'hostname' | 'pathname'> = window.location) {
-  return resolveAppMode(locationLike).type === 'admin';
+  const mode = resolveAppMode(locationLike).type;
+  return mode === 'admin' || mode === 'setup';
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import AdminApp from './apps/AdminApp';
+import SetupPage from './admin/SetupPage';
 import VisitorApp from './apps/VisitorApp';
 import LinkExpired from './common/LinkExpired';
 import NotFound from './common/NotFound';
@@ -15,6 +16,7 @@ export default function App() {
   }, []);
 
   if (mode.type === 'admin') return <AdminApp />;
+  if (mode.type === 'setup') return <SetupPage />;
   if (mode.type === 'visitor') return <VisitorApp token={mode.token} />;
   if (mode.type === 'reserved-short-link') return <LinkExpired />;
   return <NotFound />;
