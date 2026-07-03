@@ -224,6 +224,10 @@ async function autoRecycleArchivedSessions(env: Env, limit = 20) {
   const result: any = await env.DB.prepare(`UPDATE sessions SET deleted_at=?,deleted_by=NULL,updated_at=? WHERE id IN (${ids.map(() => '?').join(',')}) AND archived_at IS NOT NULL AND deleted_at IS NULL AND archived_at <= datetime('now', '-24 hours')`).bind(t, t, ...ids).run();
   return { recycleLimit, recycledCount: Number(result?.meta?.changes || 0) };
 }
+type AutoClearHistoryResult = { clearHistoryLimit: number; clearedCount: number; attemptedCount: number; messageCount: number; attachmentCount: number; writesMayHaveExecuted: boolean };
+function autoClearHistoryFailure(result: AutoClearHistoryResult) {
+  return Object.assign(new Error('auto clear history failed'), { autoClearHistoryResult: result });
+}
 function canClearHistory(session: any) { return Boolean(session && (session.status === 'CLOSED' || session.status === 'ARCHIVED' || session.archived_at || session.deleted_at)); }
 function clearHistoryR2Keys(messages: any[], attachments: any[]) {
   const keys = new Set<string>();
@@ -293,6 +297,30 @@ async function clearSessionHistoryInternal(env: Env, ctx: Awaited<ReturnType<typ
   await env.DB.prepare('UPDATE sessions SET updated_at=? WHERE id=?').bind(now(), ctx.session.id).run();
   const allSucceeded = failedObjectKeys.size === 0 && failedMessageIds.size === 0 && deleteMessageIds.length === ctx.messages.length && successAttachmentIds.length === ctx.attachments.length;
   return { allSucceeded, deleted: { messages: deleteMessageIds.length, attachments: successAttachmentIds.length, r2Objects: successfulObjectKeys.size }, failed: { r2Objects: failedObjectKeys.size } };
+}
+async function autoClearDeletedSessionHistories(env: Env, limit = 10): Promise<AutoClearHistoryResult> {
+  const clearHistoryLimit = Math.max(0, Math.min(10, Math.floor(limit)));
+  const result = { clearHistoryLimit, clearedCount: 0, attemptedCount: 0, messageCount: 0, attachmentCount: 0, writesMayHaveExecuted: false };
+  if (!clearHistoryLimit) return result;
+  const candidates = (await env.DB.prepare("SELECT * FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL ORDER BY deleted_at ASC LIMIT ?").bind(clearHistoryLimit).all<any>()).results || [];
+  for (const session of candidates) {
+    try {
+      const ctx = await collectClearHistoryContext(env, session);
+      result.attemptedCount += 1;
+      result.writesMayHaveExecuted = true;
+      const clearResult = await clearSessionHistoryInternal(env, ctx);
+      result.messageCount += Number(clearResult.deleted.messages || 0);
+      result.attachmentCount += Number(clearResult.deleted.attachments || 0);
+      if (!clearResult.allSucceeded) throw autoClearHistoryFailure(result);
+      const t = now();
+      const markerResult: any = await env.DB.prepare("UPDATE sessions SET history_cleared_at=?,history_cleared_by='system',updated_at=? WHERE id=? AND deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL").bind(t, t, session.id).run();
+      if (Number(markerResult?.meta?.changes || 0) !== 1) throw autoClearHistoryFailure(result);
+      result.clearedCount += 1;
+    } catch {
+      throw autoClearHistoryFailure(result);
+    }
+  }
+  return result;
 }
 async function clearSessionHistory(req: Request, env: Env, sessionId: string, dryRun: boolean) {
   const admin = await requireSuper(env, req);
@@ -429,6 +457,11 @@ export default {
     let stage = 'dry-run';
     let autoArchiveProcessedCount = 0;
     let autoRecycleProcessedCount = 0;
+    let autoClearHistoryProcessedCount = 0;
+    let autoClearHistoryAttemptedCount = 0;
+    let autoClearHistoryMessageCount = 0;
+    let autoClearHistoryAttachmentCount = 0;
+    let writesMayHaveExecuted = false;
     let writesExecuted = false;
     try {
       const stats = await collectLifecycleDryRunStats(env);
@@ -440,29 +473,50 @@ export default {
       const recycleResult = await autoRecycleArchivedSessions(env, 20);
       autoRecycleProcessedCount = recycleResult.recycledCount;
       writesExecuted = autoArchiveProcessedCount + autoRecycleProcessedCount > 0;
+      stage = 'auto-clear-history';
+      const clearHistoryResult = await autoClearDeletedSessionHistories(env, 10);
+      autoClearHistoryProcessedCount = clearHistoryResult.clearedCount;
+      autoClearHistoryAttemptedCount = clearHistoryResult.attemptedCount;
+      autoClearHistoryMessageCount = clearHistoryResult.messageCount;
+      autoClearHistoryAttachmentCount = clearHistoryResult.attachmentCount;
+      writesMayHaveExecuted = clearHistoryResult.writesMayHaveExecuted;
+      writesExecuted = autoArchiveProcessedCount + autoRecycleProcessedCount + autoClearHistoryProcessedCount + autoClearHistoryMessageCount + autoClearHistoryAttachmentCount > 0 || writesMayHaveExecuted;
       console.log(JSON.stringify({
         mode: 'lifecycle:scheduled',
-        trigger: 'scheduled',
-        cutoff: stats.cutoff,
         autoArchiveCandidateCount: stats.autoArchiveCount,
         autoArchiveProcessedCount,
         autoRecycleCandidateCount: stats.autoRecycleCount,
         autoRecycleProcessedCount,
-        autoClearHistorySessionCount: stats.autoClearHistorySessionCount,
-        autoClearHistoryMessageCount: stats.autoClearHistoryMessageCount,
-        autoClearHistoryAttachmentCount: stats.autoClearHistoryAttachmentCount,
+        autoClearHistoryCandidateCount: stats.autoClearHistorySessionCount,
+        autoClearHistoryProcessedCount,
+        autoClearHistoryAttemptedCount,
+        autoClearHistoryMessageCount,
+        autoClearHistoryAttachmentCount,
         archiveLimit: archiveResult.archiveLimit,
         recycleLimit: recycleResult.recycleLimit,
+        clearHistoryLimit: clearHistoryResult.clearHistoryLimit,
         writesExecuted,
       }));
-    } catch {
+    } catch (error) {
+      const clearHistoryResult = (error as { autoClearHistoryResult?: AutoClearHistoryResult })?.autoClearHistoryResult;
+      if (clearHistoryResult) {
+        autoClearHistoryProcessedCount = clearHistoryResult.clearedCount;
+        autoClearHistoryAttemptedCount = clearHistoryResult.attemptedCount;
+        autoClearHistoryMessageCount = clearHistoryResult.messageCount;
+        autoClearHistoryAttachmentCount = clearHistoryResult.attachmentCount;
+        writesMayHaveExecuted = clearHistoryResult.writesMayHaveExecuted;
+        writesExecuted = autoArchiveProcessedCount + autoRecycleProcessedCount + autoClearHistoryProcessedCount + autoClearHistoryMessageCount + autoClearHistoryAttachmentCount > 0 || writesMayHaveExecuted;
+      }
       console.error(JSON.stringify({
         mode: 'lifecycle:scheduled',
         trigger: 'scheduled',
         stage,
         autoArchiveProcessedCount,
         autoRecycleProcessedCount,
+        autoClearHistoryProcessedCount,
+        autoClearHistoryAttemptedCount,
         writesExecuted,
+        writesMayHaveExecuted,
         error: 'scheduled lifecycle failed',
       }));
     }
