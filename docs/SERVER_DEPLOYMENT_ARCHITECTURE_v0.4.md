@@ -89,3 +89,13 @@
 - `healthcheck.sh` 已覆盖 `/healthz` 和 `/api/setup/status`。
 
 该迁移包仍不包含完整访客聊天 API、WebSocket 房间协议、生命周期写入和附件清理迁移；这些能力继续保持 Cloudflare 线上版为基准，后续分包推进。
+
+## server-generic 客服会话第一包状态
+
+- `server-generic` 已新增基础访客会话和文本消息 API。
+- 访客创建会话时返回一次性 `visitorToken`，数据库仅保存 visitor token hash。
+- 访客消息 API 需要 header token，只允许访问自己的 session。
+- admin chat API 复用上一包 admin session，可查看会话列表、查看消息、回复消息和关闭会话。
+- WebSocket hub 已支持按 session id 订阅，并在消息创建和会话关闭时广播 `message_created`、`session_closed`。
+- 新增 `server-generic/migrations/0002_chat_foundation.sql`，补齐 `chat_sessions.visitor_token_hash`、`chat_sessions.closed_at`、`messages.admin_id` 及相关索引。
+- 当前仍不实现附件真实上传、read receipt 完整迁移、归档/回收站/清空历史写入和生产数据迁移。

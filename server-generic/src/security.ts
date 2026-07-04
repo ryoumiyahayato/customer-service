@@ -20,6 +20,20 @@ export function getAdminSessionToken(cookieHeader: string | string[] | undefined
   return parseCookies(cookieHeader).get(ADMIN_COOKIE_NAME) || null;
 }
 
+export function getBearerToken(header: string | string[] | undefined): string | null {
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(raw.trim());
+  return match?.[1] || null;
+}
+
+export function getVisitorToken(headers: Record<string, string | string[] | undefined>): string | null {
+  const explicit = headers['x-visitor-token'];
+  if (Array.isArray(explicit)) return explicit[0] || null;
+  if (explicit) return explicit;
+  return getBearerToken(headers.authorization);
+}
+
 function isProductionCookie() {
   return process.env.NODE_ENV === 'production';
 }

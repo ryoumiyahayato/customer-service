@@ -62,3 +62,11 @@
 - 密码使用 Node 标准库 crypto 的 scrypt + random salt；admin session 使用随机 token，并只在数据库保存 token hash。
 - Linux install 默认不执行 migration，必须由部署人员显式设置 opt-in 开关后运行。
 - 当前仍未迁移完整访客聊天 API、WebSocket 房间协议、read receipt、归档/回收站/清空历史写入、附件清理和生产数据迁移。
+
+## server-generic 客服会话第一包状态
+
+- 通用服务器版已具备基础客服业务闭环：访客创建会话、访客发送文本消息、管理员查看会话、管理员回复消息、管理员关闭会话。
+- 访客 token 使用随机值，数据库仅保存 hash；admin chat API 复用 admin session 鉴权。
+- WebSocket 当前提供按 session id 订阅和基础广播，不在消息中携带 token、cookie 或密码字段。
+- healthcheck 仍保持只读健康检查，不创建真实会话。
+- 后续继续补齐附件上传、read receipt、归档/回收站/清空历史、WebSocket 鉴权增强和数据迁移工具。

@@ -39,7 +39,7 @@
 4. 执行 `./install.sh`。
 5. 健康检查通过后打开后台地址和 `/setup`。
 
-当前通用服务器适配层已经具备最小 setup、admin auth、admin session 和 PostgreSQL migration 基础闭环。访客聊天、WebSocket 房间协议、生命周期写入和附件业务仍会在后续包继续迁移。
+当前通用服务器适配层已经具备最小 setup、admin auth、admin session、访客会话、文本消息、基础 WebSocket 广播和 PostgreSQL migration 基础闭环。生命周期写入、附件上传与清理、完整 read receipt 仍会在后续包继续迁移。
 
 ## PostgreSQL migration 与 setup
 
@@ -52,3 +52,9 @@
 7. 已有任意 admin 后，`/setup` 会自动关闭，后续应删除或轮换 `SETUP_TOKEN`，并把 `RUN_SERVER_MIGRATIONS` 恢复为 `0`。
 
 不要把真实 `.env`、`SETUP_TOKEN`、数据库密码、cookie 或生产数据明细写入 git、日志、文档或聊天记录。
+
+## 客服会话 API 状态
+
+`server-generic` 现在支持 `POST /api/visitor/sessions` 创建访客会话，访客 token 只返回一次，数据库只保存 token hash。访客可以凭 header token 查看并发送自己会话的文本消息；管理员可以凭 admin session 查看会话列表、查看消息、回复消息和关闭会话。
+
+`healthcheck.sh` 仍只检查 `/healthz` 和 `/api/setup/status`，不会创建真实访客会话，不会发送消息，也不会写业务数据。

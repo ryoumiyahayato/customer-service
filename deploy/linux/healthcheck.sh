@@ -46,4 +46,5 @@ if ! curl --fail --silent --show-error "${BASE_URL}/api/setup/status" >/dev/null
   curl --fail --silent --show-error "http://127.0.0.1/api/setup/status" >/dev/null
 fi
 
+echo "Skipping chat write checks; healthcheck does not create visitor sessions or messages."
 echo "Healthcheck passed."

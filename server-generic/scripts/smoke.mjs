@@ -1,5 +1,16 @@
 import { loadConfig } from '../dist/config.js';
-import { generateSessionToken, hashPassword, hashSessionToken, verifyPassword } from '../dist/crypto.js';
+import {
+  generateSessionToken,
+  generateVisitorToken,
+  hashPassword,
+  hashSessionToken,
+  hashVisitorToken,
+  verifyPassword,
+} from '../dist/crypto.js';
+import { HttpError } from '../dist/http.js';
+import { normalizeMessageBody } from '../dist/messages.js';
+import { errorResponseBody } from '../dist/response.js';
+import { createBroadcastPayload } from '../dist/websocket.js';
 
 const config = loadConfig({
   ...process.env,
@@ -27,4 +38,35 @@ if (!sessionToken || !sessionHash || sessionToken === sessionHash) {
   throw new Error('session hash smoke failed');
 }
 
-console.log('server-generic smoke passed: config, password hash, session hash');
+const visitorToken = generateVisitorToken();
+const visitorHash = hashVisitorToken(visitorToken);
+if (!visitorToken || !visitorHash || visitorToken === visitorHash) {
+  throw new Error('visitor hash smoke failed');
+}
+
+if (normalizeMessageBody(' hello ') !== 'hello') {
+  throw new Error('message payload smoke failed');
+}
+
+const response = errorResponseBody(new HttpError(401, 'smoke_error'));
+if (response.status !== 401 || response.body.error !== 'smoke_error') {
+  throw new Error('response helper smoke failed');
+}
+
+const broadcast = createBroadcastPayload({
+  type: 'session_closed',
+  sessionId: 'smoke-session',
+  session: {
+    id: 'smoke-session',
+    status: 'closed',
+    customerName: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    closedAt: '2026-01-01T00:00:00.000Z',
+  },
+});
+if (!broadcast.includes('session_closed') || broadcast.includes(visitorToken)) {
+  throw new Error('websocket broadcast smoke failed');
+}
+
+console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, message payload, websocket payload');

@@ -3,20 +3,24 @@ import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { handleAdminMessages, handleCloseAdminSession, handleListAdminSessions } from './adminApi.js';
 import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
 import { loadConfig } from './config.js';
 import { createPostgresAdapter } from './db/postgres.js';
 import { healthPayload } from './health.js';
 import { describeLifecycleMigration } from './lifecycle.js';
 import { readJsonBody, sendError, sendJson, sendNoContent, sendText } from './response.js';
+import { matchAdminSessionClose, matchSessionMessages } from './routes.js';
 import { getAdminSessionToken, serializeAdminSessionCookie, serializeClearAdminSessionCookie } from './security.js';
 import { getSetupStatus, initializeSetup } from './setup.js';
 import { createLocalStorage } from './storage/localStorage.js';
-import { handleWebSocketUpgrade } from './websocket.js';
+import { handleCreateVisitorSession, handleVisitorMessages } from './visitorApi.js';
+import { createWebSocketHub } from './websocket.js';
 
 const config = loadConfig();
 const db = createPostgresAdapter(config);
 const storage = createLocalStorage(config.storagePath);
+const websocketHub = createWebSocketHub();
 const staticRoot = path.resolve(config.staticDir || path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist'));
 
 function contentType(filePath: string) {
@@ -108,6 +112,34 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (request.method === 'POST' && url.pathname === '/api/visitor/sessions') {
+    await handleCreateVisitorSession(request, response, db);
+    return;
+  }
+
+  const visitorMessagesSessionId = matchSessionMessages(url.pathname, '/api/visitor');
+  if (visitorMessagesSessionId) {
+    await handleVisitorMessages(request, response, db, websocketHub, visitorMessagesSessionId);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/admin/sessions') {
+    await handleListAdminSessions(request, response, db);
+    return;
+  }
+
+  const adminMessagesSessionId = matchSessionMessages(url.pathname, '/api/admin');
+  if (adminMessagesSessionId) {
+    await handleAdminMessages(request, response, db, websocketHub, adminMessagesSessionId);
+    return;
+  }
+
+  const closeSessionId = matchAdminSessionClose(url.pathname);
+  if (request.method === 'POST' && closeSessionId) {
+    await handleCloseAdminSession(request, response, db, websocketHub, closeSessionId);
+    return;
+  }
+
   if (url.pathname.startsWith('/api/')) {
     sendJson(response, 501, {
       ok: false,
@@ -127,7 +159,9 @@ const server = createServer((request, response) => {
   });
 });
 
-server.on('upgrade', handleWebSocketUpgrade);
+server.on('upgrade', (request, socket, head) => {
+  websocketHub.handleUpgrade(request, socket, head);
+});
 
 server.listen(config.appPort, () => {
   console.log(`Generic customer chat server listening on port ${config.appPort}`);

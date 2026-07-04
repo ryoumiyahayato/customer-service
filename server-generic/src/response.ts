@@ -26,12 +26,22 @@ export function sendNoContent(response: ServerResponse, headers: Record<string, 
   response.end();
 }
 
-export function sendError(response: ServerResponse, error: unknown) {
+export function errorResponseBody(error: unknown) {
   if (isHttpError(error)) {
-    sendJson(response, error.status, { ok: false, error: error.code });
-    return;
+    return {
+      status: error.status,
+      body: { ok: false, error: error.code },
+    };
   }
-  sendJson(response, 500, { ok: false, error: 'internal_error' });
+  return {
+    status: 500,
+    body: { ok: false, error: 'internal_error' },
+  };
+}
+
+export function sendError(response: ServerResponse, error: unknown) {
+  const payload = errorResponseBody(error);
+  sendJson(response, payload.status, payload.body);
 }
 
 export async function readJsonBody<T = Record<string, unknown>>(request: IncomingMessage, limit = DEFAULT_BODY_LIMIT): Promise<T> {
