@@ -4,10 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-BACKUP_PATH="${1:-}"
+CONFIRM_FLAG="${1:-}"
+BACKUP_PATH="${2:-}"
 
-if [[ -z "$BACKUP_PATH" ]]; then
-  echo "Usage: ./restore.sh <backup-directory>"
+if [[ "$CONFIRM_FLAG" != "--i-understand-this-overwrites-data" || -z "$BACKUP_PATH" ]]; then
+  echo "Usage: ./restore.sh --i-understand-this-overwrites-data <backup-directory>"
+  echo "Restore is refused by default to avoid accidental production data overwrite."
   exit 1
 fi
 

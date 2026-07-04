@@ -6,7 +6,10 @@ cd "$ROOT_DIR"
 
 echo "Starting upgrade skeleton."
 echo "TODO: create backup before upgrade."
-echo "TODO: pull or build the new application image."
+echo "Pulling service images where available..."
+docker compose pull || true
+echo "Building application image..."
+docker compose build app
 echo "TODO: run migration only after explicit operator approval."
 docker compose up -d
 "$ROOT_DIR/healthcheck.sh"

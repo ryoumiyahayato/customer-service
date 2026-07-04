@@ -64,3 +64,14 @@
 4. 完成 Caddy 反向代理和 HTTPS 骨架。
 5. 补齐 `install.sh`、`healthcheck.sh`、`backup.sh`、`restore.sh`、`upgrade.sh` 最小可运行链路。
 6. 做空库 `/setup` 初始化演示。
+
+## v0.5 第一包落地状态
+
+- `deploy/linux/docker-compose.yml` 已形成 app / postgres / caddy 三服务闭环。
+- `deploy/linux/Dockerfile` 已指向隔离的 `server-generic` 适配层。
+- `install.sh` 已执行 compose config、build、up 和 healthcheck。
+- `healthcheck.sh` 已检查 compose 状态、app 容器、根路径和 setup status。
+- `backup.sh` 已具备 PostgreSQL dump 和 storage 归档骨架。
+- `restore.sh` 默认拒绝覆盖数据，要求显式确认参数。
+- `upgrade.sh` 已包含 pull/build/up/healthcheck 和 rollback TODO。
+- `server-generic` 目前只提供普通服务器最小 HTTP 入口，不替代 Cloudflare Worker。

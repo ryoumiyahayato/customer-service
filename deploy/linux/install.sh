@@ -26,8 +26,18 @@ fi
 
 mkdir -p storage logs backup
 
-echo "TODO: build or pull the application image for this deployment target."
-docker compose up -d
+echo "Validating Docker Compose configuration..."
+docker compose config >/dev/null
+
+echo "Building and starting services..."
+docker compose up -d --build
 
 echo "TODO: run database migration only after explicit operator approval."
 "$ROOT_DIR/healthcheck.sh"
+
+set -a
+source .env
+set +a
+
+echo "Admin URL: https://${APP_DOMAIN}"
+echo "Setup URL: https://${APP_DOMAIN}/setup"
