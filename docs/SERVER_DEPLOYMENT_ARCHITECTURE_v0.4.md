@@ -75,3 +75,17 @@
 - `restore.sh` 默认拒绝覆盖数据，要求显式确认参数。
 - `upgrade.sh` 已包含 pull/build/up/healthcheck 和 rollback TODO。
 - `server-generic` 目前只提供普通服务器最小 HTTP 入口，不替代 Cloudflare Worker。
+
+## server-generic 业务迁移第一包状态
+
+- `server-generic/migrations/0001_initial.sql` 已提供 PostgreSQL 首版空库 schema。
+- 首版 schema 覆盖 `admins`、`admin_sessions`、`setup_state`、`chat_sessions`、`messages`、`attachments`、`customer_remarks` 和 `schema_migrations`。
+- migration runner 只读取 `DATABASE_URL`，不会在服务启动时自动执行，运行时不应输出数据库连接明文。
+- `GET /healthz`、`GET /api/setup/status`、`POST /api/setup/initialize`、`POST /api/admin/login`、`POST /api/admin/logout`、`GET /api/auth/me` 已形成最小后端闭环。
+- setup initialize 只允许空 admin 状态创建首个 admin；成功后不自动登录、不创建 session、不设置 cookie。
+- admin login 使用密码 hash 校验，创建 admin session，并只在 cookie 中设置随机 session token。
+- 数据库只保存 session token hash，不保存明文 session token。
+- Linux `install.sh` 默认不运行 migration，仅在显式设置 `RUN_SERVER_MIGRATIONS=1` 后执行 server-generic migration。
+- `healthcheck.sh` 已覆盖 `/healthz` 和 `/api/setup/status`。
+
+该迁移包仍不包含完整访客聊天 API、WebSocket 房间协议、生命周期写入和附件清理迁移；这些能力继续保持 Cloudflare 线上版为基准，后续分包推进。

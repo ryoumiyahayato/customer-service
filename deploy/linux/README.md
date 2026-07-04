@@ -39,4 +39,16 @@
 4. 执行 `./install.sh`。
 5. 健康检查通过后打开后台地址和 `/setup`。
 
-当前通用服务器适配层只提供健康检查、setup 状态占位、静态文件服务和后续 WebSocket / PostgreSQL / 生命周期迁移接口骨架；完整客服业务迁移将在后续包继续推进。
+当前通用服务器适配层已经具备最小 setup、admin auth、admin session 和 PostgreSQL migration 基础闭环。访客聊天、WebSocket 房间协议、生命周期写入和附件业务仍会在后续包继续迁移。
+
+## PostgreSQL migration 与 setup
+
+1. 复制 `.env.example` 为 `.env`。
+2. 在服务器本地填写 `APP_DOMAIN`、`DATABASE_URL`、PostgreSQL 变量和 `SETUP_TOKEN` 等运行变量。
+3. 首次空库部署前，确认迁移窗口后把 `.env` 中的 `RUN_SERVER_MIGRATIONS` 临时设为 `1`。
+4. 执行 `./install.sh`，脚本会在显式 opt-in 时运行 `server-generic` PostgreSQL migrations。
+5. 健康检查会访问 `/healthz` 和 `/api/setup/status`。
+6. 打开 `https://你的后台域名/setup` 创建首个 admin。
+7. 已有任意 admin 后，`/setup` 会自动关闭，后续应删除或轮换 `SETUP_TOKEN`，并把 `RUN_SERVER_MIGRATIONS` 恢复为 `0`。
+
+不要把真实 `.env`、`SETUP_TOKEN`、数据库密码、cookie 或生产数据明细写入 git、日志、文档或聊天记录。

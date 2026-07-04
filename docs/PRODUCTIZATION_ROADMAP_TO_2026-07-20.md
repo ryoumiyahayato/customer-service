@@ -53,3 +53,12 @@
 - Linux 部署骨架已推进到可执行最小闭环：compose 配置、镜像构建、服务启动、健康检查、备份、恢复和升级脚本均有首版实现。
 - 新增 `server-generic` 隔离适配层，先提供健康检查、setup status 占位、静态文件服务和后续迁移接口骨架。
 - Cloudflare 线上逻辑保持不变，通用服务器版后续继续补齐 PostgreSQL 数据访问、WebSocket 适配和业务 API。
+
+## server-generic 业务迁移第一包状态
+
+- 通用服务器版已从占位骨架推进到最小 setup + admin auth + session + PostgreSQL migration 闭环。
+- PostgreSQL 首版 schema 覆盖 admin、admin session、setup 状态、会话、消息、附件和客户备注基础表。
+- `server-generic` 已具备 setup status、setup initialize、admin login、admin logout、auth/me 和 healthz 基础 API。
+- 密码使用 Node 标准库 crypto 的 scrypt + random salt；admin session 使用随机 token，并只在数据库保存 token hash。
+- Linux install 默认不执行 migration，必须由部署人员显式设置 opt-in 开关后运行。
+- 当前仍未迁移完整访客聊天 API、WebSocket 房间协议、read receipt、归档/回收站/清空历史写入、附件清理和生产数据迁移。

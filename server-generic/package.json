@@ -6,10 +6,17 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "migrate": "node dist/db/migrate.js",
+    "migrate:status": "node dist/db/migrate.js --status",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.10",
     "typescript": "^5.8.3"
   }
 }

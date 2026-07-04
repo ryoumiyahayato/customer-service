@@ -34,6 +34,12 @@ if ! curl --fail --silent --show-error "${BASE_URL}/" >/dev/null; then
   curl --fail --silent --show-error "http://127.0.0.1/" >/dev/null
 fi
 
+echo "Checking health endpoint..."
+if ! curl --fail --silent --show-error "${BASE_URL}/healthz" >/dev/null; then
+  echo "HTTPS health check failed; trying local Caddy endpoint."
+  curl --fail --silent --show-error "http://127.0.0.1/healthz" >/dev/null
+fi
+
 echo "Checking setup status endpoint..."
 if ! curl --fail --silent --show-error "${BASE_URL}/api/setup/status" >/dev/null; then
   echo "HTTPS setup check failed; trying local Caddy endpoint."
