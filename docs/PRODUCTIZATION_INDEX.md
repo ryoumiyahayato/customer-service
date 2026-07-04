@@ -21,6 +21,8 @@
 - `deploy/linux/backup.sh`
 - `deploy/linux/restore.sh`
 - `deploy/linux/upgrade.sh`
+- `deploy/windows-wizard/README.md`
+- `deploy/windows-wizard/package.json`
 
 ## 推进原则
 
@@ -29,3 +31,7 @@
 - Windows / PWA / 客户端 EXE / Android APK 先做入口壳。
 - 服务端加密先覆盖新消息。
 - 高风险操作继续单独授权。
+
+## Windows 部署向导状态
+
+Windows 部署向导已进入 MVP scaffold：当前是独立 CLI/Tauri-ready package，可生成脱敏部署计划并运行 smoke；SSH 与 transfer 仍为 mock / 接口层，尚未打包真实 EXE。

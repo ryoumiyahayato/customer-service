@@ -78,3 +78,10 @@
 - clear-history 先通过统一 helper 删除本地附件文件，失败时不写 history_cleared_at。
 - Linux 部署脚本已强化 storage 备份、恢复前人工确认、附件配置说明和只读 healthcheck 边界。
 - 后续仍需补齐 multipart 上传、更完整附件预览、自动 runner 调度接线、read receipt 和生产数据迁移工具。
+
+## Windows 部署向导 EXE MVP scaffold 状态
+
+- `deploy/windows-wizard` 已新增独立 CLI/Tauri-ready scaffold。
+- 当前支持配置校验、脱敏部署计划生成、远程命令生成、日志脱敏、SSH/transfer mock 接口和 smoke。
+- CLI 支持 `--smoke` 与 `--plan <config.json>`。
+- 当前不包含真实 GUI、EXE 打包、真实 SSH 上传执行和云厂商 API。

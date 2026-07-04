@@ -36,6 +36,18 @@ Windows 部署向导 EXE 用于帮助非技术用户从本机连接远程 Linux 
 - Tauri：优先候选，体积小，适合部署工具。
 - Electron：兼容性强，但体积更大，作为备选。
 
+## MVP scaffold 状态
+
+`deploy/windows-wizard` 已进入第一包 scaffold：
+
+- 独立 TypeScript package，不修改根 `package.json`。
+- CLI/Tauri-ready 目录结构已建立。
+- 支持 `--smoke` 本地自检。
+- 支持 `--plan <config.json>` 生成脱敏部署计划。
+- 已定义部署配置类型、输入校验、部署计划、远程命令生成、SSH client 接口、transfer 接口、日志脱敏和 smoke。
+- SSH 与 transfer 当前为 mock / 接口层，不连接真实服务器。
+- 部署计划覆盖测试 SSH、创建远程目录、上传 `deploy/linux`、写入远程 `.env`、执行 `install.sh`、执行 `healthcheck.sh`、输出后台和 `/setup` 地址。
+
 ## 安全边界
 
 - 不保存明文密码。
@@ -44,3 +56,11 @@ Windows 部署向导 EXE 用于帮助非技术用户从本机连接远程 Linux 
 - 不把 `.env` 内容写入本地日志。
 - 不自动覆盖生产数据。
 - 不执行未授权 migration、D1 写入或 R2 删除。
+
+## 当前未完成
+
+- 真实 GUI。
+- 真正 EXE 打包。
+- 真实 SSH 上传和远程执行。
+- 云厂商 API。
+- 图形化日志流和交互式错误恢复。
