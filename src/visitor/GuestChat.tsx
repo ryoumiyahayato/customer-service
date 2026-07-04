@@ -485,20 +485,20 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
 
   if (accessError === INVITE_NOT_FOUND || sessionClosed) return <LinkExpired />;
   // Keep transient network failures recoverable instead of showing a blank page.
-  if (connecting) return <div className="chat-gate-page"><div className="chat-gate-card"><span className="spinner" /> <p>正在连接...</p></div></div>;
-  if (accessError) return <div className="chat-gate-page"><div className="chat-gate-card"><p>{accessError}</p><button type="button" onClick={retryConnect}>点击重试</button></div></div>;
+  if (connecting) return <div className="chat-gate-page"><div className="chat-gate-card"><span className="spinner" /> <h1>正在连接客服</h1><p>正在建立安全会话，请稍候...</p></div></div>;
+  if (accessError) return <div className="chat-gate-page"><div className="chat-gate-card"><h1>连接暂时不可用</h1><p>{accessError}</p><button type="button" onClick={retryConnect}>重试连接</button></div></div>;
 
   return (
     <div className={`chat-page${!isMobile ? ' is-desktop' : ''}`}>
       <header className="chat-header">
-        <div className="status-light"><span className="status-dot" style={{ background: online ? '#22c55e' : '#94a3b8', color: online ? '#22c55e' : '#94a3b8' }} />{reconnecting ? '重连中...' : online ? '在线客服' : '连接中...'}</div>
+        <div className="status-light"><span className="status-dot" style={{ background: online ? '#22c55e' : '#94a3b8', color: online ? '#22c55e' : '#94a3b8' }} />{reconnecting ? '正在重连...' : online ? '在线客服' : '正在连接...'}</div>
         <div className="header-right">
         </div>
       </header>
-      {networkBanner && <div className="network-banner">网络不稳定，部分操作可能失败 <button onClick={() => setNetworkBanner(false)}>关闭</button></div>}
+      {networkBanner && <div className="network-banner">网络不稳定，消息可能延迟同步 <button onClick={() => setNetworkBanner(false)}>关闭</button></div>}
       {toast && <div className="network-banner">{toast} <button onClick={() => setToast('')}>关闭</button></div>}
       <div className="msgs">
-        {messages.length === 0 && <div className="empty-state">你好！有什么可以帮助你的？</div>}
+        {messages.length === 0 && <div className="empty-state chat-empty-state"><b>还没有消息</b><span>发送第一条消息，客服看到后会尽快回复。</span></div>}
         {messages.map(renderVisitorMessage)}
         {sending === 'image' && <div className="msg user sending-msg"><span className="spinner" /> 发送图片中...</div>}
         <div ref={messagesEnd} />

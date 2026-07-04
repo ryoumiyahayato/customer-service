@@ -143,7 +143,7 @@ export default function SetupPage() {
       <div className="setup-page">
         <section className="setup-card">
           <h1>系统初始化</h1>
-          <p className="admin-login-sub">正在检查初始化状态...</p>
+          <p className="admin-login-sub setup-loading"><span className="spinner" /> 正在检查初始化状态...</p>
         </section>
       </div>
     );
