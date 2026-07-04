@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { apiFetch } from '../api';
 import InviteLinkPanel from './InviteLinkPanel';
 import AdminLogin from './AdminLogin';
+import AdminMessageList from './AdminMessageList';
+import AdminSessionList from './AdminSessionList';
 import { InlineNotice } from '../ui/Notice';
 import { LoadingState, StatusBlock } from '../ui/StatusBlock';
 import '../styles.css';
@@ -674,26 +676,20 @@ export default function AdminDashboard() {
           <div className="folder-head">
             会话列表 <b>{visibleSessions.length}</b>
           </div>
-          <div className="session-group-tabs">
-            <button type="button" className={sessionGroup === 'active' ? 'active' : ''} onClick={() => setSessionGroup('active')}>进行中 <b>{sessionGroupCounts.active}</b></button>
-            <button type="button" className={sessionGroup === 'ended' ? 'active' : ''} onClick={() => setSessionGroup('ended')}>已结束 <b>{sessionGroupCounts.ended}</b></button>
-            <button type="button" className={sessionGroup === 'archived' ? 'active' : ''} onClick={() => setSessionGroup('archived')}>已归档 <b>{sessionGroupCounts.archived}</b></button>
-            <button type="button" className={sessionGroup === 'deleted' ? 'active' : ''} onClick={() => setSessionGroup('deleted')}>已删除 <b>{sessionGroupCounts.deleted}</b></button>
-          </div>
-          <div className="folder-body">
-            {visibleSessions.slice(0, isNarrow ? visibleSessions.length : 30).map(s => (
-              <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
-                <div className="avatar-dot">{customerAvatar(s)}</div>
-                <div className="session-main"><b>{customerName(s)}</b><p>{s.status}</p></div>
-                <div className="session-meta">
-                  <small>{formatTime(s.updated_at)}</small>
-                  {s.unread_count > 0 && <span className="badge">{s.unread_count}</span>}
-                  {s.deleted_at && <em>已删除</em>}
-                </div>
-              </button>
-            ))}
-            {visibleSessions.length === 0 && <StatusBlock className="small-empty">当前分组暂无会话</StatusBlock>}
-          </div>
+          <AdminSessionList
+            sessions={visibleSessions}
+            currentSessionId={cur?.id}
+            sessionGroup={sessionGroup}
+            sessionGroupCounts={sessionGroupCounts}
+            onGroupChange={setSessionGroup}
+            onSelectSession={selectSession}
+            customerAvatar={customerAvatar}
+            customerName={customerName}
+            formatTime={formatTime}
+            maxItems={isNarrow ? visibleSessions.length : 30}
+            listClassName="folder-body"
+            emptyClassName="small-empty"
+          />
         </div>}
       </aside>
 
@@ -742,24 +738,18 @@ export default function AdminDashboard() {
             {view === 'sessions' && mobileView === 'dir' && (
               <div className="mobile-session-list-view">
                 <div className="session-list-area">
-                  <div className="session-group-tabs mobile-session-tabs">
-                    <button type="button" className={sessionGroup === 'active' ? 'active' : ''} onClick={() => setSessionGroup('active')}>进行中 <b>{sessionGroupCounts.active}</b></button>
-                    <button type="button" className={sessionGroup === 'ended' ? 'active' : ''} onClick={() => setSessionGroup('ended')}>已结束 <b>{sessionGroupCounts.ended}</b></button>
-                    <button type="button" className={sessionGroup === 'archived' ? 'active' : ''} onClick={() => setSessionGroup('archived')}>已归档 <b>{sessionGroupCounts.archived}</b></button>
-                    <button type="button" className={sessionGroup === 'deleted' ? 'active' : ''} onClick={() => setSessionGroup('deleted')}>已删除 <b>{sessionGroupCounts.deleted}</b></button>
-                  </div>
-                  {visibleSessions.map(s => (
-                    <button type="button" key={s.id} className={`session conversation-item${cur?.id === s.id ? ' active' : ''}`} onClick={() => selectSession(s)}>
-                      <div className="avatar-dot">{customerAvatar(s)}</div>
-                      <div className="session-main"><b>{customerName(s)}</b><p>{s.status}</p></div>
-                      <div className="session-meta">
-                        <small>{formatTime(s.updated_at)}</small>
-                        {s.unread_count > 0 && <span className="badge">{s.unread_count}</span>}
-                        {s.deleted_at && <em>已删除</em>}
-                      </div>
-                    </button>
-                  ))}
-                  {visibleSessions.length === 0 && <StatusBlock>当前分组暂无会话</StatusBlock>}
+                  <AdminSessionList
+                    sessions={visibleSessions}
+                    currentSessionId={cur?.id}
+                    sessionGroup={sessionGroup}
+                    sessionGroupCounts={sessionGroupCounts}
+                    onGroupChange={setSessionGroup}
+                    onSelectSession={selectSession}
+                    customerAvatar={customerAvatar}
+                    customerName={customerName}
+                    formatTime={formatTime}
+                    tabsClassName="mobile-session-tabs"
+                  />
                 </div>
               </div>
             )}
@@ -772,11 +762,13 @@ export default function AdminDashboard() {
                     {renderSessionLifecycleActions(cur)}
                   </div>
                   {toast && <InlineNotice onDismiss={() => setToast('')}>{toast}</InlineNotice>}
-                  <div className="msgs">
-                    {loadingMsgs === cur.id && <LoadingState>正在加载会话消息...</LoadingState>}
-                    {selectedMsgs.length === 0 && !loadingMsgs && <StatusBlock>{currentSessionEnded ? '历史已清空' : '暂无消息，发送第一条回复开始沟通。'}</StatusBlock>}
-                    {selectedMsgs.map(renderSelectedMessage)}
-                  </div>
+                  <AdminMessageList
+                    messages={selectedMsgs}
+                    renderMessage={renderSelectedMessage}
+                    loading={loadingMsgs === cur.id}
+                    showEmpty={selectedMsgs.length === 0 && !loadingMsgs}
+                    emptyText={currentSessionEnded ? '历史已清空' : '暂无消息，发送第一条回复开始沟通。'}
+                  />
                   {currentSessionEnded ? <div className="session-ended-state">会话已结束，消息输入已关闭。</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
                     <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
@@ -844,12 +836,13 @@ export default function AdminDashboard() {
                     {renderSessionLifecycleActions(cur)}
                   </div> : null}
                   {toast && <InlineNotice onDismiss={() => setToast('')}>{toast}</InlineNotice>}
-                  <div className="msgs">
-                    {loadingMsgs === cur?.id ? <LoadingState>正在加载会话消息...</LoadingState> : null}
-                    {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <StatusBlock>{currentSessionEnded ? '历史已清空' : '暂无消息，选中输入框即可开始回复。'}</StatusBlock> : null}
-                    {!cur ? <StatusBlock>请选择左侧会话查看沟通记录。</StatusBlock> : null}
-                    {selectedMsgs.map(renderSelectedMessage)}
-                  </div>
+                  <AdminMessageList
+                    messages={selectedMsgs}
+                    renderMessage={renderSelectedMessage}
+                    loading={loadingMsgs === cur?.id}
+                    showEmpty={(!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at) || !cur}
+                    emptyText={cur ? (currentSessionEnded ? '历史已清空' : '暂无消息，选中输入框即可开始回复。') : '请选择左侧会话查看沟通记录。'}
+                  />
                   {cur && !currentSessionEnded ? (
                     <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                       {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button type="button" onClick={() => setQuote(null)}>取消</button></div> : null}
