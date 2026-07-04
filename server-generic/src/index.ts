@@ -3,18 +3,36 @@ import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { handleAdminMessages, handleCloseAdminSession, handleListAdminSessions } from './adminApi.js';
+import {
+  handleAdminAttachmentDownload,
+  handleAdminMessages,
+  handleAdminSessionLifecycleAction,
+  handleCloseAdminSession,
+  handleListAdminSessions,
+} from './adminApi.js';
 import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
 import { loadConfig } from './config.js';
 import { createPostgresAdapter } from './db/postgres.js';
 import { healthPayload } from './health.js';
 import { describeLifecycleMigration } from './lifecycle.js';
 import { readJsonBody, sendError, sendJson, sendNoContent, sendText } from './response.js';
-import { matchAdminSessionClose, matchSessionMessages } from './routes.js';
+import {
+  matchAdminAttachmentDownload,
+  matchAdminSessionAction,
+  matchAdminSessionClose,
+  matchSessionMessages,
+  matchVisitorAttachmentDownload,
+  matchVisitorSessionAttachments,
+} from './routes.js';
 import { getAdminSessionToken, serializeAdminSessionCookie, serializeClearAdminSessionCookie } from './security.js';
 import { getSetupStatus, initializeSetup } from './setup.js';
 import { createLocalStorage } from './storage/localStorage.js';
-import { handleCreateVisitorSession, handleVisitorMessages } from './visitorApi.js';
+import {
+  handleCreateVisitorAttachment,
+  handleCreateVisitorSession,
+  handleVisitorAttachmentDownload,
+  handleVisitorMessages,
+} from './visitorApi.js';
 import { createWebSocketHub } from './websocket.js';
 
 const config = loadConfig();
@@ -117,6 +135,25 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const visitorAttachmentSessionId = matchVisitorSessionAttachments(url.pathname);
+  if (request.method === 'POST' && visitorAttachmentSessionId) {
+    await handleCreateVisitorAttachment(config, request, response, db, storage, websocketHub, url, visitorAttachmentSessionId);
+    return;
+  }
+
+  const visitorAttachmentDownload = matchVisitorAttachmentDownload(url.pathname);
+  if (request.method === 'GET' && visitorAttachmentDownload) {
+    await handleVisitorAttachmentDownload(
+      request,
+      response,
+      db,
+      storage,
+      visitorAttachmentDownload.sessionId,
+      visitorAttachmentDownload.attachmentId,
+    );
+    return;
+  }
+
   const visitorMessagesSessionId = matchSessionMessages(url.pathname, '/api/visitor');
   if (visitorMessagesSessionId) {
     await handleVisitorMessages(request, response, db, websocketHub, visitorMessagesSessionId);
@@ -125,6 +162,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (request.method === 'GET' && url.pathname === '/api/admin/sessions') {
     await handleListAdminSessions(request, response, db);
+    return;
+  }
+
+  const adminAttachmentId = matchAdminAttachmentDownload(url.pathname);
+  if (request.method === 'GET' && adminAttachmentId) {
+    await handleAdminAttachmentDownload(request, response, db, storage, adminAttachmentId);
     return;
   }
 
@@ -137,6 +180,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const closeSessionId = matchAdminSessionClose(url.pathname);
   if (request.method === 'POST' && closeSessionId) {
     await handleCloseAdminSession(request, response, db, websocketHub, closeSessionId);
+    return;
+  }
+
+  const adminSessionAction = matchAdminSessionAction(url.pathname);
+  if (request.method === 'POST' && adminSessionAction) {
+    await handleAdminSessionLifecycleAction(
+      request,
+      response,
+      db,
+      storage,
+      adminSessionAction.sessionId,
+      adminSessionAction.action,
+    );
     return;
   }
 

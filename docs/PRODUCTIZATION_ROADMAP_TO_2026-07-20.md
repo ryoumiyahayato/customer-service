@@ -70,3 +70,11 @@
 - WebSocket 当前提供按 session id 订阅和基础广播，不在消息中携带 token、cookie 或密码字段。
 - healthcheck 仍保持只读健康检查，不创建真实会话。
 - 后续继续补齐附件上传、read receipt、归档/回收站/清空历史、WebSocket 鉴权增强和数据迁移工具。
+
+## server-generic 附件与 lifecycle 第一包状态
+
+- 通用服务器版已具备本地文件 storage helper、附件上传/下载 MVP、附件元数据记录和安全文件名处理。
+- lifecycle 已具备手动 archive、recycle、clear-history API，以及只读 dry-run runner。
+- clear-history 先通过统一 helper 删除本地附件文件，失败时不写 history_cleared_at。
+- Linux 部署脚本已强化 storage 备份、恢复前人工确认、附件配置说明和只读 healthcheck 边界。
+- 后续仍需补齐 multipart 上传、更完整附件预览、自动 runner 调度接线、read receipt 和生产数据迁移工具。

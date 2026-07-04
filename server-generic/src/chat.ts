@@ -11,6 +11,9 @@ export type ChatSessionSummary = {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  archivedAt: string | null;
+  deletedAt: string | null;
+  historyClearedAt: string | null;
 };
 
 type ChatSessionRow = {
@@ -20,6 +23,9 @@ type ChatSessionRow = {
   created_at: Date;
   updated_at: Date;
   closed_at: Date | null;
+  archived_at: Date | null;
+  deleted_at: Date | null;
+  history_cleared_at: Date | null;
 };
 
 function toIso(value: Date | null): string | null {
@@ -34,6 +40,9 @@ export function mapChatSession(row: ChatSessionRow): ChatSessionSummary {
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     closedAt: toIso(row.closed_at),
+    archivedAt: toIso(row.archived_at),
+    deletedAt: toIso(row.deleted_at),
+    historyClearedAt: toIso(row.history_cleared_at),
   };
 }
 
@@ -46,7 +55,7 @@ export async function createVisitorSession(db: PostgresAdapter, body: Record<str
   const rows = await db.query<ChatSessionRow>(
     `INSERT INTO chat_sessions (visitor_token_hash, status, customer_name)
      VALUES ($1, 'open', $2)
-     RETURNING id, status, customer_name, created_at, updated_at, closed_at`,
+     RETURNING id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at`,
     [visitorTokenHash, customerName],
   );
 
@@ -59,7 +68,7 @@ export async function createVisitorSession(db: PostgresAdapter, body: Record<str
 export async function requireVisitorSession(db: PostgresAdapter, sessionId: string, visitorToken: string | null) {
   if (!visitorToken) throw new HttpError(401, 'visitor_token_required');
   const rows = await db.query<ChatSessionRow>(
-    `SELECT id, status, customer_name, created_at, updated_at, closed_at
+    `SELECT id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at
        FROM chat_sessions
       WHERE id = $1 AND visitor_token_hash = $2
       LIMIT 1`,
@@ -71,7 +80,7 @@ export async function requireVisitorSession(db: PostgresAdapter, sessionId: stri
 
 export async function requireAdminSessionExists(db: PostgresAdapter, sessionId: string) {
   const rows = await db.query<ChatSessionRow>(
-    `SELECT id, status, customer_name, created_at, updated_at, closed_at
+    `SELECT id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at
        FROM chat_sessions
       WHERE id = $1
       LIMIT 1`,
@@ -84,7 +93,7 @@ export async function requireAdminSessionExists(db: PostgresAdapter, sessionId: 
 export async function listAdminChatSessions(db: PostgresAdapter, limit = 50): Promise<ChatSessionSummary[]> {
   const safeLimit = Math.max(1, Math.min(limit, 100));
   const rows = await db.query<ChatSessionRow>(
-    `SELECT id, status, customer_name, created_at, updated_at, closed_at
+    `SELECT id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at
        FROM chat_sessions
       ORDER BY updated_at DESC
       LIMIT $1`,
@@ -100,7 +109,7 @@ export async function closeChatSession(db: PostgresAdapter, sessionId: string): 
             closed_at = COALESCE(closed_at, now()),
             updated_at = now()
       WHERE id = $1
-      RETURNING id, status, customer_name, created_at, updated_at, closed_at`,
+      RETURNING id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at`,
     [sessionId],
   );
   if (!rows[0]) throw new HttpError(404, 'session_not_found');

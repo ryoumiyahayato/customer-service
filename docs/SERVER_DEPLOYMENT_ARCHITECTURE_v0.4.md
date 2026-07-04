@@ -99,3 +99,13 @@
 - WebSocket hub 已支持按 session id 订阅，并在消息创建和会话关闭时广播 `message_created`、`session_closed`。
 - 新增 `server-generic/migrations/0002_chat_foundation.sql`，补齐 `chat_sessions.visitor_token_hash`、`chat_sessions.closed_at`、`messages.admin_id` 及相关索引。
 - 当前仍不实现附件真实上传、read receipt 完整迁移、归档/回收站/清空历史写入和生产数据迁移。
+
+## server-generic 附件与 lifecycle 第一包状态
+
+- 本地文件存储使用 `STORAGE_PATH` 作为根目录，并通过统一 helper 防止路径穿越。
+- 附件上传使用服务端生成 storage key，用户文件名只保存为展示名。
+- 附件 API 当前支持访客上传、访客下载自己会话附件、管理员下载附件。
+- 消息列表返回安全附件元数据：id、filename、mime type、size、created at，不返回内部 storage key 或真实路径。
+- 新增 `server-generic/migrations/0003_attachments_and_lifecycle.sql`，补齐附件展示名、附件删除标记、history_cleared_by 和相关索引。
+- lifecycle 骨架支持 admin 手动 archive、recycle、clear-history；clear-history 复用统一附件删除 helper，附件删除成功后才写 history_cleared_at。
+- 自动 lifecycle runner 当前提供 dry-run 统计，输出候选数量，不输出 session 明细。

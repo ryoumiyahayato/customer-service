@@ -58,3 +58,15 @@
 `server-generic` 现在支持 `POST /api/visitor/sessions` 创建访客会话，访客 token 只返回一次，数据库只保存 token hash。访客可以凭 header token 查看并发送自己会话的文本消息；管理员可以凭 admin session 查看会话列表、查看消息、回复消息和关闭会话。
 
 `healthcheck.sh` 仍只检查 `/healthz` 和 `/api/setup/status`，不会创建真实访客会话，不会发送消息，也不会写业务数据。
+
+## 附件与本地 storage
+
+本地附件存储使用 `STORAGE_PATH` 指定根目录，Docker Compose 默认把部署目录下的 `storage` 挂载到容器内。附件上传由服务端生成 storage key，不接受用户传入真实路径；用户提供的文件名只作为展示名保存。
+
+当前 MVP 支持 `application/octet-stream` 上传方式，并通过 `MAX_UPLOAD_SIZE` 限制大小。`healthcheck.sh` 不上传真实附件，只做只读健康检查。
+
+`backup.sh` 会把 PostgreSQL dump 和本地 `storage` 目录一起放入备份目录。`restore.sh` 默认拒绝自动覆盖数据，恢复 storage 前必须人工确认备份来源和当前数据快照。
+
+## lifecycle 骨架
+
+通用服务器版已提供关闭、归档、移入回收站和清空历史的最小 API 骨架。自动 lifecycle runner 当前提供 dry-run 能力，默认只读统计候选数量，不自动写入生产数据。

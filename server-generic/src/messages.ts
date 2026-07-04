@@ -1,5 +1,6 @@
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError, requireString } from './http.js';
+import { listAttachmentsForMessages, type AttachmentMetadata } from './attachments.js';
 
 export type ChatMessage = {
   id: string;
@@ -9,6 +10,7 @@ export type ChatMessage = {
   messageType: string;
   readAt: string | null;
   createdAt: string;
+  attachments: AttachmentMetadata[];
 };
 
 type MessageRow = {
@@ -41,6 +43,7 @@ export function mapMessage(row: MessageRow): ChatMessage {
     messageType: row.message_type,
     readAt: toIso(row.read_at),
     createdAt: row.created_at.toISOString(),
+    attachments: [],
   };
 }
 
@@ -52,7 +55,15 @@ export async function listSessionMessages(db: PostgresAdapter, sessionId: string
       ORDER BY created_at ASC`,
     [sessionId],
   );
-  return rows.map(mapMessage);
+  const messages = rows.map(mapMessage);
+  const attachments = await listAttachmentsForMessages(
+    db,
+    messages.map((message) => message.id),
+  );
+  return messages.map((message) => ({
+    ...message,
+    attachments: attachments.get(message.id) || [],
+  }));
 }
 
 export async function createSessionMessage(

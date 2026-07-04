@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 echo "Starting upgrade skeleton."
-echo "TODO: create backup before upgrade."
+echo "TODO: create PostgreSQL and storage backup before upgrade."
 echo "Pulling service images where available..."
 docker compose pull || true
 echo "Building application image..."

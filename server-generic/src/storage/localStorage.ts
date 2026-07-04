@@ -1,10 +1,15 @@
-import { mkdir, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export type LocalStorageAdapter = {
   root: string;
   resolveObjectPath: (key: string) => string;
   ensureRoot: () => Promise<void>;
+  statObject: (key: string) => Promise<{ size: number }>;
+  writeObject: (key: string, content: Buffer) => Promise<void>;
+  readObjectStream: (key: string) => ReturnType<typeof createReadStream>;
+  deleteObject: (key: string) => Promise<void>;
 };
 
 export function createLocalStorage(rootPath: string): LocalStorageAdapter {
@@ -26,6 +31,23 @@ export function createLocalStorage(rootPath: string): LocalStorageAdapter {
       await mkdir(root, { recursive: true });
       const info = await stat(root);
       if (!info.isDirectory()) throw new Error('Storage root is not a directory.');
+    },
+    async writeObject(key, content) {
+      const target = resolveObjectPath(key);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, content);
+    },
+    async statObject(key) {
+      const info = await stat(resolveObjectPath(key));
+      if (!info.isFile()) throw new Error('Storage object is not a file.');
+      return { size: info.size };
+    },
+    readObjectStream(key) {
+      return createReadStream(resolveObjectPath(key));
+    },
+    async deleteObject(key) {
+      const target = resolveObjectPath(key);
+      await rm(target, { force: true });
     },
   };
 }

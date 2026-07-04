@@ -26,7 +26,8 @@ Before restoring, an operator must:
 1. Stop application writes.
 2. Verify the backup source.
 3. Create a fresh backup of current data.
-4. Approve PostgreSQL and storage restore commands manually.
+4. Manually confirm the storage archive before restoring local attachment files.
+5. Approve PostgreSQL and storage restore commands manually.
 
 TODO: implement guarded restore commands after the safety flow is finalized.
 MSG
