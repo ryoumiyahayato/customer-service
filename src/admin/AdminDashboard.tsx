@@ -358,7 +358,7 @@ export default function AdminDashboard() {
             onTouchStart={handleLongPress(m)}>
             {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
             {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="聊天图片" loading="lazy" /></a> : <span>{m.content || '[未知消息]'}</span>}
-            <div className="time">{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败' : `${formatTime(m.created_at)} ${own ? (m.is_read ? '客户已读' : '未读') : ''}`}</div>
+            <div className={`time message-status${m.status === 'failed' ? ' failed' : m.status === 'sending' ? ' sending' : ''}`}>{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败，请稍后重试' : `${formatTime(m.created_at)} ${own ? (m.is_read ? '客户已读' : '未读') : ''}`}</div>
           </div>
         )}
       </div>
@@ -496,7 +496,7 @@ export default function AdminDashboard() {
 
   const renderClearHistoryButton = (session?: Session | null) => {
     if (!canClearHistorySession(session)) return null;
-    return <button type="button" className="danger session-action-btn" onClick={() => startClearHistory(session)} disabled={clearHistoryLoading}>清空历史</button>;
+    return <button type="button" className="danger session-action-btn clear-history-btn" onClick={() => startClearHistory(session)} disabled={clearHistoryLoading}>清空历史</button>;
   };
 
   const renderSessionLifecycleActions = (session?: Session | null) => {
@@ -507,22 +507,22 @@ export default function AdminDashboard() {
     </>;
     if (isArchivedSession(session)) return <>
       <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
-      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
       {renderClearHistoryButton(session)}
     </>;
     if (session.status === 'CLOSED') return <>
       <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>
-      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
       {renderClearHistoryButton(session)}
     </>;
     if (session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => restoreDeletedSession(session)} disabled={sessionActionLoading === `restore:${session.id}`}>{sessionActionLoading === `restore:${session.id}` ? '恢复中...' : '恢复'}</button>;
     if (isArchivedSession(session)) return <>
       <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
-      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
     </>;
     if (session.status === 'CLOSED') return <>
       <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>
-      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
     </>;
     if (isArchivedSession(session)) return <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>;
     if (session.status === 'CLOSED' && !session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>;
@@ -635,7 +635,7 @@ export default function AdminDashboard() {
   const uploadButtonLabel = sending === 'image' ? '上传中...' : '📎';
   const staffButtonLabel = staffSending ? '发送中...' : '发送';
 
-  if (loading) return <div className="admin-loading-page"><div className="admin-loading-card"><span className="spinner" /> 加载中...</div></div>;
+  if (loading) return <div className="admin-loading-page"><div className="admin-loading-card"><span className="spinner" /> 正在加载后台...</div></div>;
   if (!admin && !loading) return <AdminLogin onLoginSuccess={() => { setLoading(true); return fetchAdmin(); }} />;
   if (disabled) return <div className="admin-loading-page"><div className="admin-loading-card">此账号已被禁用</div></div>;
 
@@ -645,7 +645,7 @@ export default function AdminDashboard() {
       {clearHistoryPlan && <div className="modal-backdrop">
         <div className="danger-modal">
           <h3>清空历史</h3>
-          <p>将清空该会话的历史消息及相关附件。此操作不可撤销。</p>
+          <p>将清空该会话的历史消息及相关附件。执行前请确认当前会话不再需要保留记录。</p>
           <div className="clear-history-summary">
             <span>消息数量：<b>{clearHistoryPlan.counts.messages}</b></span>
             <small>相关附件也会被清理。</small>
@@ -690,7 +690,7 @@ export default function AdminDashboard() {
                 </div>
               </button>
             ))}
-            {visibleSessions.length === 0 && <div className="empty-state small-empty">暂无会话</div>}
+            {visibleSessions.length === 0 && <div className="empty-state small-empty">当前分组暂无会话</div>}
           </div>
         </div>}
       </aside>
@@ -757,7 +757,7 @@ export default function AdminDashboard() {
                       </div>
                     </button>
                   ))}
-                  {visibleSessions.length === 0 && <div className="empty-state">暂无会话</div>}
+                  {visibleSessions.length === 0 && <div className="empty-state">当前分组暂无会话</div>}
                 </div>
               </div>
             )}
@@ -771,11 +771,11 @@ export default function AdminDashboard() {
                   </div>
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
-                    {loadingMsgs === cur.id && <div className="empty-state"><span className="spinner" /> 加载中</div>}
-                    {selectedMsgs.length === 0 && !loadingMsgs && <div className="empty-state">{currentSessionEnded ? '历史已清空' : '暂无消息'}</div>}
+                    {loadingMsgs === cur.id && <div className="empty-state"><span className="spinner" /> 正在加载会话消息...</div>}
+                    {selectedMsgs.length === 0 && !loadingMsgs && <div className="empty-state">{currentSessionEnded ? '历史已清空' : '暂无消息，发送第一条回复开始沟通。'}</div>}
                     {selectedMsgs.map(renderSelectedMessage)}
                   </div>
-                  {currentSessionEnded ? <div className="session-ended-state">会话已结束</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
+                  {currentSessionEnded ? <div className="session-ended-state">会话已结束，消息输入已关闭。</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
                     <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
                     <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
@@ -785,7 +785,7 @@ export default function AdminDashboard() {
               </div>
             )}
             {view === 'sessions' && mobileView === 'chat' && !cur && (
-              <div className="mobile-chat-workspace"><div className="empty-state">请选择一个会话</div></div>
+              <div className="mobile-chat-workspace"><div className="empty-state">请选择一个会话查看沟通记录。</div></div>
             )}
             {view === 'operators' && isSuper && (
               <div className="mobile-panel-workspace">
@@ -809,7 +809,7 @@ export default function AdminDashboard() {
                         <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
                         {op.is_disabled ? <button type="button" className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
-                    )) : <div className="empty-state">暂无客服账号</div>}
+                    )) : <div className="empty-state">暂无客服账号，可先创建一个客服账号。</div>}
                   </div>
                 </div>
               </div>
@@ -818,7 +818,7 @@ export default function AdminDashboard() {
               <div className="mobile-panel-workspace">
                 <section className="chat-panel" style={{ height: '100%' }}>
                   <div className="msgs">
-                    {staffMsgs.length === 0 ? <div className="empty-state">暂无内部消息</div> : staffMsgs.map(m => (
+                    {staffMsgs.length === 0 ? <div className="empty-state">暂无内部消息，发送一条同步团队状态。</div> : staffMsgs.map(m => (
                       <div key={m.id} className={'msg ' + (m.sender_admin_id === admin.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
                     ))}
                   </div>
@@ -843,9 +843,9 @@ export default function AdminDashboard() {
                   </div> : null}
                   {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
                   <div className="msgs">
-                    {loadingMsgs === cur?.id ? <div className="empty-state"><span className="spinner" /> 正在加载消息</div> : null}
-                    {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <div className="empty-state">{currentSessionEnded ? '历史已清空' : '暂无消息'}</div> : null}
-                    {!cur ? <div className="empty-state">请选择一个会话</div> : null}
+                    {loadingMsgs === cur?.id ? <div className="empty-state"><span className="spinner" /> 正在加载会话消息...</div> : null}
+                    {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <div className="empty-state">{currentSessionEnded ? '历史已清空' : '暂无消息，选中输入框即可开始回复。'}</div> : null}
+                    {!cur ? <div className="empty-state">请选择左侧会话查看沟通记录。</div> : null}
                     {selectedMsgs.map(renderSelectedMessage)}
                   </div>
                   {cur && !currentSessionEnded ? (
@@ -856,7 +856,7 @@ export default function AdminDashboard() {
                       <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                     </form>
                   ) : (
-                    <div className="empty-state">{cur ? '会话已结束' : '请选择一个访客会话'}</div>
+                    <div className="empty-state">{cur ? '会话已结束，消息输入已关闭。' : '请选择一个访客会话查看沟通记录。'}</div>
                   )}
                 </section>
               </div>
@@ -883,7 +883,7 @@ export default function AdminDashboard() {
                         <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
                         {op.is_disabled ? <button type="button" className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
-                    )) : <div className="empty-state">暂无客服账号</div>}
+                    )) : <div className="empty-state">暂无客服账号，可先创建一个客服账号。</div>}
                   </div>
                 </aside>
               </div>
@@ -892,7 +892,7 @@ export default function AdminDashboard() {
               <div className="workspace">
                 <section className="chat-panel">
                   <div className="msgs">
-                    {staffMsgs.length === 0 ? <div className="empty-state">暂无内部消息</div> : staffMsgs.map(m => (
+                    {staffMsgs.length === 0 ? <div className="empty-state">暂无内部消息，发送一条同步团队状态。</div> : staffMsgs.map(m => (
                       <div key={m.id} className={'msg ' + (m.sender_admin_id === admin.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
                     ))}
                   </div>

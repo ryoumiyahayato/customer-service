@@ -476,7 +476,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
             onTouchStart={isMobile && !m.deleted_at ? handleLongPress(m) : undefined}>
             {m.quote_message_id && <div className="quote-box">{[messages.find(x => x.id === m.quote_message_id)].map(q => q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : q.content || '[未知消息]') : '引用消息不可用').join('')}</div>}
             {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="图片" loading="lazy" /></a> : <span>{m.content || '[未知消息]'}</span>}
-            {(m.status === 'sending' || m.status === 'failed') && <div className="time">{m.status === 'sending' ? '发送中...' : '发送失败'}</div>}
+            {(m.status === 'sending' || m.status === 'failed') && <div className={`time message-status ${m.status}`}>{m.status === 'sending' ? '发送中...' : '发送失败，请稍后重试'}</div>}
           </div>
         )}
       </div>
@@ -485,22 +485,22 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
 
   if (accessError === INVITE_NOT_FOUND || sessionClosed) return <LinkExpired />;
   // Keep transient network failures recoverable instead of showing a blank page.
-  if (connecting) return <div className="chat-gate-page"><div className="chat-gate-card"><span className="spinner" /> <p>正在连接...</p></div></div>;
-  if (accessError) return <div className="chat-gate-page"><div className="chat-gate-card"><p>{accessError}</p><button type="button" onClick={retryConnect}>点击重试</button></div></div>;
+  if (connecting) return <div className="chat-gate-page"><div className="chat-gate-card"><span className="spinner" /> <h1>正在连接客服</h1><p>正在建立安全会话，请稍候...</p></div></div>;
+  if (accessError) return <div className="chat-gate-page"><div className="chat-gate-card error-state"><h1>连接暂时不可用</h1><p>{accessError}</p><button type="button" onClick={retryConnect}>重试连接</button></div></div>;
 
   return (
     <div className={`chat-page${!isMobile ? ' is-desktop' : ''}`}>
       <header className="chat-header">
-        <div className="status-light"><span className="status-dot" style={{ background: online ? '#22c55e' : '#94a3b8', color: online ? '#22c55e' : '#94a3b8' }} />{reconnecting ? '重连中...' : online ? '在线客服' : '连接中...'}</div>
+        <div className="status-light"><span className="status-dot" style={{ background: online ? '#22c55e' : '#94a3b8', color: online ? '#22c55e' : '#94a3b8' }} />{reconnecting ? '正在重连...' : online ? '在线客服' : '正在连接...'}</div>
         <div className="header-right">
         </div>
       </header>
-      {networkBanner && <div className="network-banner">网络不稳定，部分操作可能失败 <button onClick={() => setNetworkBanner(false)}>关闭</button></div>}
-      {toast && <div className="network-banner">{toast} <button onClick={() => setToast('')}>关闭</button></div>}
+      {networkBanner && <div className="network-banner">网络不稳定，消息可能延迟同步；如发送失败请稍后重试 <button onClick={() => setNetworkBanner(false)}>关闭</button></div>}
+      {toast && <div className="network-banner error-banner">{toast} <button onClick={() => setToast('')}>关闭</button></div>}
       <div className="msgs">
-        {messages.length === 0 && <div className="empty-state">你好！有什么可以帮助你的？</div>}
+        {messages.length === 0 && <div className="empty-state chat-empty-state"><b>还没有消息</b><span>发送第一条消息，客服看到后会尽快回复。</span></div>}
         {messages.map(renderVisitorMessage)}
-        {sending === 'image' && <div className="msg user sending-msg"><span className="spinner" /> 发送图片中...</div>}
+        {sending === 'image' && <div className="msg user sending-msg"><span className="spinner" /> 正在上传图片...</div>}
         <div ref={messagesEnd} />
       </div>
       <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
