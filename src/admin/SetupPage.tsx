@@ -1,5 +1,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { apiFetch } from '../api';
+import { FormError, SetupNotice } from '../ui/Notice';
+import { LoadingState } from '../ui/StatusBlock';
 import '../styles.css';
 
 type SetupStatus = {
@@ -143,7 +145,7 @@ export default function SetupPage() {
       <div className="setup-page">
         <section className="setup-card">
           <h1>系统初始化</h1>
-          <p className="admin-login-sub setup-loading"><span className="spinner" /> 正在检查初始化状态...</p>
+          <LoadingState className="admin-login-sub setup-loading">正在检查初始化状态...</LoadingState>
         </section>
       </div>
     );
@@ -154,7 +156,7 @@ export default function SetupPage() {
       <div className="setup-page">
         <section className="setup-card">
           <h1>初始化完成</h1>
-          <p className="setup-notice success">初始化完成。请删除或轮换 {getSetupTokenConfigName()}，然后前往登录。</p>
+          <SetupNotice tone="success">初始化完成。请删除或轮换 {getSetupTokenConfigName()}，然后前往登录。</SetupNotice>
           <button type="button" className="setup-primary" onClick={goLogin}>前往登录</button>
         </section>
       </div>
@@ -166,7 +168,9 @@ export default function SetupPage() {
       <div className="setup-page">
         <section className="setup-card">
           <h1>系统初始化</h1>
-          <p className={`setup-notice ${status?.reason === 'already_configured' ? 'success' : status?.reason === 'missing_setup_token' || statusError ? 'warning' : ''}`}>{statusError || safeStatusMessage(status)}</p>
+          <SetupNotice tone={status?.reason === 'already_configured' ? 'success' : status?.reason === 'missing_setup_token' || statusError ? 'warning' : 'default'}>
+            {statusError || safeStatusMessage(status)}
+          </SetupNotice>
           {status?.reason === 'already_configured' ? (
             <button type="button" className="setup-primary" onClick={goLogin}>前往登录</button>
           ) : null}
@@ -239,7 +243,7 @@ export default function SetupPage() {
               required={Boolean(status.requiresSetupToken)}
             />
           </label>
-          {formError ? <p className="form-error">{formError}</p> : null}
+          {formError ? <FormError>{formError}</FormError> : null}
           <p className="setup-form-hint">初始化成功后不会自动登录，请使用新账号前往登录页。</p>
           <button type="submit" disabled={submitting}>{submitting ? '正在创建...' : '创建超级管理员'}</button>
         </form>

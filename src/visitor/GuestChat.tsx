@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { apiFetch } from '../api';
 import LinkExpired from '../common/LinkExpired';
+import GuestComposer from './GuestComposer';
+import GuestMessageList from './GuestMessageList';
+import { NetworkNotice } from '../ui/Notice';
 import '../styles.css';
 
 type Message = any;
@@ -495,20 +498,29 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
         <div className="header-right">
         </div>
       </header>
-      {networkBanner && <div className="network-banner">网络不稳定，消息可能延迟同步；如发送失败请稍后重试 <button onClick={() => setNetworkBanner(false)}>关闭</button></div>}
-      {toast && <div className="network-banner error-banner">{toast} <button onClick={() => setToast('')}>关闭</button></div>}
-      <div className="msgs">
-        {messages.length === 0 && <div className="empty-state chat-empty-state"><b>还没有消息</b><span>发送第一条消息，客服看到后会尽快回复。</span></div>}
-        {messages.map(renderVisitorMessage)}
-        {sending === 'image' && <div className="msg user sending-msg"><span className="spinner" /> 正在上传图片...</div>}
-        <div ref={messagesEnd} />
-      </div>
-      <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
-        {quote && <div className="quote-compose" style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 10, padding: 8, color: 'var(--muted)', fontSize: 12 }}>{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)} <button type="button" onClick={() => setQuote(null)} style={{ minHeight: 'auto', padding: '3px 8px', borderRadius: 8, fontSize: 12, background: '#64748b' }}>取消</button></div>}
-        <label className="upload-btn"><input ref={uploadRef} type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sessionClosed || !!accessError || !sessionId || sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />📎</label>
-        <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onFocus={handleComposerFocus} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={sessionClosed || !!accessError || !sessionId} placeholder="输入消息" rows={1} />
-        <button type="submit" className="send-btn" onMouseDown={e => e.preventDefault()} disabled={sessionClosed || !!accessError || !sessionId || (!text.trim() && !quote)}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg></button>
-      </form>
+      {networkBanner && <NetworkNotice onDismiss={() => setNetworkBanner(false)}>网络不稳定，消息可能延迟同步；如发送失败请稍后重试</NetworkNotice>}
+      {toast && <NetworkNotice tone="error" onDismiss={() => setToast('')}>{toast}</NetworkNotice>}
+      <GuestMessageList
+        messages={messages}
+        renderMessage={renderVisitorMessage}
+        messagesEndRef={messagesEnd}
+        uploadingImage={sending === 'image'}
+      />
+      <GuestComposer
+        quote={quote}
+        uploadRef={uploadRef}
+        messageInputRef={messageInputRef}
+        text={text}
+        disabled={sessionClosed || !!accessError || !sessionId}
+        imageUploading={sending === 'image'}
+        canSubmit={!(sessionClosed || !!accessError || !sessionId || (!text.trim() && !quote))}
+        onSubmit={e => { e.preventDefault(); send(); }}
+        onCancelQuote={() => setQuote(null)}
+        onUploadChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }}
+        onTextChange={setText}
+        onTextFocus={handleComposerFocus}
+        onTextKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+      />
 
       {/* Context menu */}
       {contextMenu && (() => {
