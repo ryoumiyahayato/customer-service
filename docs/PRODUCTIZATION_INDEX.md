@@ -25,6 +25,14 @@
 - `deploy/windows-wizard/package.json`
 - `deploy/desktop-client/README.md`
 - `deploy/desktop-client/package.json`
+- `deploy/android-shell/README.md`
+- `deploy/android-shell/settings.gradle`
+- `deploy/android-shell/build.gradle`
+- `deploy/android-shell/app/build.gradle`
+- `deploy/android-shell/app/src/main/AndroidManifest.xml`
+- `deploy/android-shell/app/src/main/java/net/customerchat/app/MainActivity.kt`
+- `deploy/android-shell/app/src/main/java/net/customerchat/app/AppConfig.kt`
+- `deploy/android-shell/app/src/main/java/net/customerchat/app/WebViewSecurity.kt`
 
 ## 推进原则
 
@@ -41,3 +49,7 @@ Windows 部署向导已进入 MVP scaffold：当前是独立 CLI/Tauri-ready pac
 ## PWA 与桌面客户端状态
 
 PWA 已进入 MVP：包含 manifest、service worker、offline page 和图标。桌面客户端 EXE 壳已进入 scaffold：当前是独立 CLI/Tauri-ready package，可生成脱敏启动计划并运行 smoke；尚未打包真实 EXE，也未接入 Tauri/Electron GUI。
+
+## Android APK 壳状态
+
+Android APK 壳已进入 MVP scaffold：当前是独立 Gradle / Kotlin / WebView 工程，默认使用占位 HTTPS URL，只声明 `INTERNET` 权限，包含 URL scheme 白名单、禁用 file/content access、不注入 JavaScript bridge 和生产 cleartext 默认禁用等基础安全边界；尚未做真实签名打包、应用商店分发、原生通知、文件选择器、下载管理和自动更新。
