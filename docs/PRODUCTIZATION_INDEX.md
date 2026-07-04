@@ -33,6 +33,9 @@
 - `deploy/android-shell/app/src/main/java/net/customerchat/app/MainActivity.kt`
 - `deploy/android-shell/app/src/main/java/net/customerchat/app/AppConfig.kt`
 - `deploy/android-shell/app/src/main/java/net/customerchat/app/WebViewSecurity.kt`
+- `server-generic/src/encryption.ts`
+- `server-generic/src/encryptionConfig.ts`
+- `server-generic/migrations/0004_encryption_foundation.sql`
 
 ## 推进原则
 
@@ -53,3 +56,7 @@ PWA 已进入 MVP：包含 manifest、service worker、offline page 和图标。
 ## Android APK 壳状态
 
 Android APK 壳已进入 MVP scaffold：当前是独立 Gradle / Kotlin / WebView 工程，默认使用占位 HTTPS URL，只声明 `INTERNET` 权限，包含 URL scheme 白名单、禁用 file/content access、不注入 JavaScript bridge 和生产 cleartext 默认禁用等基础安全边界；尚未做真实签名打包、应用商店分发、原生通知、文件选择器、下载管理和自动更新。
+
+## 服务端加密存储状态
+
+服务端加密存储已进入 MVP 实现：`server-generic` 当前支持新消息正文 AES-256-GCM 加密、新附件展示文件名元数据加密、旧明文字段兼容读取、密钥版本标记和 smoke 自检。当前不迁移旧数据，不加密附件内容本体；`ENCRYPTION_KEY` 必须由服务器环境变量提供，备份恢复必须同时保护密钥管理记录。

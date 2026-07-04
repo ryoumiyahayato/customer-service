@@ -1,3 +1,5 @@
+import { loadEncryptionConfig, safeEncryptionSummary, type EncryptionConfig } from './encryptionConfig.js';
+
 export type GenericServerConfig = {
   appDomain: string;
   visitorRootDomain: string;
@@ -12,6 +14,7 @@ export type GenericServerConfig = {
   logLevel: string;
   appPort: number;
   staticDir: string;
+  encryption: EncryptionConfig;
 };
 
 function readEnv(env: NodeJS.ProcessEnv, key: string, fallback = '') {
@@ -40,6 +43,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GenericServerC
     logLevel: readEnv(env, 'LOG_LEVEL', 'info'),
     appPort: readNumber(env, 'APP_PORT', 3000),
     staticDir: readEnv(env, 'STATIC_DIR', '/app/dist'),
+    encryption: loadEncryptionConfig(env),
   };
 }
 
@@ -51,5 +55,6 @@ export function safeConfigSummary(config: GenericServerConfig) {
     storageDriver: config.storageDriver,
     setupTokenConfigured: Boolean(config.setupToken),
     staticDir: config.staticDir,
+    encryption: safeEncryptionSummary(config.encryption),
   };
 }

@@ -50,6 +50,7 @@ export async function handleCreateVisitorAttachment(
 export async function handleVisitorAttachmentDownload(
   request: IncomingMessage,
   response: ServerResponse,
+  config: GenericServerConfig,
   db: PostgresAdapter,
   storage: LocalStorageAdapter,
   sessionId: string,
@@ -57,12 +58,13 @@ export async function handleVisitorAttachmentDownload(
 ) {
   if (!isSafeId(sessionId) || !isSafeId(attachmentId)) throw new HttpError(404, 'attachment_not_found');
   await requireVisitorSession(db, sessionId, getVisitorToken(request.headers));
-  await sendVisitorAttachment(response, db, storage, sessionId, attachmentId);
+  await sendVisitorAttachment(response, db, storage, config.encryption, sessionId, attachmentId);
 }
 
 export async function handleVisitorMessages(
   request: IncomingMessage,
   response: ServerResponse,
+  config: GenericServerConfig,
   db: PostgresAdapter,
   hub: WebSocketHub,
   sessionId: string,
@@ -71,14 +73,20 @@ export async function handleVisitorMessages(
   await requireVisitorSession(db, sessionId, getVisitorToken(request.headers));
 
   if (request.method === 'GET') {
-    const messages = await listSessionMessages(db, sessionId);
+    const messages = await listSessionMessages(db, sessionId, config.encryption);
     sendJson(response, 200, { ok: true, messages });
     return;
   }
 
   if (request.method === 'POST') {
     const body = await readJsonBody<Record<string, unknown>>(request);
-    const message = await createSessionMessage(db, sessionId, 'visitor', normalizeMessageBody(body.body));
+    const message = await createSessionMessage(
+      db,
+      config.encryption,
+      sessionId,
+      'visitor',
+      normalizeMessageBody(body.body),
+    );
     hub.broadcastToSession(sessionId, { type: 'message_created', sessionId, message });
     sendJson(response, 201, { ok: true, message });
     return;

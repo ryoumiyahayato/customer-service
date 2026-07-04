@@ -109,3 +109,12 @@
 - 新增 `server-generic/migrations/0003_attachments_and_lifecycle.sql`，补齐附件展示名、附件删除标记、history_cleared_by 和相关索引。
 - lifecycle 骨架支持 admin 手动 archive、recycle、clear-history；clear-history 复用统一附件删除 helper，附件删除成功后才写 history_cleared_at。
 - 自动 lifecycle runner 当前提供 dry-run 统计，输出候选数量，不输出 session 明细。
+
+## server-generic 服务端加密存储第一包状态
+
+- 通用服务器版已新增服务端加密存储 MVP 基础：`ENCRYPTION_ENABLED=1` 时，新文本消息正文使用 AES-256-GCM 写入密文字段。
+- 新上传附件的展示文件名会写入加密元数据字段，附件内容本体当前不加密。
+- 新增 `server-generic/migrations/0004_encryption_foundation.sql`，补齐 messages 与 attachments 的 ciphertext、iv、tag、algorithm、key version 等字段。
+- 读取路径优先解密密文字段；旧数据仍兼容明文字段，不做本轮旧数据迁移。
+- `ENCRYPTION_KEY` 从服务器环境变量读取，不写入 git、文档、日志或前端代码；丢失 key 会影响已加密数据解密。
+- 备份恢复必须同时保护数据库、storage 目录和密钥管理记录；搜索能力会受消息正文加密影响。

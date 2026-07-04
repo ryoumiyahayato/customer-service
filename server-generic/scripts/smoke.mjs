@@ -1,3 +1,4 @@
+import { prepareAttachmentFilenameForStorage } from '../dist/attachments.js';
 import { loadConfig } from '../dist/config.js';
 import {
   generateSessionToken,
@@ -7,9 +8,10 @@ import {
   hashVisitorToken,
   verifyPassword,
 } from '../dist/crypto.js';
+import { decryptText, encryptText } from '../dist/encryption.js';
 import { HttpError } from '../dist/http.js';
 import { normalizeLifecycleOptions } from '../dist/lifecycle.js';
-import { normalizeMessageBody } from '../dist/messages.js';
+import { normalizeMessageBody, prepareMessageBodyForStorage } from '../dist/messages.js';
 import { errorResponseBody } from '../dist/response.js';
 import { normalizeContentType } from '../dist/storage/contentType.js';
 import { createLocalStorage } from '../dist/storage/localStorage.js';
@@ -20,6 +22,8 @@ const config = loadConfig({
   ...process.env,
   APP_PORT: process.env.APP_PORT || '3000',
   DATABASE_URL: '',
+  ENCRYPTION_ENABLED: 'false',
+  ENCRYPTION_KEY: '',
   MAX_UPLOAD_SIZE: '1024',
   SETUP_TOKEN: '',
 });
@@ -29,6 +33,45 @@ if (!Number.isFinite(config.appPort) || config.appPort <= 0) {
 }
 if (config.maxUploadSize !== 1024) {
   throw new Error('max upload size config smoke failed');
+}
+if (config.encryption.enabled) {
+  throw new Error('encryption disabled config smoke failed');
+}
+
+try {
+  loadConfig({
+    ...process.env,
+    DATABASE_URL: '',
+    ENCRYPTION_ENABLED: 'true',
+    ENCRYPTION_KEY: '',
+  });
+  throw new Error('missing encryption key smoke failed');
+} catch (error) {
+  if (error instanceof Error && error.message === 'missing encryption key smoke failed') throw error;
+}
+
+const encryptionConfig = loadConfig({
+  ...process.env,
+  DATABASE_URL: '',
+  ENCRYPTION_ENABLED: 'true',
+  ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+  ENCRYPTION_KEY_VERSION: 'smoke-v1',
+}).encryption;
+
+const encryptedText = encryptText('smoke-roundtrip-value', encryptionConfig);
+if (
+  encryptedText.algorithm !== 'AES-256-GCM' ||
+  encryptedText.keyVersion !== 'smoke-v1' ||
+  decryptText(encryptedText, encryptionConfig) !== 'smoke-roundtrip-value'
+) {
+  throw new Error('encryption roundtrip smoke failed');
+}
+
+try {
+  decryptText({ ...encryptedText, tag: Buffer.alloc(16, 1).toString('base64') }, encryptionConfig);
+  throw new Error('tampered encryption smoke failed');
+} catch (error) {
+  if (error instanceof Error && error.message === 'tampered encryption smoke failed') throw error;
 }
 
 const password = 'local-smoke-password-only';
@@ -56,9 +99,27 @@ if (normalizeMessageBody(' hello ') !== 'hello') {
   throw new Error('message payload smoke failed');
 }
 
+const storedMessage = prepareMessageBodyForStorage('smoke-message-body', encryptionConfig);
+if (
+  storedMessage.body !== null ||
+  !storedMessage.bodyCiphertext ||
+  storedMessage.bodyKeyVersion !== 'smoke-v1'
+) {
+  throw new Error('message encryption payload smoke failed');
+}
+
 const displayName = sanitizeDisplayFilename('../unsafe name?.png');
 if (displayName.includes('..') || displayName.includes('?') || displayName.includes('/')) {
   throw new Error('filename sanitize smoke failed');
+}
+
+const storedFilename = prepareAttachmentFilenameForStorage(displayName, encryptionConfig);
+if (
+  storedFilename.filename !== null ||
+  !storedFilename.filenameCiphertext ||
+  storedFilename.filenameKeyVersion !== 'smoke-v1'
+) {
+  throw new Error('attachment filename encryption smoke failed');
 }
 
 const storageKey = generateAttachmentStorageKey('image/png', new Date('2026-01-01T00:00:00Z'));
@@ -107,4 +168,4 @@ if (!broadcast.includes('session_closed') || broadcast.includes(visitorToken)) {
   throw new Error('websocket broadcast smoke failed');
 }
 
-console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, message payload, storage helpers, lifecycle options, websocket payload');
+console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, encryption helpers, message payload, storage helpers, lifecycle options, websocket payload');

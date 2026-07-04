@@ -146,6 +146,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     await handleVisitorAttachmentDownload(
       request,
       response,
+      config,
       db,
       storage,
       visitorAttachmentDownload.sessionId,
@@ -156,7 +157,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const visitorMessagesSessionId = matchSessionMessages(url.pathname, '/api/visitor');
   if (visitorMessagesSessionId) {
-    await handleVisitorMessages(request, response, db, websocketHub, visitorMessagesSessionId);
+    await handleVisitorMessages(request, response, config, db, websocketHub, visitorMessagesSessionId);
     return;
   }
 
@@ -167,13 +168,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const adminAttachmentId = matchAdminAttachmentDownload(url.pathname);
   if (request.method === 'GET' && adminAttachmentId) {
-    await handleAdminAttachmentDownload(request, response, db, storage, adminAttachmentId);
+    await handleAdminAttachmentDownload(request, response, config, db, storage, adminAttachmentId);
     return;
   }
 
   const adminMessagesSessionId = matchSessionMessages(url.pathname, '/api/admin');
   if (adminMessagesSessionId) {
-    await handleAdminMessages(request, response, db, websocketHub, adminMessagesSessionId);
+    await handleAdminMessages(request, response, config, db, websocketHub, adminMessagesSessionId);
     return;
   }
 
