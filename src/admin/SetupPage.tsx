@@ -31,9 +31,9 @@ function getSetupTokenConfigName() {
 }
 
 function safeStatusMessage(status: SetupStatus | null) {
-  if (status?.reason === 'already_configured') return '系统已完成初始化，请前往登录。';
-  if (status?.reason === 'missing_setup_token') return `初始化暂不可用，请联系部署人员配置 ${getSetupTokenConfigName()}。`;
-  return '初始化状态暂时无法确认，请稍后重试。';
+  if (status?.reason === 'already_configured') return '系统已完成初始化，初始化入口已自动关闭。请前往登录。';
+  if (status?.reason === 'missing_setup_token') return `初始化暂不可用，请联系部署人员完成 ${getSetupTokenConfigName()} 配置后再试。`;
+  return '初始化状态暂时无法确认，请稍后重试或联系部署人员。';
 }
 
 function safeSubmitMessage(reason: unknown) {
@@ -166,7 +166,7 @@ export default function SetupPage() {
       <div className="setup-page">
         <section className="setup-card">
           <h1>系统初始化</h1>
-          <p className="setup-notice">{statusError || safeStatusMessage(status)}</p>
+          <p className={`setup-notice ${status?.reason === 'already_configured' ? 'success' : status?.reason === 'missing_setup_token' || statusError ? 'warning' : ''}`}>{statusError || safeStatusMessage(status)}</p>
           {status?.reason === 'already_configured' ? (
             <button type="button" className="setup-primary" onClick={goLogin}>前往登录</button>
           ) : null}
@@ -179,7 +179,7 @@ export default function SetupPage() {
     <div className="setup-page">
       <section className="setup-card">
         <h1>系统初始化</h1>
-        <p className="admin-login-sub">当前系统尚未初始化。请创建第一个超级管理员账号。</p>
+        <p className="admin-login-sub">当前系统尚未初始化。请创建第一个超级管理员账号，完成后初始化入口会自动关闭。</p>
         <form className="admin-login-form setup-form" onSubmit={submit} autoComplete="off">
           <label>
             <span>用户名</span>
@@ -240,6 +240,7 @@ export default function SetupPage() {
             />
           </label>
           {formError ? <p className="form-error">{formError}</p> : null}
+          <p className="setup-form-hint">初始化成功后不会自动登录，请使用新账号前往登录页。</p>
           <button type="submit" disabled={submitting}>{submitting ? '正在创建...' : '创建超级管理员'}</button>
         </form>
       </section>

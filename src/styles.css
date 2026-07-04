@@ -22,7 +22,10 @@
 /* network banner */
 .network-banner{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;background:#fef3c7;color:#92400e;font-size:13px;border-bottom:1px solid #fcd34d;line-height:1.4}
 @media(prefers-color-scheme:dark){.network-banner{background:#422006;color:#fde68a;border-color:#78350f}}
+.network-banner.error-banner{background:#fee2e2;color:#991b1b;border-color:#fecaca}
+@media(prefers-color-scheme:dark){.network-banner.error-banner{background:#450a0a;color:#fecaca;border-color:#7f1d1d}}
 .network-banner button{flex-shrink:0;background:#92400e;color:#fff;border-radius:8px;padding:4px 10px;font-size:12px;min-height:32px}
+.network-banner.error-banner button{background:#991b1b}
 .network-banner button:hover{filter:brightness(1.05)}
 
 /* messages area */
@@ -42,6 +45,10 @@
 .chat-page .msg .quote-box{border-left:3px solid var(--brand);padding:4px 8px;margin-bottom:6px;background:rgba(0,0,0,.06);color:var(--muted);font-size:12px;border-radius:6px}
 .chat-page .msg .recalled{font-style:italic;opacity:.65}
 .chat-page .msg.user .quote-box{background:rgba(255,255,255,.15);color:rgba(255,255,255,.8);border-left-color:rgba(255,255,255,.5)}
+.message-status{display:inline-flex;align-items:center;gap:5px;line-height:1.4}
+.message-status.sending{color:var(--muted)}
+.message-status.failed{color:var(--danger);font-weight:700}
+.message-status.failed::before{content:"!";display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:var(--danger);color:#fff;font-size:10px;font-weight:800}
 .chat-page .empty-state{display:grid;place-items:center;gap:6px;min-height:160px;color:var(--muted);font-size:14px;text-align:center;padding:20px}
 .chat-empty-state{width:min(320px,100%);justify-self:center;align-self:center;border:1px dashed var(--line);border-radius:16px;background:var(--panel)}
 .chat-empty-state b{color:var(--text);font-size:15px}
@@ -51,7 +58,7 @@
 .sending-msg{opacity:.6!important}.sending-dots{display:flex;gap:3px;align-items:center}.sending-dots span{display:inline-block;width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.4;animation:sendingBounce 1.4s infinite ease-in-out}.sending-dots span:nth-child(1){animation-delay:0s}.sending-dots span:nth-child(2){animation-delay:.16s}.sending-dots span:nth-child(3){animation-delay:.32s}@keyframes sendingBounce{0%,80%,100%{opacity:.4;transform:scale(.8)}40%{opacity:1;transform:scale(1.2)}}
 
 /* composer */
-.chat-page .composer{flex:0 0 auto;display:flex;align-items:flex-end;gap:8px;padding:8px 10px;padding-bottom:max(8px,var(--safe-bottom));background:var(--panel);border-top:1px solid var(--line);z-index:10}
+.chat-page .composer{flex:0 0 auto;display:flex;align-items:flex-end;gap:8px;padding:8px 10px;padding-bottom:max(8px,var(--safe-bottom));background:var(--panel);border-top:1px solid var(--line);z-index:10;box-shadow:0 -8px 24px var(--shadow)}
 .chat-page .composer textarea{flex:1 1 auto;min-width:0;min-height:42px;max-height:120px;resize:none;border:1px solid var(--line);border-radius:22px;padding:10px 14px;background:var(--panel-2);color:var(--text);font-size:15px;line-height:1.4;outline:none;transition:border-color .15s}
 .chat-page .composer textarea:focus{border-color:var(--brand)}
 .chat-page .composer textarea::placeholder{color:var(--muted)}
@@ -80,7 +87,8 @@
 .auth-form input{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel-2);color:var(--text);font-size:15px}
 .auth-form button{border-radius:12px;background:var(--brand);color:#fff;padding:12px;font-size:15px;min-height:46px}
 .auth-form button:disabled{opacity:.6}
-.form-error{margin:0;color:var(--danger);font-size:13px;text-align:center}
+.form-error{margin:0;color:var(--danger);font-size:13px;text-align:center;background:#fee2e2;border:1px solid #fecaca;border-radius:12px;padding:10px 12px;line-height:1.5}
+@media(prefers-color-scheme:dark){.form-error{background:#450a0a;border-color:#7f1d1d;color:#fecaca}}
 
 /* ========== DESKTOP VISITOR: slightly wider bubbles ========== */
 .chat-page.is-desktop{max-width:720px;margin:0 auto;border-left:1px solid var(--line);border-right:1px solid var(--line);box-shadow:0 0 60px var(--shadow)}
@@ -108,6 +116,10 @@
 .setup-form label span{color:var(--muted);font-size:13px}
 .setup-notice{margin:0;color:var(--muted);font-size:14px;line-height:1.6;text-align:center;background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:12px}
 .setup-notice.success{color:var(--brand-2)}
+.setup-notice.warning{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+@media(prefers-color-scheme:dark){.setup-notice.warning{background:#431407;border-color:#9a3412;color:#fed7aa}}
+.setup-loading{display:flex;align-items:center;justify-content:center;gap:8px}
+.setup-form-hint{margin:0;color:var(--muted);font-size:12px;text-align:center;line-height:1.5}
 .setup-primary{border-radius:12px;background:var(--brand);color:#fff;padding:14px;font-size:16px;min-height:48px;display:flex;align-items:center;justify-content:center}
 
 /* Admin loading page */
@@ -174,7 +186,11 @@
 .operator-row span,.admin-list span{font-size:12px;color:var(--muted)}
 .btn,button,.file-btn{border-radius:12px;background:var(--brand);color:#fff;padding:11px 15px;display:inline-flex;align-items:center;justify-content:center;min-height:44px}
 .btn.secondary,.secondary{background:#64748b}
+.btn.secondary:hover:not(:disabled),.secondary:hover:not(:disabled){background:#526275}
 .danger{background:var(--danger)!important}
+.danger:hover:not(:disabled){filter:brightness(.95)}
+.trash-action-btn{background:#475569!important;color:#fff}
+.clear-history-btn{box-shadow:0 8px 18px rgba(220,38,38,.2)}
 
 .admin .chat-panel .msgs{flex:1;overflow:auto;overflow-x:hidden;padding:20px;background:var(--panel-2);min-height:0}
 .admin .msg-row{display:flex;align-items:flex-end;gap:8px;margin:9px 0;max-width:100%}
@@ -191,7 +207,8 @@
 .admin .composer textarea{min-height:42px;max-height:120px;resize:none;line-height:1.35}
 .admin .file-btn{background:#e8f1ff;color:#1659b8;position:relative;overflow:hidden}
 .admin .file-btn input{position:absolute;inset:0;opacity:0;cursor:pointer}
-.quote-compose{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;align-items:center;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:8px;color:var(--muted);font-size:12px}
+.quote-compose{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;align-items:center;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:8px;color:var(--muted);font-size:12px;min-width:0;overflow:hidden}
+.quote-compose>span,.quote-compose{overflow-wrap:anywhere}
 .quote-compose button,.msg-action,.msg-actions button{min-height:auto;padding:3px 8px;border-radius:8px;font-size:12px;background:#64748b}
 .msg-actions{display:flex;gap:6px;margin-top:6px}
 .staff-composer{grid-template-columns:minmax(0,1fr) 96px}
@@ -202,7 +219,7 @@
 .notice{margin:10px 14px 0;padding:10px 12px;border-radius:12px;background:#e8f1ff;color:#1659b8;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;border:1px solid #bfdbfe}
 .notice-dismiss{background:transparent;color:inherit;padding:4px 8px;min-height:28px;border-radius:8px;font-size:14px;border:1px solid currentColor;opacity:.6}
 .admin-panel.wide{max-height:100%;overflow:auto}
-.session-action-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+.session-action-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
 .session-action-bar>div{display:grid;gap:2px;min-width:0}
 .session-action-bar b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .session-action-bar span{font-size:12px;color:var(--muted)}
@@ -210,10 +227,10 @@
 .customer-remark-form label{font-size:12px;color:var(--muted);white-space:nowrap}
 .customer-remark-form input{min-width:0;flex:1;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);color:var(--text);padding:8px 10px;font-size:13px}
 .customer-remark-form button{min-height:34px;padding:6px 10px;border-radius:10px;font-size:12px;white-space:nowrap}
-.session-action-btn{min-height:36px;padding:7px 12px;border-radius:10px;white-space:nowrap}
+.session-action-btn{min-height:36px;padding:7px 12px;border-radius:10px;white-space:nowrap;font-size:13px}
 .close-session-btn{min-height:36px;padding:7px 12px;border-radius:10px;white-space:nowrap}
 .ended-chip{display:inline-flex;align-items:center;min-height:30px;padding:5px 10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);font-size:12px;white-space:nowrap}
-.session-ended-state{padding:14px;text-align:center;color:var(--muted);border-top:1px solid var(--line);background:var(--panel);font-size:14px}
+.session-ended-state{padding:14px;text-align:center;color:var(--muted);border-top:1px solid var(--line);background:var(--panel);font-size:14px;line-height:1.5}
 
 /* Admin desktop session items */
 .conversation-item{grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:72px}
@@ -313,6 +330,7 @@ html,body{overflow-x:hidden}
 .admin.is-narrow .notice{margin:8px 10px;background:#0d3b66;color:#dbeafe;border:1px solid #38bdf866;font-size:13px}
 .admin.is-narrow .session-action-bar{background:#0b1d32;border-bottom-color:#1e3a5f;color:#f8fafc;padding:8px 10px}
 .admin.is-narrow .session-action-bar span{color:#cbd5e1}
+.admin.is-narrow .session-action-bar>.session-action-btn,.admin.is-narrow .session-action-bar>.ended-chip{flex:1 1 auto}
 .admin.is-narrow .customer-remark-form{order:3;flex:1 0 100%;max-width:none;min-width:0}
 .admin.is-narrow .customer-remark-form input{background:#10233a;border-color:#2b4f75;color:#f8fafc}
 .admin.is-narrow .customer-remark-form label{color:#cbd5e1}
@@ -332,6 +350,33 @@ html,body{overflow-x:hidden}
 
 /* Mobile dialog adjustments */
 .more-actions>div{max-width:calc(100vw - 20px)}
+}
+
+@media(max-width:480px){
+.network-banner{align-items:flex-start;padding:9px 10px}
+.network-banner button{min-height:30px;padding:3px 8px}
+.chat-page .msgs{padding-inline:8px}
+.chat-page .msg{max-width:min(86vw,420px);font-size:14px}
+.chat-page .msg-row:not(.own) .msg{max-width:min(calc(86vw - 40px),420px)}
+.chat-page .composer{gap:7px;padding-inline:8px}
+.chat-page .upload-btn,.chat-page .send-btn{width:40px;height:40px;min-height:40px}
+.chat-page .composer textarea{min-height:40px;font-size:14px}
+.admin.is-narrow .mobile-admin-topbar{align-items:flex-start;gap:6px}
+.admin.is-narrow .mobile-dir-btn{min-height:38px;padding:7px 8px}
+.admin.is-narrow .mobile-topbar-title{text-align:left;font-size:14px;padding-top:9px}
+.admin.is-narrow .mobile-topbar-actions{max-width:46vw;overflow-x:auto;overscroll-behavior-x:contain;padding-bottom:2px}
+.admin.is-narrow .mobile-topbar-actions>button,.admin.is-narrow .mobile-topbar-actions .primary-action{min-height:34px;padding:6px 10px;font-size:12px;white-space:nowrap}
+.admin.is-narrow .session-group-tabs{gap:5px}
+.admin.is-narrow .session-group-tabs button{font-size:11px;padding:6px 5px}
+.admin.is-narrow .session-action-bar{align-items:stretch}
+.admin.is-narrow .session-action-bar>div:first-child{flex:1 1 100%}
+.admin.is-narrow .session-action-btn,.admin.is-narrow .close-session-btn{flex:1 1 calc(50% - 6px);justify-content:center;white-space:normal}
+.admin.is-narrow .customer-remark-form{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px}
+.admin.is-narrow .customer-remark-form button{padding-inline:8px}
+.admin.is-narrow .msg{max-width:min(88%,calc(100vw - 56px))}
+.admin.is-narrow .composer{gap:7px;padding-inline:8px}
+.admin.is-narrow .composer .file-btn{padding-inline:10px}
+.admin.is-narrow .composer>button{min-width:52px}
 }
 
 /* ========== GENERAL RESPONSIVE ========== */

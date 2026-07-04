@@ -358,7 +358,7 @@ export default function AdminDashboard() {
             onTouchStart={handleLongPress(m)}>
             {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
             {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="聊天图片" loading="lazy" /></a> : <span>{m.content || '[未知消息]'}</span>}
-            <div className="time">{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败' : `${formatTime(m.created_at)} ${own ? (m.is_read ? '客户已读' : '未读') : ''}`}</div>
+            <div className={`time message-status${m.status === 'failed' ? ' failed' : m.status === 'sending' ? ' sending' : ''}`}>{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败，请稍后重试' : `${formatTime(m.created_at)} ${own ? (m.is_read ? '客户已读' : '未读') : ''}`}</div>
           </div>
         )}
       </div>
@@ -496,7 +496,7 @@ export default function AdminDashboard() {
 
   const renderClearHistoryButton = (session?: Session | null) => {
     if (!canClearHistorySession(session)) return null;
-    return <button type="button" className="danger session-action-btn" onClick={() => startClearHistory(session)} disabled={clearHistoryLoading}>清空历史</button>;
+    return <button type="button" className="danger session-action-btn clear-history-btn" onClick={() => startClearHistory(session)} disabled={clearHistoryLoading}>清空历史</button>;
   };
 
   const renderSessionLifecycleActions = (session?: Session | null) => {
@@ -507,22 +507,22 @@ export default function AdminDashboard() {
     </>;
     if (isArchivedSession(session)) return <>
       <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
-      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
       {renderClearHistoryButton(session)}
     </>;
     if (session.status === 'CLOSED') return <>
       <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>
-      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
       {renderClearHistoryButton(session)}
     </>;
     if (session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => restoreDeletedSession(session)} disabled={sessionActionLoading === `restore:${session.id}`}>{sessionActionLoading === `restore:${session.id}` ? '恢复中...' : '恢复'}</button>;
     if (isArchivedSession(session)) return <>
       <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
-      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
     </>;
     if (session.status === 'CLOSED') return <>
       <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>
-      <button type="button" className="secondary session-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
+      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
     </>;
     if (isArchivedSession(session)) return <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>;
     if (session.status === 'CLOSED' && !session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>;
@@ -645,7 +645,7 @@ export default function AdminDashboard() {
       {clearHistoryPlan && <div className="modal-backdrop">
         <div className="danger-modal">
           <h3>清空历史</h3>
-          <p>将清空该会话的历史消息及相关附件。此操作不可撤销。</p>
+          <p>将清空该会话的历史消息及相关附件。执行前请确认当前会话不再需要保留记录。</p>
           <div className="clear-history-summary">
             <span>消息数量：<b>{clearHistoryPlan.counts.messages}</b></span>
             <small>相关附件也会被清理。</small>
