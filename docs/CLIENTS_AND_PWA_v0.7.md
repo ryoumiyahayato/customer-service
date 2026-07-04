@@ -1,35 +1,50 @@
 # 客户端与 PWA v0.7
 
-## PWA
+## 当前状态
 
-PWA 第一版提供 manifest、service worker、添加到桌面和基础离线壳能力。PWA 只作为已部署系统入口，不把后端服务打包进浏览器端。
+PWA 已进入 MVP：项目已具备 `manifest.webmanifest`、service worker、离线页、基础图标和生产环境 service worker 注册入口。
 
-## 客户端 EXE
+桌面客户端 EXE 壳已进入 scaffold：`deploy/desktop-client` 提供独立 CLI/Tauri-ready 结构，用于后续 Tauri 或 Electron 打包。
 
-客户端 EXE 第一版作为已部署系统的桌面壳，负责打开后台地址或访客入口，保持登录态，并预留基础通知能力。它不负责后端部署，也不包含数据库、存储或调度逻辑。
+## PWA 当前能力
 
-## Android APK
+- `public/manifest.webmanifest`：提供应用名称、启动范围、standalone 显示模式、主题色和图标。
+- `public/service-worker.js`：缓存基础静态资源。
+- `public/offline.html`：在导航请求离线失败时作为 fallback。
+- `public/icons/`：提供本地 SVG 图标，不引用外部资源。
+- `src/pwa.ts`：在生产环境且浏览器支持时注册 service worker。
 
-Android APK 第一版作为已部署系统入口壳，面向已完成部署的后台地址和访客域。APK 不负责后端部署，不内置服务器，不存储生产数据明细。
+service worker 明确不缓存 `/api/*`，不缓存非 GET 请求，不处理 WebSocket，不输出 token、cookie 或其他敏感值。
 
-## 配置项
+## 桌面客户端 EXE 壳当前能力
 
-- 后台地址
-- 访客域
-- 图标
-- 应用名称
-- 基础通知开关预留
+- 独立 package：`deploy/desktop-client`。
+- CLI 支持 `--smoke` 和 `--plan <config.json>`。
+- 配置字段只包含非敏感入口配置：应用名、后台 URL、访客根 URL、模式和窗口偏好。
+- URL 校验禁止 `file://`、`javascript:`、`data:`。
+- 启动计划会脱敏 URL 查询参数中的 `token`、`code`、`session`、`cookie`、`password`、`secret` 等字段。
+- 当前 launcher 是 mock 接口，不真正打开浏览器或 WebView。
+- 本地配置存储只保留非敏感配置，不包含 password、token、cookie 或 session。
 
-## 第一版目标
+## 与 Windows 部署向导的区别
 
-- 能打开已部署系统。
-- 能保持登录态。
-- 能展示基础页面加载 / 错误状态。
-- 基础通知能力预留，不强行接入复杂推送。
+桌面客户端 EXE 壳只打开已经部署好的客服系统，不负责安装服务器、不执行 deploy、不打包后端、不执行 `install.sh`、不接云厂商 API。
 
-## 边界
+Windows 部署向导 EXE 面向部署流程，负责后续连接远程 Linux 服务器、上传部署目录并执行安装脚本。
+
+## 当前未完成
+
+- 真正 EXE 打包。
+- Tauri / Electron GUI。
+- 系统托盘。
+- 原生通知。
+- 自动更新。
+- Android APK。
+- 更完整的离线业务体验。
+
+## 安全边界
 
 - 不把后端打包进客户端。
 - 不把 secret 写入客户端。
-- 不输出 token、cookie 或密码。
-- 不复制生产消息正文、附件 key 或会话明细到客户端安装包。
+- 不保存 password、token、cookie 或 session。
+- 不复制生产消息正文、附件 key、session 明细或生产数据到安装包。

@@ -23,6 +23,8 @@
 - `deploy/linux/upgrade.sh`
 - `deploy/windows-wizard/README.md`
 - `deploy/windows-wizard/package.json`
+- `deploy/desktop-client/README.md`
+- `deploy/desktop-client/package.json`
 
 ## 推进原则
 
@@ -35,3 +37,7 @@
 ## Windows 部署向导状态
 
 Windows 部署向导已进入 MVP scaffold：当前是独立 CLI/Tauri-ready package，可生成脱敏部署计划并运行 smoke；SSH 与 transfer 仍为 mock / 接口层，尚未打包真实 EXE。
+
+## PWA 与桌面客户端状态
+
+PWA 已进入 MVP：包含 manifest、service worker、offline page 和图标。桌面客户端 EXE 壳已进入 scaffold：当前是独立 CLI/Tauri-ready package，可生成脱敏启动计划并运行 smoke；尚未打包真实 EXE，也未接入 Tauri/Electron GUI。

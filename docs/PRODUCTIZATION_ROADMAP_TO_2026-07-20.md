@@ -85,3 +85,11 @@
 - 当前支持配置校验、脱敏部署计划生成、远程命令生成、日志脱敏、SSH/transfer mock 接口和 smoke。
 - CLI 支持 `--smoke` 与 `--plan <config.json>`。
 - 当前不包含真实 GUI、EXE 打包、真实 SSH 上传执行和云厂商 API。
+
+## PWA 与桌面客户端 EXE 壳 MVP 状态
+
+- PWA 已具备 manifest、service worker、offline page、SVG 图标和生产环境注册入口。
+- service worker 只缓存基础静态资源，明确不缓存 `/api/*`、非 GET 请求或 WebSocket。
+- `deploy/desktop-client` 已新增独立 CLI/Tauri-ready scaffold。
+- 桌面客户端支持配置校验、启动计划生成、敏感 URL 参数脱敏、mock launcher 和 smoke。
+- 当前不包含真正 EXE 打包、Tauri/Electron GUI、系统托盘、原生通知、自动更新和 Android APK。
