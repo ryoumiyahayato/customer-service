@@ -1,0 +1,55 @@
+services:
+  app:
+    image: customer-chat-app:local
+    build:
+      context: ../..
+      dockerfile: deploy/linux/app.Dockerfile
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_PATH: ${STORAGE_PATH:-/app/storage}
+      APP_PORT: ${APP_PORT:-3000}
+    depends_on:
+      - postgres
+    expose:
+      - "${APP_PORT:-3000}"
+    volumes:
+      - app-storage:${STORAGE_PATH:-/app/storage}
+      - app-logs:/app/logs
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    env_file:
+      - .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  app-storage:
+  app-logs:
+  caddy-data:
+  caddy-config:

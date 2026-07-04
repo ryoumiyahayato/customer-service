@@ -1,0 +1,9 @@
+{$APP_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy app:{$APP_PORT}
+}
+
+{$VISITOR_ROOT_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy app:{$APP_PORT}
+}
