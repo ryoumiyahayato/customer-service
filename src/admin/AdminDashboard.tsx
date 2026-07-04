@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { apiFetch } from '../api';
 import InviteLinkPanel from './InviteLinkPanel';
 import AdminLogin from './AdminLogin';
+import { InlineNotice } from '../ui/Notice';
+import { LoadingState, StatusBlock } from '../ui/StatusBlock';
 import '../styles.css';
 
 type Message = any;
@@ -635,7 +637,7 @@ export default function AdminDashboard() {
   const uploadButtonLabel = sending === 'image' ? '上传中...' : '📎';
   const staffButtonLabel = staffSending ? '发送中...' : '发送';
 
-  if (loading) return <div className="admin-loading-page"><div className="admin-loading-card"><span className="spinner" /> 正在加载后台...</div></div>;
+  if (loading) return <div className="admin-loading-page"><LoadingState className="admin-loading-card">正在加载后台...</LoadingState></div>;
   if (!admin && !loading) return <AdminLogin onLoginSuccess={() => { setLoading(true); return fetchAdmin(); }} />;
   if (disabled) return <div className="admin-loading-page"><div className="admin-loading-card">此账号已被禁用</div></div>;
 
@@ -690,7 +692,7 @@ export default function AdminDashboard() {
                 </div>
               </button>
             ))}
-            {visibleSessions.length === 0 && <div className="empty-state small-empty">当前分组暂无会话</div>}
+            {visibleSessions.length === 0 && <StatusBlock className="small-empty">当前分组暂无会话</StatusBlock>}
           </div>
         </div>}
       </aside>
@@ -757,7 +759,7 @@ export default function AdminDashboard() {
                       </div>
                     </button>
                   ))}
-                  {visibleSessions.length === 0 && <div className="empty-state">当前分组暂无会话</div>}
+                  {visibleSessions.length === 0 && <StatusBlock>当前分组暂无会话</StatusBlock>}
                 </div>
               </div>
             )}
@@ -769,10 +771,10 @@ export default function AdminDashboard() {
                     {renderCustomerRemarkEditor()}
                     {renderSessionLifecycleActions(cur)}
                   </div>
-                  {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
+                  {toast && <InlineNotice onDismiss={() => setToast('')}>{toast}</InlineNotice>}
                   <div className="msgs">
-                    {loadingMsgs === cur.id && <div className="empty-state"><span className="spinner" /> 正在加载会话消息...</div>}
-                    {selectedMsgs.length === 0 && !loadingMsgs && <div className="empty-state">{currentSessionEnded ? '历史已清空' : '暂无消息，发送第一条回复开始沟通。'}</div>}
+                    {loadingMsgs === cur.id && <LoadingState>正在加载会话消息...</LoadingState>}
+                    {selectedMsgs.length === 0 && !loadingMsgs && <StatusBlock>{currentSessionEnded ? '历史已清空' : '暂无消息，发送第一条回复开始沟通。'}</StatusBlock>}
                     {selectedMsgs.map(renderSelectedMessage)}
                   </div>
                   {currentSessionEnded ? <div className="session-ended-state">会话已结束，消息输入已关闭。</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
@@ -785,7 +787,7 @@ export default function AdminDashboard() {
               </div>
             )}
             {view === 'sessions' && mobileView === 'chat' && !cur && (
-              <div className="mobile-chat-workspace"><div className="empty-state">请选择一个会话查看沟通记录。</div></div>
+              <div className="mobile-chat-workspace"><StatusBlock>请选择一个会话查看沟通记录。</StatusBlock></div>
             )}
             {view === 'operators' && isSuper && (
               <div className="mobile-panel-workspace">
@@ -809,7 +811,7 @@ export default function AdminDashboard() {
                         <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
                         {op.is_disabled ? <button type="button" className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
-                    )) : <div className="empty-state">暂无客服账号，可先创建一个客服账号。</div>}
+                    )) : <StatusBlock>暂无客服账号，可先创建一个客服账号。</StatusBlock>}
                   </div>
                 </div>
               </div>
@@ -818,7 +820,7 @@ export default function AdminDashboard() {
               <div className="mobile-panel-workspace">
                 <section className="chat-panel" style={{ height: '100%' }}>
                   <div className="msgs">
-                    {staffMsgs.length === 0 ? <div className="empty-state">暂无内部消息，发送一条同步团队状态。</div> : staffMsgs.map(m => (
+                    {staffMsgs.length === 0 ? <StatusBlock>暂无内部消息，发送一条同步团队状态。</StatusBlock> : staffMsgs.map(m => (
                       <div key={m.id} className={'msg ' + (m.sender_admin_id === admin.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
                     ))}
                   </div>
@@ -841,11 +843,11 @@ export default function AdminDashboard() {
                     {renderCustomerRemarkEditor()}
                     {renderSessionLifecycleActions(cur)}
                   </div> : null}
-                  {toast && <div className="notice">{toast}<button type="button" className="notice-dismiss" onClick={() => setToast('')}>关闭</button></div>}
+                  {toast && <InlineNotice onDismiss={() => setToast('')}>{toast}</InlineNotice>}
                   <div className="msgs">
-                    {loadingMsgs === cur?.id ? <div className="empty-state"><span className="spinner" /> 正在加载会话消息...</div> : null}
-                    {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <div className="empty-state">{currentSessionEnded ? '历史已清空' : '暂无消息，选中输入框即可开始回复。'}</div> : null}
-                    {!cur ? <div className="empty-state">请选择左侧会话查看沟通记录。</div> : null}
+                    {loadingMsgs === cur?.id ? <LoadingState>正在加载会话消息...</LoadingState> : null}
+                    {!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at ? <StatusBlock>{currentSessionEnded ? '历史已清空' : '暂无消息，选中输入框即可开始回复。'}</StatusBlock> : null}
+                    {!cur ? <StatusBlock>请选择左侧会话查看沟通记录。</StatusBlock> : null}
                     {selectedMsgs.map(renderSelectedMessage)}
                   </div>
                   {cur && !currentSessionEnded ? (
@@ -856,7 +858,7 @@ export default function AdminDashboard() {
                       <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                     </form>
                   ) : (
-                    <div className="empty-state">{cur ? '会话已结束，消息输入已关闭。' : '请选择一个访客会话查看沟通记录。'}</div>
+                    <StatusBlock>{cur ? '会话已结束，消息输入已关闭。' : '请选择一个访客会话查看沟通记录。'}</StatusBlock>
                   )}
                 </section>
               </div>
@@ -883,7 +885,7 @@ export default function AdminDashboard() {
                         <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
                         {op.is_disabled ? <button type="button" className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
-                    )) : <div className="empty-state">暂无客服账号，可先创建一个客服账号。</div>}
+                    )) : <StatusBlock>暂无客服账号，可先创建一个客服账号。</StatusBlock>}
                   </div>
                 </aside>
               </div>
@@ -892,7 +894,7 @@ export default function AdminDashboard() {
               <div className="workspace">
                 <section className="chat-panel">
                   <div className="msgs">
-                    {staffMsgs.length === 0 ? <div className="empty-state">暂无内部消息，发送一条同步团队状态。</div> : staffMsgs.map(m => (
+                    {staffMsgs.length === 0 ? <StatusBlock>暂无内部消息，发送一条同步团队状态。</StatusBlock> : staffMsgs.map(m => (
                       <div key={m.id} className={'msg ' + (m.sender_admin_id === admin.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
                     ))}
                   </div>

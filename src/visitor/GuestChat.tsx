@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { apiFetch } from '../api';
 import LinkExpired from '../common/LinkExpired';
+import { NetworkNotice } from '../ui/Notice';
+import { LoadingState, StatusBlock } from '../ui/StatusBlock';
 import '../styles.css';
 
 type Message = any;
@@ -495,12 +497,12 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
         <div className="header-right">
         </div>
       </header>
-      {networkBanner && <div className="network-banner">网络不稳定，消息可能延迟同步；如发送失败请稍后重试 <button onClick={() => setNetworkBanner(false)}>关闭</button></div>}
-      {toast && <div className="network-banner error-banner">{toast} <button onClick={() => setToast('')}>关闭</button></div>}
+      {networkBanner && <NetworkNotice onDismiss={() => setNetworkBanner(false)}>网络不稳定，消息可能延迟同步；如发送失败请稍后重试</NetworkNotice>}
+      {toast && <NetworkNotice tone="error" onDismiss={() => setToast('')}>{toast}</NetworkNotice>}
       <div className="msgs">
-        {messages.length === 0 && <div className="empty-state chat-empty-state"><b>还没有消息</b><span>发送第一条消息，客服看到后会尽快回复。</span></div>}
+        {messages.length === 0 && <StatusBlock className="chat-empty-state" title="还没有消息">发送第一条消息，客服看到后会尽快回复。</StatusBlock>}
         {messages.map(renderVisitorMessage)}
-        {sending === 'image' && <div className="msg user sending-msg"><span className="spinner" /> 正在上传图片...</div>}
+        {sending === 'image' && <LoadingState className="msg user sending-msg">正在上传图片...</LoadingState>}
         <div ref={messagesEnd} />
       </div>
       <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
