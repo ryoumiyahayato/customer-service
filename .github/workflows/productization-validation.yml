@@ -1,0 +1,168 @@
+name: Productization validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - v0.4-v0.8-productization
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Linux CI validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Security boundary checks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          private_key_patterns=(
+            "BEGIN OPENSSH PRIVATE KEY"
+            "BEGIN RSA PRIVATE KEY"
+            "BEGIN PRIVATE KEY"
+          )
+
+          for pattern in "${private_key_patterns[@]}"; do
+            if git grep -n -I -- "$pattern" -- ':!.github/workflows/productization-validation.yml'; then
+              echo "Found a private key block marker in the repository."
+              exit 1
+            fi
+          done
+
+          if test -e deploy/linux/.env; then
+            echo "deploy/linux/.env must not be committed."
+            exit 1
+          fi
+
+      - name: Install root dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --package-lock=false --no-audit --no-fund
+          fi
+
+      - name: Root typecheck
+        run: npm run typecheck
+
+      - name: Root doctor
+        run: npm run doctor
+
+      - name: Root lifecycle CI-safe check
+        run: |
+          # CI does not use Cloudflare secrets, so this does not run the real Wrangler D1 dry-run.
+          npm run lifecycle:ci-check
+
+      - name: Root build
+        run: npm run build
+
+      - name: Linux shell syntax checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n deploy/linux/install.sh
+          bash -n deploy/linux/healthcheck.sh
+          bash -n deploy/linux/backup.sh
+          bash -n deploy/linux/restore.sh
+          bash -n deploy/linux/upgrade.sh
+
+      - name: Docker compose static config
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > deploy/linux/.env <<'EOF'
+          NODE_ENV=production
+          STATIC_DIR=/app/dist
+          APP_PORT=3000
+          APP_DOMAIN=admin.example.com
+          VISITOR_ROOT_DOMAIN=visitor.example.com
+          POSTGRES_DB=customer_chat
+          POSTGRES_USER=customer_chat
+          POSTGRES_PASSWORD=ci-placeholder-postgres-password
+          DATABASE_URL=postgres://customer_chat:ci-placeholder-postgres-password@postgres:5432/customer_chat
+          SESSION_SECRET=ci-placeholder-session-secret
+          SETUP_TOKEN=ci-placeholder-setup-token
+          STORAGE_DRIVER=local
+          STORAGE_PATH=/app/storage
+          BACKUP_DIR=./backup
+          MAX_UPLOAD_SIZE=10485760
+          ENCRYPTION_ENABLED=0
+          ENCRYPTION_KEY=
+          ENCRYPTION_KEY_VERSION=v1
+          LIFECYCLE_CRON=0 * * * *
+          LOG_LEVEL=info
+          EOF
+          docker compose -f deploy/linux/docker-compose.yml config
+
+      - name: Install server-generic dependencies
+        working-directory: server-generic
+        run: npm ci --no-audit --no-fund
+
+      - name: server-generic typecheck
+        working-directory: server-generic
+        run: npm run typecheck
+
+      - name: server-generic build
+        working-directory: server-generic
+        run: npm run build
+
+      - name: server-generic smoke
+        working-directory: server-generic
+        run: npm run smoke
+
+      - name: Install windows-wizard dependencies
+        working-directory: deploy/windows-wizard
+        run: npm ci --no-audit --no-fund
+
+      - name: windows-wizard smoke
+        working-directory: deploy/windows-wizard
+        run: npm run smoke
+
+      - name: windows-wizard plan
+        working-directory: deploy/windows-wizard
+        run: npm run plan -- --plan examples/deploy-plan.example.json
+
+      - name: windows-wizard deploy dry-run
+        working-directory: deploy/windows-wizard
+        run: npm run deploy -- --plan examples/deploy-plan.example.json --dry-run
+
+      - name: Install desktop-client dependencies
+        working-directory: deploy/desktop-client
+        run: npm ci --no-audit --no-fund
+
+      - name: desktop-client smoke
+        working-directory: deploy/desktop-client
+        run: npm run smoke
+
+      - name: desktop-client plan
+        working-directory: deploy/desktop-client
+        run: npm run plan
+
+      - name: desktop-client package check
+        working-directory: deploy/desktop-client
+        run: npm run package:check
+
+      - name: Android static checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f deploy/android-shell/settings.gradle
+          test -f deploy/android-shell/build.gradle
+          test -f deploy/android-shell/app/build.gradle
+          test -f deploy/android-shell/app/src/main/AndroidManifest.xml

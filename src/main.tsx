@@ -5,6 +5,7 @@ import App from './App';
 import { ErrorBoundary, CrashScreen } from './ErrorBoundary';
 import { getErrorMessage, isExpectedError } from './compat';
 import { isAdminMode } from './routing';
+import { registerPwa } from './pwa';
 
 function isAdminPath() {
   return isAdminMode(location);
@@ -34,5 +35,6 @@ window.onunhandledrejection = (event) => {
 if (!rootElement) {
   document.body.innerHTML = '<div class="page crash-page"><div class="crash-card"><h1>页面加载失败</h1><p>请刷新重试，或更换浏览器。</p><pre>错误信息：root 节点不存在</pre></div></div>';
 } else {
+  registerPwa();
   createRoot(rootElement).render(<React.StrictMode><ErrorBoundary isAdmin={isAdminPath()}><App /></ErrorBoundary></React.StrictMode>);
 }
