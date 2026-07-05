@@ -131,6 +131,7 @@
 ## GitHub Actions Linux CI 验证状态
 
 - 已新增 `.github/workflows/productization-validation.yml`，使用 GitHub Actions `ubuntu-latest` 补足 Windows LTSC 本机缺少 bash、Docker 和 Android SDK 时的验证缺口。
-- 当前 CI 覆盖 root typecheck/build/doctor/lifecycle dry-run、`server-generic` typecheck/build/smoke、`deploy/linux` bash 语法、Docker Compose config、`deploy/windows-wizard` smoke/plan/deploy dry-run、`deploy/desktop-client` smoke/plan/package-check，以及 Android shell 文件存在性静态检查。
-- CI 只做静态和 dry-run 验证，不等于真实 VPS 验证；不执行 Cloudflare deploy，不跑 production migration，不真实 SSH，不写入 D1，不删除 R2，不修改 secret，不生成 APK，也不验证真实 Caddy HTTPS。
+- 当前 CI 覆盖 root typecheck/build/doctor/lifecycle CI-safe validation、`server-generic` typecheck/build/smoke、`deploy/linux` bash 语法、Docker Compose config、`deploy/windows-wizard` smoke/plan/deploy dry-run、`deploy/desktop-client` smoke/plan/package-check，以及 Android shell 文件存在性静态检查。
+- lifecycle CI-safe validation 只做本地静态安全边界检查，不访问 Cloudflare 或 D1；本地或授权环境中的 `npm run lifecycle:dry-run` 仍用于真实 Wrangler read-only D1 dry-run。
+- CI 只证明安全边界和静态检查通过，不等于真实 VPS 或真实 Cloudflare/D1 验证；不执行 Cloudflare deploy，不跑 production migration，不真实 SSH，不写入 D1，不读取真实 D1，不删除 R2，不修改 secret，不生成 APK，也不验证真实 Caddy HTTPS。
 - 后续仍需要在单独授权的真实 VPS 环境中做端到端部署验收。

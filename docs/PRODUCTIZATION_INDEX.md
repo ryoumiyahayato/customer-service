@@ -73,6 +73,6 @@ Linux 部署脚本已进入接近真实 VPS 可运行的最小闭环：`install.
 
 ## GitHub Actions Linux CI 验证状态
 
-已新增 `.github/workflows/productization-validation.yml`，在 `ubuntu-latest` 上补足 Windows LTSC 本机缺少 bash、Docker 和 Android SDK 时的验证缺口。当前覆盖 root、`server-generic`、`deploy/linux` bash 语法、Docker Compose config、Windows 部署向导 dry-run、桌面客户端 package-check 和 Android shell 静态文件检查。
+已新增 `.github/workflows/productization-validation.yml`，在 `ubuntu-latest` 上补足 Windows LTSC 本机缺少 bash、Docker 和 Android SDK 时的验证缺口。当前覆盖 root、lifecycle CI-safe validation、`server-generic`、`deploy/linux` bash 语法、Docker Compose config、Windows 部署向导 dry-run、桌面客户端 package-check 和 Android shell 静态文件检查。
 
-该 CI 不是真实 VPS 验证，不执行 Cloudflare deploy，不跑 production migration，不真实 SSH，不生成 APK，也不验证真实 Caddy HTTPS；真实 VPS 端到端部署仍需后续单独授权执行。
+该 lifecycle CI-safe check 不访问 Cloudflare 或 D1，只验证安全边界和静态约束；本地或授权环境中的 `npm run lifecycle:dry-run` 仍用于真实 Wrangler read-only D1 dry-run。该 CI 不是真实 VPS 或真实 Cloudflare/D1 验证，不执行 Cloudflare deploy，不跑 production migration，不真实 SSH，不生成 APK，也不验证真实 Caddy HTTPS；真实 VPS 端到端部署仍需后续单独授权执行。

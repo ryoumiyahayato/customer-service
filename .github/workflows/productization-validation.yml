@@ -64,8 +64,10 @@ jobs:
       - name: Root doctor
         run: npm run doctor
 
-      - name: Root lifecycle dry-run
-        run: npm run lifecycle:dry-run
+      - name: Root lifecycle CI-safe check
+        run: |
+          # CI does not use Cloudflare secrets, so this does not run the real Wrangler D1 dry-run.
+          npm run lifecycle:ci-check
 
       - name: Root build
         run: npm run build
