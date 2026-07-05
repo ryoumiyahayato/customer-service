@@ -88,11 +88,12 @@
 
 ## PWA 与桌面客户端 EXE 壳 MVP 状态
 
-- PWA 已具备 manifest、service worker、offline page、SVG 图标和生产环境注册入口。
-- service worker 只缓存基础静态资源，明确不缓存 `/api/*`、非 GET 请求或 WebSocket。
+- PWA 已具备 manifest、service worker、offline page、SVG 图标、生产环境注册入口和清缓存验证说明。
+- service worker 只缓存基础静态资源和 offline page，明确不缓存 `/api/*`、非 GET 请求、WebSocket 或带 token / session / cookie / password / secret / key 查询参数的 URL。
 - `deploy/desktop-client` 已新增独立 CLI/Tauri-ready scaffold。
-- 桌面客户端支持配置校验、启动计划生成、敏感 URL 参数脱敏、mock launcher 和 smoke。
-- 当前不包含真正 EXE 打包、Tauri/Electron GUI、系统托盘、原生通知和自动更新。
+- 桌面客户端支持配置校验、启动计划生成、package check、敏感 URL 参数脱敏、mock launcher 和 smoke。
+- 桌面客户端示例配置只使用 `example.com` 占位，当前不保存真实 secret，不记录 token/cookie，不内置服务端。
+- 当前不包含真正 EXE 打包、Tauri/Electron GUI、系统托盘、原生通知、自动更新和漂亮 GUI。
 
 ## Android APK 壳 MVP 状态
 
@@ -101,7 +102,8 @@
 - 当前只声明 `INTERNET` 权限，不申请通讯录、定位、相机、录音、短信或存储权限。
 - WebView 首版只作为已部署系统入口，默认使用占位 HTTPS URL，发布前由部署人员替换为实际后台地址。
 - 当前安全边界包括 URL scheme 白名单、禁用 file/content access、不注入 JavaScript bridge、敏感查询参数日志脱敏和生产 cleartext 默认禁用。
-- 当前不包含真实 APK 签名、应用商店分发、原生通知、文件选择器、下载管理和自动更新。
+- README 和测试清单已补充 Gradle / Android SDK 环境缺失时的报告口径、release signing 占位说明和 WebView 加载失败低信息量提示。
+- 当前不包含真实 APK 签名、应用商店分发、原生通知、文件选择器、下载管理和自动更新；真实 APK 构建留给 Android Studio、CI 或实机环境验证。
 
 ## 服务端加密存储 MVP 状态
 

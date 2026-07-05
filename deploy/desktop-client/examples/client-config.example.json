@@ -1,0 +1,10 @@
+{
+  "appName": "客服系统",
+  "windowTitle": "客服系统",
+  "adminUrl": "https://admin.example.com/",
+  "visitorRootUrl": "https://visitor.example.com/",
+  "startMode": "admin",
+  "mode": "auto",
+  "rememberWindowState": true,
+  "allowExternalOpen": false
+}

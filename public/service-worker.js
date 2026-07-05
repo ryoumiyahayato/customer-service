@@ -7,6 +7,8 @@ const STATIC_ASSETS = [
   '/icons/app-icon-maskable.svg',
 ];
 
+const SENSITIVE_QUERY_PATTERN = /token|session|cookie|password|secret|key|setupToken|SETUP_TOKEN|ENCRYPTION_KEY/i;
+
 function shouldSkipCache(request) {
   const url = new URL(request.url);
   return (
@@ -14,7 +16,8 @@ function shouldSkipCache(request) {
     url.origin !== location.origin ||
     url.pathname.startsWith('/api/') ||
     url.protocol === 'ws:' ||
-    url.protocol === 'wss:'
+    url.protocol === 'wss:' ||
+    Array.from(url.searchParams.keys()).some((key) => SENSITIVE_QUERY_PATTERN.test(key))
   );
 }
 

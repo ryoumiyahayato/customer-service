@@ -27,7 +27,9 @@
 - `deploy/windows-wizard/examples/deploy-plan.example.json`
 - `deploy/desktop-client/README.md`
 - `deploy/desktop-client/package.json`
+- `deploy/desktop-client/examples/client-config.example.json`
 - `deploy/android-shell/README.md`
+- `deploy/android-shell/app/src/test/README.md`
 - `deploy/android-shell/settings.gradle`
 - `deploy/android-shell/build.gradle`
 - `deploy/android-shell/app/build.gradle`
@@ -55,11 +57,11 @@ Windows 部署向导真实 SSH adapter 已进入 MVP：当前保留 mock / dry-r
 
 ## PWA 与桌面客户端状态
 
-PWA 已进入 MVP：包含 manifest、service worker、offline page 和图标。桌面客户端 EXE 壳已进入 scaffold：当前是独立 CLI/Tauri-ready package，可生成脱敏启动计划并运行 smoke；尚未打包真实 EXE，也未接入 Tauri/Electron GUI。
+PWA 已进入 MVP：包含 manifest、service worker、offline page、图标和生产注册入口；service worker 只缓存静态资源和离线页，不缓存 API、非 GET、WebSocket 或带敏感查询参数的 URL。桌面客户端 EXE 壳已进入可打包准备第一包：当前是独立 CLI/Tauri-ready package，可生成脱敏启动计划、运行 smoke、运行 package check，并通过示例配置说明后台地址配置方式；尚未打包真实 EXE，也未接入 Tauri/Electron GUI。
 
 ## Android APK 壳状态
 
-Android APK 壳已进入 MVP scaffold：当前是独立 Gradle / Kotlin / WebView 工程，默认使用占位 HTTPS URL，只声明 `INTERNET` 权限，包含 URL scheme 白名单、禁用 file/content access、不注入 JavaScript bridge 和生产 cleartext 默认禁用等基础安全边界；尚未做真实签名打包、应用商店分发、原生通知、文件选择器、下载管理和自动更新。
+Android APK 壳已进入可构建准备第一包：当前是独立 Gradle / Kotlin / WebView 工程，默认使用占位 HTTPS URL，只声明 `INTERNET` 权限，包含 URL scheme 白名单、禁用 file/content access、不注入 JavaScript bridge、生产 cleartext 默认禁用和敏感 URL 脱敏等基础安全边界；README 已说明 Gradle / Android SDK 缺失时的报告口径和 release signing 占位。尚未做真实签名打包、应用商店分发、原生通知、文件选择器、下载管理和自动更新。
 
 ## 服务端加密存储状态
 

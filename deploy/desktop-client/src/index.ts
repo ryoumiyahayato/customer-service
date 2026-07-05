@@ -1,5 +1,6 @@
 import { loadDesktopClientConfig } from './config.js';
 import { generateClientPlan } from './clientPlan.js';
+import { runPackageCheck } from './packageCheck.js';
 import { runSmoke } from './smoke.js';
 
 function usage(): string {
@@ -9,6 +10,7 @@ function usage(): string {
     'Usage:',
     '  node dist/index.js --smoke',
     '  node dist/index.js --plan <config.json>',
+    '  node dist/index.js --package-check',
     '',
     'This MVP does not package an EXE, connect to a server, or store credentials.',
   ].join('\n');
@@ -18,6 +20,11 @@ async function main(argv: string[]) {
   if (argv.includes('--smoke')) {
     await runSmoke();
     console.log('desktop-client smoke passed: URL validation, redaction, client plan, launcher, public config store');
+    return;
+  }
+
+  if (argv.includes('--package-check')) {
+    console.log(JSON.stringify(await runPackageCheck(), null, 2));
     return;
   }
 

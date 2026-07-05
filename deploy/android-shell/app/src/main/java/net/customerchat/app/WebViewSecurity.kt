@@ -3,7 +3,18 @@ package net.customerchat.app
 import android.net.Uri
 
 object WebViewSecurity {
-    private val sensitiveKeys = setOf("token", "session", "cookie", "password", "secret", "code", "setupToken")
+    private val sensitiveKeys = setOf(
+        "token",
+        "session",
+        "cookie",
+        "password",
+        "secret",
+        "code",
+        "key",
+        "setupToken",
+        "SETUP_TOKEN",
+        "ENCRYPTION_KEY",
+    )
 
     fun isAllowedUrl(url: String?): Boolean {
         if (url.isNullOrBlank()) return false

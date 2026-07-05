@@ -1,7 +1,18 @@
 import type { DesktopClientConfig, DesktopClientMode } from './config.js';
 
 const FORBIDDEN_PROTOCOLS = new Set(['file:', 'javascript:', 'data:']);
-const SENSITIVE_QUERY_KEYS = new Set(['token', 'code', 'session', 'cookie', 'password', 'secret', 'setupToken']);
+const SENSITIVE_QUERY_KEYS = new Set([
+  'token',
+  'code',
+  'session',
+  'cookie',
+  'password',
+  'secret',
+  'setupToken',
+  'SETUP_TOKEN',
+  'ENCRYPTION_KEY',
+  'key',
+]);
 
 export type ValidationResult = {
   ok: boolean;
@@ -32,9 +43,14 @@ function isMode(value: unknown): value is DesktopClientMode {
   return value === 'admin' || value === 'visitor' || value === 'auto';
 }
 
+function isStartMode(value: unknown): boolean {
+  return value === undefined || value === 'admin' || value === 'visitor';
+}
+
 export function validateDesktopClientConfig(config: DesktopClientConfig): ValidationResult {
   const errors: string[] = [];
   if (!config.appName || typeof config.appName !== 'string') errors.push('appName is required');
+  if (config.windowTitle !== undefined && typeof config.windowTitle !== 'string') errors.push('windowTitle must be string');
   if (!config.adminUrl || typeof config.adminUrl !== 'string') {
     errors.push('adminUrl is required');
   } else {
@@ -43,6 +59,7 @@ export function validateDesktopClientConfig(config: DesktopClientConfig): Valida
 
   if (config.visitorRootUrl) validateHttpUrl(config.visitorRootUrl, 'visitorRootUrl', errors);
   if (!isMode(config.mode)) errors.push('mode must be admin, visitor, or auto');
+  if (!isStartMode(config.startMode)) errors.push('startMode must be admin or visitor');
   if (typeof config.rememberWindowState !== 'boolean') errors.push('rememberWindowState must be boolean');
   if (typeof config.allowExternalOpen !== 'boolean') errors.push('allowExternalOpen must be boolean');
 

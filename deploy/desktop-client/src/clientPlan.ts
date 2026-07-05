@@ -28,9 +28,10 @@ export function generateClientPlan(config: DesktopClientConfig): ClientPlan {
     steps: [
       { id: 'validate-config', title: '校验配置', detail: '确认后台地址和客户端模式有效。' },
       { id: 'open-target', title: '打开目标系统', detail: `打开 ${redactUrl(targetUrl)}` },
+      { id: 'window-title', title: '窗口标题', detail: config.windowTitle || config.appName },
       { id: 'window-state', title: '窗口状态', detail: config.rememberWindowState ? '后续保留窗口状态。' : '不保存窗口状态。' },
     ],
-    todos: ['系统托盘 TODO', '原生通知 TODO', '自动更新 TODO'],
+    todos: ['Tauri/Electron GUI TODO', '系统托盘 TODO', '原生通知 TODO', '自动更新 TODO'],
   };
   return redactObject(plan);
 }
