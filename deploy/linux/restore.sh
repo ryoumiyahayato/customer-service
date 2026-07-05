@@ -13,21 +13,41 @@ if [[ "$CONFIRM_FLAG" != "--i-understand-this-overwrites-data" || -z "$BACKUP_PA
   exit 1
 fi
 
-if [[ ! -d "$BACKUP_PATH" ]]; then
-  echo "Backup directory not found."
+[[ -d "$BACKUP_PATH" ]] || { echo "Backup directory not found."; exit 1; }
+[[ -f ".env" ]] || { echo "Missing .env."; exit 1; }
+
+set -a
+source .env
+set +a
+
+[[ -n "${POSTGRES_USER:-}" ]] || { echo "POSTGRES_USER is required."; exit 1; }
+[[ -n "${POSTGRES_DB:-}" ]] || { echo "POSTGRES_DB is required."; exit 1; }
+
+cat <<'MSG'
+Restore requires a maintenance window and overwrites application data.
+The script will stop app writes before database restore. It will not print secret values.
+MSG
+
+if [[ ! -f "${BACKUP_PATH}/postgres.dump" ]]; then
+  echo "Missing postgres.dump in backup directory."
   exit 1
 fi
 
-cat <<'MSG'
-Restore skeleton only.
+echo "Stopping app container before restore."
+docker compose stop app
 
-This script intentionally does not overwrite production data automatically.
-Before restoring, an operator must:
-1. Stop application writes.
-2. Verify the backup source.
-3. Create a fresh backup of current data.
-4. Manually confirm the storage archive before restoring local attachment files.
-5. Approve PostgreSQL and storage restore commands manually.
+echo "Restoring PostgreSQL dump."
+cat "${BACKUP_PATH}/postgres.dump" | docker compose exec -T postgres pg_restore --clean --if-exists --no-owner --no-privileges -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"
 
-TODO: implement guarded restore commands after the safety flow is finalized.
-MSG
+if [[ -f "${BACKUP_PATH}/storage.tar.gz" ]]; then
+  echo "Restoring storage archive."
+  mkdir -p storage
+  tar -xzf "${BACKUP_PATH}/storage.tar.gz"
+else
+  echo "No storage archive found; skipping storage restore."
+fi
+
+echo "Starting services after restore."
+docker compose up -d
+"$ROOT_DIR/healthcheck.sh"
+echo "Restore completed. Confirm application behavior before reopening traffic."

@@ -76,6 +76,18 @@
 - `upgrade.sh` 已包含 pull/build/up/healthcheck 和 rollback TODO。
 - `server-generic` 目前只提供普通服务器最小 HTTP 入口，不替代 Cloudflare Worker。
 
+## Linux 实机部署闭环强化第一包状态
+
+- `docker-compose.yml` 已强化 app / postgres / caddy 三服务依赖、healthcheck、named volume、storage/logs 挂载和 restart policy。
+- `Dockerfile` 明确构建 `server-generic`、复制 migrations/scripts 和前端 `dist`，运行时不复制宿主 `node_modules`。
+- `Caddyfile` 使用 `APP_DOMAIN` 与 `VISITOR_ROOT_DOMAIN` 占位变量，不写真实域名。
+- `install.sh` 已支持 `--self-check`、`--dry-run` 和 `--migrate`；migration 默认不执行，必须显式 `--migrate`。
+- `healthcheck.sh` 只读检查 compose 服务、`/healthz` 和 `/api/setup/status`，只输出 setup 安全枚举字段。
+- `backup.sh` 默认不备份 `.env`，只备份 PostgreSQL dump 与 storage，并提示单独保护 secret。
+- `restore.sh` 默认拒绝执行，必须带强确认参数才恢复数据库和 storage。
+- `upgrade.sh` 默认不运行 migration，只有显式 `--migrate` 才运行 server-generic PostgreSQL migration。
+- 当前 Windows LTSC 开发机不代表 Linux VPS 实机验收；真实 VPS 部署验证留到后续远程服务器环境执行。
+
 ## server-generic 业务迁移第一包状态
 
 - `server-generic/migrations/0001_initial.sql` 已提供 PostgreSQL 首版空库 schema。
@@ -85,7 +97,7 @@
 - setup initialize 只允许空 admin 状态创建首个 admin；成功后不自动登录、不创建 session、不设置 cookie。
 - admin login 使用密码 hash 校验，创建 admin session，并只在 cookie 中设置随机 session token。
 - 数据库只保存 session token hash，不保存明文 session token。
-- Linux `install.sh` 默认不运行 migration，仅在显式设置 `RUN_SERVER_MIGRATIONS=1` 后执行 server-generic migration。
+- Linux `install.sh` 默认不运行 migration，仅在显式传入 `--migrate` 后执行 server-generic PostgreSQL migration。
 - `healthcheck.sh` 已覆盖 `/healthz` 和 `/api/setup/status`。
 
 该迁移包仍不包含完整访客聊天 API、WebSocket 房间协议、生命周期写入和附件清理迁移；这些能力继续保持 Cloudflare 线上版为基准，后续分包推进。

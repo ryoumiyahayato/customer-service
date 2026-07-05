@@ -111,3 +111,9 @@
 - 当前不加密附件内容本体，附件内容加密、旧数据迁移和密钥轮换属于后续增强。
 - `ENCRYPTION_KEY` 从服务器环境变量读取，不能写入 git、文档、日志、前端代码或构建产物；丢失 key 会影响已加密数据解密。
 - 备份恢复必须同时保护数据库、storage 目录和密钥管理记录；数据库全文搜索能力会受加密影响。
+
+## Linux 实机部署闭环强化状态
+
+- `deploy/linux` 已从骨架可执行推进到接近真实 VPS 可运行的最小闭环：compose healthcheck、Caddy 反代、install self-check、显式 migration、只读 healthcheck、backup/restore/upgrade 安全边界均已强化。
+- 当前验收口径是脚本逻辑强化、静态审计、Node 检查和 server-generic smoke；真实 Linux VPS 部署验证留到后续远程服务器环境执行。
+- Windows 部署向导后续应复用这套脚本，不直接在向导内复制部署逻辑。

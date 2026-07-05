@@ -21,6 +21,7 @@
 - `deploy/linux/backup.sh`
 - `deploy/linux/restore.sh`
 - `deploy/linux/upgrade.sh`
+- `server-generic/scripts/migrate.mjs`
 - `deploy/windows-wizard/README.md`
 - `deploy/windows-wizard/package.json`
 - `deploy/desktop-client/README.md`
@@ -60,3 +61,7 @@ Android APK 壳已进入 MVP scaffold：当前是独立 Gradle / Kotlin / WebVie
 ## 服务端加密存储状态
 
 服务端加密存储已进入 MVP 实现：`server-generic` 当前支持新消息正文 AES-256-GCM 加密、新附件展示文件名元数据加密、旧明文字段兼容读取、密钥版本标记和 smoke 自检。当前不迁移旧数据，不加密附件内容本体；`ENCRYPTION_KEY` 必须由服务器环境变量提供，备份恢复必须同时保护密钥管理记录。
+
+## Linux 部署闭环状态
+
+Linux 部署脚本已进入接近真实 VPS 可运行的最小闭环：`install.sh` 支持 self-check、dry-run 和显式 `--migrate`，`healthcheck.sh` 只读输出安全 setup 枚举，`backup.sh` 默认不备份 `.env`，`restore.sh` 强确认后才覆盖数据，`upgrade.sh` 默认不运行 migration。

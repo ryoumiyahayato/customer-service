@@ -7,8 +7,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "migrate": "node dist/db/migrate.js",
-    "migrate:status": "node dist/db/migrate.js --status",
+    "migrate": "node scripts/migrate.mjs up",
+    "migrate:status": "node scripts/migrate.mjs status",
     "lifecycle:dry-run": "node scripts/lifecycle-dry-run.mjs",
     "smoke": "node scripts/smoke.mjs"
   },

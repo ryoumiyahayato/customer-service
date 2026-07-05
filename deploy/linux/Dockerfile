@@ -6,7 +6,10 @@ COPY server-generic/package*.json ./server-generic/
 WORKDIR /app/server-generic
 RUN npm ci
 
-COPY server-generic/ ./
+COPY server-generic/tsconfig.json ./
+COPY server-generic/src ./src
+COPY server-generic/scripts ./scripts
+COPY server-generic/migrations ./migrations
 RUN npm run build
 RUN npm prune --omit=dev
 
@@ -22,6 +25,7 @@ ENV STATIC_DIR=/app/dist
 WORKDIR /app
 COPY --from=build /app/server-generic/dist ./server-generic/dist
 COPY --from=build /app/server-generic/migrations ./server-generic/migrations
+COPY --from=build /app/server-generic/scripts ./server-generic/scripts
 COPY --from=build /app/server-generic/node_modules ./server-generic/node_modules
 COPY --from=build /app/server-generic/package*.json ./server-generic/
 COPY --from=build /app/dist ./dist
