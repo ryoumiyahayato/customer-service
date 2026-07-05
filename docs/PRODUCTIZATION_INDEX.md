@@ -9,6 +9,7 @@
 - [v0.6 Windows 部署向导 EXE](./WINDOWS_DEPLOY_WIZARD_v0.6.md)
 - [v0.7 客户端与 PWA](./CLIENTS_AND_PWA_v0.7.md)
 - [v0.8 服务端加密存储](./SERVER_SIDE_ENCRYPTION_v0.8.md)
+- [产品化最终审计](./PRODUCTIZATION_FINAL_AUDIT.md)
 
 ## 部署骨架
 
@@ -76,3 +77,7 @@ Linux 部署脚本已进入接近真实 VPS 可运行的最小闭环：`install.
 已新增 `.github/workflows/productization-validation.yml`，在 `ubuntu-latest` 上补足 Windows LTSC 本机缺少 bash、Docker 和 Android SDK 时的验证缺口。当前覆盖 root、lifecycle CI-safe validation、`server-generic`、`deploy/linux` bash 语法、Docker Compose config、Windows 部署向导 dry-run、桌面客户端 package-check 和 Android shell 静态文件检查。
 
 该 lifecycle CI-safe check 不访问 Cloudflare 或 D1，只验证安全边界和静态约束；本地或授权环境中的 `npm run lifecycle:dry-run` 仍用于真实 Wrangler read-only D1 dry-run。该 CI 不是真实 VPS 或真实 Cloudflare/D1 验证，不执行 Cloudflare deploy，不跑 production migration，不真实 SSH，不生成 APK，也不验证真实 Caddy HTTPS；真实 VPS 端到端部署仍需后续单独授权执行。
+
+## 最终封板审计状态
+
+最终审计入口见 [产品化最终审计](./PRODUCTIZATION_FINAL_AUDIT.md)。合并 main 和创建 tag 前，必须在 GitHub Actions 页面确认最新 `productization-validation` workflow 为绿色；本机未安装 `gh`，且公开 GitHub API 无法读取该仓库 Actions 状态。
