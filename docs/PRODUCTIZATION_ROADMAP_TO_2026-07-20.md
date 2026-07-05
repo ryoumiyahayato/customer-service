@@ -127,3 +127,10 @@
 - 当前支持上传 `deploy/linux`、远程执行 `install.sh --self-check`、`install.sh --dry-run`、`install.sh` 和 opt-in `install.sh --migrate`。
 - 当前不自动写远程真实 `.env`，不保存真实密码/私钥/secret，不自动 setup initialize。
 - 真实 VPS 验证仍需后续单独执行。
+
+## GitHub Actions Linux CI 验证状态
+
+- 已新增 `.github/workflows/productization-validation.yml`，使用 GitHub Actions `ubuntu-latest` 补足 Windows LTSC 本机缺少 bash、Docker 和 Android SDK 时的验证缺口。
+- 当前 CI 覆盖 root typecheck/build/doctor/lifecycle dry-run、`server-generic` typecheck/build/smoke、`deploy/linux` bash 语法、Docker Compose config、`deploy/windows-wizard` smoke/plan/deploy dry-run、`deploy/desktop-client` smoke/plan/package-check，以及 Android shell 文件存在性静态检查。
+- CI 只做静态和 dry-run 验证，不等于真实 VPS 验证；不执行 Cloudflare deploy，不跑 production migration，不真实 SSH，不写入 D1，不删除 R2，不修改 secret，不生成 APK，也不验证真实 Caddy HTTPS。
+- 后续仍需要在单独授权的真实 VPS 环境中做端到端部署验收。

@@ -87,6 +87,7 @@
 - `restore.sh` 默认拒绝执行，必须带强确认参数才恢复数据库和 storage。
 - `upgrade.sh` 默认不运行 migration，只有显式 `--migrate` 才运行 server-generic PostgreSQL migration。
 - 当前 Windows LTSC 开发机不代表 Linux VPS 实机验收；真实 VPS 部署验证留到后续远程服务器环境执行。
+- GitHub Actions Linux CI 已新增 `ubuntu-latest` 静态验证，覆盖 deploy/linux bash 语法和 `docker compose -f deploy/linux/docker-compose.yml config`；CI 会使用占位 `.env` 做 config，不提交真实 `.env`，不启动 PostgreSQL，不执行 install、migration 或真实 Caddy HTTPS。
 
 ## Windows 部署向导真实 SSH 第一包状态
 

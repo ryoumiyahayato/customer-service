@@ -59,6 +59,7 @@ service worker 明确不缓存 `/api/*`，不缓存非 GET 请求，不处理 We
 - 桌面客户端：`npm.cmd install`、`npm.cmd run smoke`、`npm.cmd run plan`、`npm.cmd run package:check`。
 - PWA：通过根构建产物检查 manifest、service worker 和 offline page。
 - Android：可做静态审计；只有在具备 Android SDK / Gradle / wrapper 时才执行 `gradle tasks` 和 `gradle assembleDebug`。
+- GitHub Actions Linux CI 已补足本机缺口：在 `ubuntu-latest` 上运行 root 检查、桌面客户端 smoke/plan/package-check，并对 Android shell 做 `settings.gradle`、根 `build.gradle`、app `build.gradle` 和 `AndroidManifest.xml` 文件存在性检查。
 
 必须留给 Android SDK、Tauri、CI 或实机环境的检查：
 
@@ -66,6 +67,8 @@ service worker 明确不缓存 `/api/*`，不缓存非 GET 请求，不处理 We
 - Android APK assemble、签名、安装和 WebView 实机加载。
 - 桌面自动更新、系统托盘、原生通知。
 - Android 原生通知、文件选择器、下载管理和应用商店发布。
+
+当前 CI 不下载 Android SDK，不执行 `assembleDebug`，不生成 APK，也不声称 APK 构建通过；真实移动端验证仍需 Android Studio、CI 专用 Android 环境或实机环境。
 
 ## 与 Windows 部署向导的区别
 

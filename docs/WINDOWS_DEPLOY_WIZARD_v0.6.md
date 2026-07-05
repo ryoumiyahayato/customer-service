@@ -50,6 +50,7 @@ Windows 部署向导 EXE 用于帮助非技术用户从本机连接远程 Linux 
 - dry-run 不连接服务器，只列出将上传的 `deploy/linux` 文件和将执行的远程命令。
 - 部署计划覆盖测试 SSH、创建远程目录、上传 `deploy/linux`、执行 `install.sh --self-check`、按计划执行 `install.sh --dry-run` / `install.sh` / `install.sh --migrate`、输出后台和 `/setup` 地址。
 - 第一包不自动写远程真实 `.env`，只上传 `.env.example` 并提示用户在服务器侧填写 secret。
+- GitHub Actions Linux CI 已新增 Windows 部署向导验证：运行 `npm run smoke`、`npm run plan -- --plan examples/deploy-plan.example.json` 和 `npm run deploy -- --plan examples/deploy-plan.example.json --dry-run`。该检查只覆盖 mock/dry-run 路径，不真实 SSH，不使用真实 host、private key 或 password。
 
 ## 安全边界
 
