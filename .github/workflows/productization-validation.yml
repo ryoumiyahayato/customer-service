@@ -49,19 +49,26 @@ jobs:
           fi
 
       - name: Install root dependencies
-        run: npm install --no-audit --no-fund
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --package-lock=false --no-audit --no-fund
+          fi
 
       - name: Root typecheck
         run: npm run typecheck
-
-      - name: Root build
-        run: npm run build
 
       - name: Root doctor
         run: npm run doctor
 
       - name: Root lifecycle dry-run
         run: npm run lifecycle:dry-run
+
+      - name: Root build
+        run: npm run build
 
       - name: Linux shell syntax checks
         shell: bash
