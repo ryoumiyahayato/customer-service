@@ -24,6 +24,7 @@
 - `server-generic/scripts/migrate.mjs`
 - `deploy/windows-wizard/README.md`
 - `deploy/windows-wizard/package.json`
+- `deploy/windows-wizard/examples/deploy-plan.example.json`
 - `deploy/desktop-client/README.md`
 - `deploy/desktop-client/package.json`
 - `deploy/android-shell/README.md`
@@ -48,7 +49,9 @@
 
 ## Windows 部署向导状态
 
-Windows 部署向导已进入 MVP scaffold：当前是独立 CLI/Tauri-ready package，可生成脱敏部署计划并运行 smoke；SSH 与 transfer 仍为 mock / 接口层，尚未打包真实 EXE。
+Windows 部署向导已进入 MVP scaffold：当前是独立 CLI/Tauri-ready package，可生成脱敏部署计划并运行 smoke；已新增真实 SSH / SFTP adapter 第一包，尚未打包真实 EXE。
+
+Windows 部署向导真实 SSH adapter 已进入 MVP：当前保留 mock / dry-run，新增 real SSH / SFTP 上传 `deploy/linux`、远程 `install.sh --self-check`、`--dry-run` 和 opt-in `--migrate` 流程；真实连接必须显式 `--real` 且计划文件 `dryRun=false`。
 
 ## PWA 与桌面客户端状态
 

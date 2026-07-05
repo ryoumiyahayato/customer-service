@@ -1,0 +1,13 @@
+{
+  "mode": "mock",
+  "dryRun": true,
+  "runMigrations": false,
+  "host": "example-vps-host.invalid",
+  "port": 22,
+  "username": "deploy",
+  "authMethod": "privateKey",
+  "privateKeyPath": "C:\\Users\\YourUser\\.ssh\\id_ed25519",
+  "appDomain": "admin.example.com",
+  "visitorRootDomain": "visitor.example.com",
+  "remoteBaseDir": "/opt"
+}

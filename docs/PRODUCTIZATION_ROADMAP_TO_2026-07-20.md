@@ -117,3 +117,11 @@
 - `deploy/linux` 已从骨架可执行推进到接近真实 VPS 可运行的最小闭环：compose healthcheck、Caddy 反代、install self-check、显式 migration、只读 healthcheck、backup/restore/upgrade 安全边界均已强化。
 - 当前验收口径是脚本逻辑强化、静态审计、Node 检查和 server-generic smoke；真实 Linux VPS 部署验证留到后续远程服务器环境执行。
 - Windows 部署向导后续应复用这套脚本，不直接在向导内复制部署逻辑。
+
+## Windows 部署向导真实 SSH MVP 状态
+
+- `deploy/windows-wizard` 已新增真实 SSH / SFTP adapter MVP，同时保留 mock / dry-run 模式。
+- 默认不真实部署；必须显式 `--real` 且计划文件 `mode=real`、`dryRun=false` 才允许连接服务器。
+- 当前支持上传 `deploy/linux`、远程执行 `install.sh --self-check`、`install.sh --dry-run`、`install.sh` 和 opt-in `install.sh --migrate`。
+- 当前不自动写远程真实 `.env`，不保存真实密码/私钥/secret，不自动 setup initialize。
+- 真实 VPS 验证仍需后续单独执行。

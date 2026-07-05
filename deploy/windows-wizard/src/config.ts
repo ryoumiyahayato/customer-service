@@ -1,29 +1,32 @@
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 
 export type AuthMethod = 'password' | 'privateKey';
+export type DeploymentMode = 'mock' | 'real';
 
 export type DeploymentConfig = {
-  serverHost: string;
-  sshPort: number;
-  sshUser: string;
+  mode?: DeploymentMode;
+  dryRun?: boolean;
+  runMigrations?: boolean;
+  host: string;
+  port: number;
+  username: string;
   authMethod: AuthMethod;
-  password?: string;
+  passwordEnv?: string;
   privateKeyPath?: string;
   appDomain: string;
   visitorRootDomain: string;
-  email: string;
-  remoteDir: string;
-  appPort: number;
-  storagePath: string;
-  backupDir: string;
-  setupToken: string;
-  sessionSecret: string;
+  remoteBaseDir: string;
 };
 
-export type RedactedDeploymentConfig = Omit<DeploymentConfig, 'password' | 'setupToken' | 'sessionSecret'> & {
-  password?: string;
-  setupToken: string;
-  sessionSecret: string;
+export type NormalizedDeploymentConfig = Required<Pick<DeploymentConfig, 'mode' | 'dryRun' | 'runMigrations'>> &
+  Omit<DeploymentConfig, 'mode' | 'dryRun' | 'runMigrations'> & {
+    remoteLinuxDir: string;
+    privateKeyLabel?: string;
+  };
+
+export type RedactedDeploymentConfig = Omit<NormalizedDeploymentConfig, 'privateKeyPath'> & {
+  privateKeyPath?: string;
 };
 
 export async function loadDeploymentConfig(filePath: string): Promise<DeploymentConfig> {
@@ -31,11 +34,30 @@ export async function loadDeploymentConfig(filePath: string): Promise<Deployment
   return JSON.parse(raw) as DeploymentConfig;
 }
 
-export function redactConfig(config: DeploymentConfig): RedactedDeploymentConfig {
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+export function normalizeDeploymentConfig(config: DeploymentConfig): NormalizedDeploymentConfig {
+  const remoteBaseDir = trimTrailingSlash(config.remoteBaseDir || '');
+  const remoteLinuxDir = `${remoteBaseDir}/customer-chat/deploy/linux`;
+  const privateKeyLabel = config.privateKeyPath ? path.basename(config.privateKeyPath) : undefined;
+
   return {
     ...config,
-    password: config.password ? '[REDACTED]' : undefined,
-    setupToken: '[REDACTED]',
-    sessionSecret: '[REDACTED]',
+    mode: config.mode || 'mock',
+    dryRun: config.dryRun ?? true,
+    runMigrations: config.runMigrations ?? false,
+    remoteBaseDir,
+    remoteLinuxDir,
+    privateKeyLabel,
+  };
+}
+
+export function redactConfig(config: DeploymentConfig | NormalizedDeploymentConfig): RedactedDeploymentConfig {
+  const normalized = 'remoteLinuxDir' in config ? config : normalizeDeploymentConfig(config);
+  return {
+    ...normalized,
+    privateKeyPath: normalized.privateKeyPath ? `[basename:${path.basename(normalized.privateKeyPath)}]` : undefined,
   };
 }

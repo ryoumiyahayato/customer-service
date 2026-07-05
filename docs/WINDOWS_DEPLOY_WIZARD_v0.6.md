@@ -45,22 +45,27 @@ Windows 部署向导 EXE 用于帮助非技术用户从本机连接远程 Linux 
 - 支持 `--smoke` 本地自检。
 - 支持 `--plan <config.json>` 生成脱敏部署计划。
 - 已定义部署配置类型、输入校验、部署计划、远程命令生成、SSH client 接口、transfer 接口、日志脱敏和 smoke。
-- SSH 与 transfer 当前为 mock / 接口层，不连接真实服务器。
-- 部署计划覆盖测试 SSH、创建远程目录、上传 `deploy/linux`、写入远程 `.env`、执行 `install.sh`、执行 `healthcheck.sh`、输出后台和 `/setup` 地址。
+- mock adapter 已保留；real SSH adapter 已进入 MVP，使用 `ssh2` 支持 private key / password 环境变量认证。
+- 默认不真实部署；只有 `deploy --real` 且计划文件 `mode=real`、`dryRun=false` 时才允许真实 SSH。
+- dry-run 不连接服务器，只列出将上传的 `deploy/linux` 文件和将执行的远程命令。
+- 部署计划覆盖测试 SSH、创建远程目录、上传 `deploy/linux`、执行 `install.sh --self-check`、按计划执行 `install.sh --dry-run` / `install.sh` / `install.sh --migrate`、输出后台和 `/setup` 地址。
+- 第一包不自动写远程真实 `.env`，只上传 `.env.example` 并提示用户在服务器侧填写 secret。
 
 ## 安全边界
 
 - 不保存明文密码。
 - 不输出 secret。
+- `privateKeyPath` 日志只显示 basename。
 - 不上传聊天记录。
 - 不把 `.env` 内容写入本地日志。
 - 不自动覆盖生产数据。
 - 不执行未授权 migration、D1 写入或 R2 删除。
+- 不自动调用 setup initialize。
 
 ## 当前未完成
 
 - 真实 GUI。
 - 真正 EXE 打包。
-- 真实 SSH 上传和远程执行。
+- 真实 VPS 端到端验证。
 - 云厂商 API。
 - 图形化日志流和交互式错误恢复。

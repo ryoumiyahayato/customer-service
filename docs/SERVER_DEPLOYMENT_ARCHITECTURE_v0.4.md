@@ -88,6 +88,16 @@
 - `upgrade.sh` 默认不运行 migration，只有显式 `--migrate` 才运行 server-generic PostgreSQL migration。
 - 当前 Windows LTSC 开发机不代表 Linux VPS 实机验收；真实 VPS 部署验证留到后续远程服务器环境执行。
 
+## Windows 部署向导真实 SSH 第一包状态
+
+- Windows 部署向导已从 mock 流程推进到真实 SSH adapter MVP，mock adapter 仍保留。
+- 当前 CLI 支持读取部署计划、校验配置、生成脱敏计划、dry-run 上传预览和 real SSH adapter。
+- 上传目标为远程 `remoteBaseDir/customer-chat/deploy/linux`，上传内容限定为 `deploy/linux` 目录并排除 `.env`、logs、storage、backup、node_modules、`.git` 和临时 dist。
+- 远程执行顺序为创建目录、上传文件、`chmod +x`、`install.sh --self-check`，再按计划执行 `install.sh --dry-run`、`install.sh` 或 `install.sh --migrate`。
+- migration 仍为 opt-in；Windows 向导只有在计划 `runMigrations=true` 且真实模式满足安全条件时才会调用 `--migrate`。
+- 第一包不自动写远程真实 `.env`，只上传 `.env.example` 并提示服务器侧填写 secret。
+- 真实 VPS 端到端验证仍需后续在远程服务器环境执行。
+
 ## server-generic 业务迁移第一包状态
 
 - `server-generic/migrations/0001_initial.sql` 已提供 PostgreSQL 首版空库 schema。
