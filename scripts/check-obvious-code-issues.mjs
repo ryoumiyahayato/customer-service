@@ -144,14 +144,14 @@ function checkSensitiveInfoHardcoded() {
   const ALLOWED_PATHS = new Set([
     'deploy/desktop-client/src/smoke.ts',
     'deploy/windows-wizard/src/smoke.ts',
-    'scripts/check-obvious-code-issues.mjs',
   ]);
   let issueCount = 0;
 
+  const B = 'BEGIN';
   const privateKeyPatterns = [
-    'BEGIN OPENSSH PRIVATE KEY',
-    'BEGIN RSA PRIVATE KEY',
-    'BEGIN PRIVATE KEY',
+    [B, 'OPENSSH', 'PRIVATE KEY'].join(' '),
+    [B, 'RSA', 'PRIVATE KEY'].join(' '),
+    [B, 'PRIVATE KEY'].join(' '),
   ];
   const placeholderValues = new Set(['change-me', '<placeholder>', 'placeholder', 'your-secret', 'your-password', 'YOUR_SECRET', 'your-encryption-key', 'your-session-secret', 'your-setup-token', 'sample', 'sample-key', 'sample-secret', 'sample-password', 'sample-token']);
 
