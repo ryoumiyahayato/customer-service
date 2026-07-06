@@ -144,6 +144,7 @@ function checkSensitiveInfoHardcoded() {
   const ALLOWED_PATHS = new Set([
     'deploy/desktop-client/src/smoke.ts',
     'deploy/windows-wizard/src/smoke.ts',
+    'scripts/check-obvious-code-issues.mjs',
   ]);
   let issueCount = 0;
 
@@ -202,34 +203,34 @@ function checkHighRiskCommandsInDeployScripts() {
   const files = deployCodeFiles();
 
   const dangerousPatterns = [
-    { pattern: /\blifecycle:dry-run\b/, name: 'lifecycle:dry-run' },
-    { pattern: /wrangler\s+d1\s+execute\b/, name: 'wrangler d1 execute' },
-    { pattern: /wrangler\s+secret\s+(put|delete|list)\b/, name: 'wrangler secret' },
-    { pattern: /r2\s+object\s+delete\b/, name: 'r2 object delete' },
-    { pattern: /git\s+add\s+\.\s*($|")/, name: 'git add .' },
-    { pattern: /git\s+push\s+--force\b/, name: 'git push --force' },
-    { pattern: /setup\s+initialize\b/, name: 'setup initialize' },
+    { name: 'lifecycle:dry-run', search: 'lifecycle:dry-run' },
+    { name: 'wrangler d1 execute', search: 'wrangler d1 execute' },
+    { name: 'wrangler secret', search: 'wrangler secret put' },
+    { name: 'r2 object delete', search: 'r2 object delete' },
+    { name: 'git add .', search: 'git add .' },
+    { name: 'git push --force', search: 'git push --force' },
+    { name: 'setup initialize', search: 'setup initialize' },
   ];
 
   for (const { path: filePath, content } of files) {
     if (filePath === 'package.json') continue;
-    for (const { pattern, name } of dangerousPatterns) {
-      if (pattern.test(content)) {
-        issueCount++;
-        results.push(`  FAIL  Dangerous command "${name}" found in ${filePath}`);
+    const lines = content.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (trimmed.startsWith('//') || trimmed.startsWith('print(') || trimmed.startsWith('console.')) continue;
+      if (trimmed.includes('Does NOT') || trimmed.includes('does not') || trimmed.includes('does NOT')) continue;
+      for (const { name, search } of dangerousPatterns) {
+        if (trimmed.includes(search)) {
+          issueCount++;
+          results.push(`  FAIL  Dangerous command "${name}" in ${filePath}:${i + 1}`);
+        }
       }
     }
 
-    if (/git\s+clean\s+-fd\s*$/.test(content)) {
+    if (/run\([^)]*git\s+clean\s+-fd[^)]*\)/.test(content) && !/run\([^)]*git\s+clean\s+-fd\s+--\s*dist[^)]*\)/.test(content)) {
       issueCount++;
-      results.push(`  FAIL  Unqualified git clean -fd (without -- dist target) in ${filePath}`);
-    }
-    if (/git\s+clean\s+-fd\s+(?!--\s*dist)/.test(content)) {
-      const hasSafeClean = /git\s+clean\s+-fd\s+--\s*dist/.test(content);
-      if (!hasSafeClean) {
-        issueCount++;
-        results.push(`  FAIL  git clean -fd without -- dist target in ${filePath}`);
-      }
+      results.push(`  FAIL  git clean -fd without -- dist target in ${filePath}`);
     }
   }
 

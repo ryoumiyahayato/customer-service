@@ -111,11 +111,13 @@ This command automatically:
 npm.cmd run deploy:safe -- --apply-migrations
 ```
 
-Then type exactly:
+Then when prompted, type:
 
 ```
-APPLY REMOTE D1 MIGRATIONS
+yes
 ```
+
+(or `y`). Empty input, `no`, `n`, or Ctrl+C will cancel migration and deployment.
 
 **Important:**
 - `deploy:safe` does NOT run `lifecycle:dry-run`

@@ -62,7 +62,8 @@ if (showHelp) {
   print('  Runs pre-deployment checks, typecheck, build, and deploy.');
   print('');
   print('Options:');
-  print('  --apply-migrations  Allow applying pending D1 remote migrations (requires confirmation)');
+  print('  --apply-migrations  Allow applying pending D1 remote migrations');
+  print('                      (requires yes/no confirmation)');
   print('  --help, -h          Show this help');
   print('');
   print('Security:');
@@ -73,6 +74,8 @@ if (showHelp) {
   print('  - Does NOT run setup initialize');
   print('  - Does NOT run git add .');
   print('  - Pending D1 migrations block deployment unless --apply-migrations is used');
+  print('  - Migration requires yes/no confirmation (empty input defaults to no)');
+  print('  - Non-interactive environments cannot confirm migration');
   process.exit(0);
 }
 
@@ -105,6 +108,11 @@ function main() {
   print('  - Setup initialize');
   print('  - SSH/VPS operations');
   print('  - Build EXE/APK/IPA');
+  print('');
+  print('  Migration confirmation:');
+  print('  - No pending migration: auto-deploy, no confirmation needed');
+  print('  - Pending migration: blocked unless --apply-migrations is used');
+  print('  - With --apply-migrations: yes/no prompt (default: no)');
   print('');
 
   // 1. Git checks
@@ -250,27 +258,39 @@ function main() {
 
   if (pendingMigs.length > 0) {
     summary.pendingMigrations = pendingMigs.join(', ');
+    summary.migrationConfirmation = 'not-required';
+    summary.migrationsApplied = 'no';
+    summary.deployStarted = 'no';
     print(`Pending migrations detected:`);
     for (const mig of pendingMigs) print(`  - ${mig}`);
 
     if (!applyMigrations) {
       fail(
         `Pending D1 remote migrations detected.\n` +
-        `Run with --apply-migrations to allow migration:\n` +
+        `To apply migrations and deploy, rerun with:\n` +
         `  ${npmCmd} run deploy:safe -- --apply-migrations`
       );
     }
 
     print('');
-    print('WARNING: You are about to apply pending D1 remote migrations.');
-    print('This will WRITE to the remote D1 database.');
+    print('WARNING: Remote D1 migrations will modify the production');
+    print('Cloudflare D1 database. Migration must complete before deploy.');
     print('');
 
-    const answer = awaitAsk('Type exactly "APPLY REMOTE D1 MIGRATIONS" to confirm: ');
-    if (answer.trim() !== 'APPLY REMOTE D1 MIGRATIONS') {
-      fail('Confirmation text did not match. Aborting.');
+    if (!process.stdin.isTTY) {
+      fail('Non-interactive environment detected. Cannot confirm migration. Run in an interactive terminal.');
     }
 
+    const answer = awaitAsk('Continue? Type yes or no: ');
+    const normalized = answer.trim().toLowerCase();
+
+    if (normalized !== 'yes' && normalized !== 'y') {
+      summary.migrationConfirmation = 'cancelled';
+      print('Migration cancelled. Deploy was not started.');
+      process.exit(1);
+    }
+
+    summary.migrationConfirmation = 'yes';
     print('Applying pending migrations...');
     const applyCmd = existsSync(wranglerBin) ? wranglerBin : npxCmd;
     const applyArgs = existsSync(wranglerBin)
@@ -278,13 +298,15 @@ function main() {
       : ['wrangler', 'd1', 'migrations', 'apply', 'customer_chat_db', '--remote'];
     const applyResult = run(applyCmd, applyArgs);
     if (!applyResult.ok) fail('D1 migration apply failed.');
-    summary.migrationsApplied = 'YES';
+    summary.migrationsApplied = 'yes';
     print('Migrations applied successfully.');
   } else {
     summary.pendingMigrations = 'none';
+    summary.migrationConfirmation = 'not-required';
     summary.migrationsApplied = 'N/A';
     print('No pending migrations. Safe to proceed.');
   }
+  summary.deployStarted = 'yes';
   print('');
 
   // 6. Build
@@ -342,7 +364,9 @@ function main() {
   print(`  doctor:                           ${summary.doctor}`);
   print(`  lifecycle:ci-check:               ${summary.lifecycleCiCheck}`);
   print(`  pending migrations:               ${summary.pendingMigrations}`);
+  print(`  migration confirmation:           ${summary.migrationConfirmation}`);
   print(`  migrations applied:               ${summary.migrationsApplied}`);
+  print(`  deploy started:                   ${summary.deployStarted}`);
   print(`  build:                            ${summary.build}`);
   print(`  deploy:                           ${summary.deploy}`);
   print(`  cloudflare version id:            ${summary.cloudflareVersionId}`);
