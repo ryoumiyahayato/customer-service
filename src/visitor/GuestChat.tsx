@@ -495,8 +495,6 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       });
     }
     if (msg.status !== 'recalled') items.push({ label: '引用', action: () => { setQuote(msg); setContextMenu(null); } });
-    if (isOwn(msg) && msg.status !== 'recalled') items.push({ label: '撤回', action: () => { doRecall(msg); setContextMenu(null); }, disabled: recallLoading === msg.id });
-    if (isOwn(msg) && !msg.deleted_at) items.push({ label: '删除', action: () => { doDelete(msg); setContextMenu(null); }, disabled: deleteLoading === msg.id });
     return items;
   };
 
