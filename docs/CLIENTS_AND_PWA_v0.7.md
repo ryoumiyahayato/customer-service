@@ -55,7 +55,8 @@ service worker 明确不缓存 `/api/*`，不缓存非 GET 请求，不处理 We
 
 ## Windows LTSC 可执行检查
 
-- 主仓库：`npm.cmd run typecheck`、`npm.cmd run doctor`、`npm.cmd run lifecycle:dry-run`、`npm.cmd run build`。
+- 主仓库：`npm.cmd run typecheck`、`npm.cmd run doctor`、`npm.cmd run lifecycle:ci-check`、`npm.cmd run build`。
+- `lifecycle:ci-check` 不访问 Cloudflare/D1，适合普通 CI/audit；`lifecycle:dry-run` 会访问 Wrangler remote read-only D1，必须在明确授权的 Cloudflare/D1 环境中运行，普通 CI/audit 不应运行。
 - 桌面客户端：`npm.cmd install`、`npm.cmd run smoke`、`npm.cmd run plan`、`npm.cmd run package:check`。
 - PWA：通过根构建产物检查 manifest、service worker 和 offline page。
 - Android：可做静态审计；只有在具备 Android SDK / Gradle / wrapper 时才执行 `gradle tasks` 和 `gradle assembleDebug`。

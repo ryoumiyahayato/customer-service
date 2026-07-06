@@ -72,11 +72,16 @@ npm.cmd run dev:spa
 # Typecheck
 npm.cmd run typecheck
 
+# CI-safe lifecycle audit; does not access Cloudflare or D1
+npm.cmd run lifecycle:ci-check
+
 # Build and Wrangler dry-run
 npm.cmd run build
 
 # Production deploy, only after review
 npx.cmd wrangler deploy
 ```
+
+Do not use `npm.cmd run lifecycle:dry-run` for routine local audit or CI. It performs a Wrangler remote read-only D1 dry-run and requires explicit Cloudflare/D1 authorization.
 
 Do not commit or document `.dev.vars`, `.env.production`, secrets, cookies, or Cloudflare tokens.

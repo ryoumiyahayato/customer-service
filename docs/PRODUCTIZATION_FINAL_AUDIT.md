@@ -29,6 +29,8 @@ GitHub Actions status could not be confirmed from this local machine because `gh
 - Build-generated `dist` changes were discarded and are not part of the release audit commit.
 - GitHub Actions `productization-validation`: must be confirmed green in the GitHub UI before merge/tag because this machine cannot query Actions with `gh`.
 
+Routine audit and CI should use `npm.cmd run lifecycle:ci-check`. Do not run `npm.cmd run lifecycle:dry-run` unless an operator has explicitly authorized Cloudflare/D1 access; that command performs a Wrangler remote read-only D1 dry-run.
+
 ## Security Boundary
 
 - No Cloudflare deploy was executed.
