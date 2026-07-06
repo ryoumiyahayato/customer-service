@@ -41,15 +41,15 @@
 .message-image-link{display:block;max-width:100%;overflow:hidden;color:inherit;text-decoration:none}
 .message-text{white-space:pre-wrap;user-select:text;-webkit-user-select:text}
 .message-link{color:inherit;text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere;word-break:break-word;user-select:text;-webkit-user-select:text}
-.msg{user-select:text;-webkit-user-select:text}
-.message-copy-btn{display:block;width:max-content;margin-top:8px;padding:4px 8px;min-height:28px;border-radius:999px;background:var(--panel-2);color:var(--brand);border:1px solid var(--line);font-size:12px;line-height:1.2}
-.message-copy-btn:active{transform:scale(.98)}
+.msg{user-select:text;-webkit-user-select:text;-webkit-touch-callout:none}
 .message-avatar{width:32px;height:32px;flex:0 0 32px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;color:#fff;background:#64748b;box-shadow:0 2px 8px var(--shadow);user-select:none}
 .agent-avatar{background:#0ea5e9}
 .customer-avatar{background:#2563eb}
 .chat-page .msg .quote-box{border-left:3px solid var(--brand);padding:4px 8px;margin-bottom:6px;background:rgba(0,0,0,.06);color:var(--muted);font-size:12px;border-radius:6px}
 .chat-page .msg .recalled{font-style:italic;opacity:.65}
 .chat-page .msg.user .quote-box{background:rgba(255,255,255,.15);color:rgba(255,255,255,.8);border-left-color:rgba(255,255,255,.5)}
+.context-menu-overlay{position:fixed;inset:0;z-index:190;background:transparent;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+.context-menu{-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
 .message-status{display:inline-flex;align-items:center;gap:5px;line-height:1.4}
 .message-status.sending{color:var(--muted)}
 .message-status.failed{color:var(--danger);font-weight:700}
