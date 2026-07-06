@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { apiFetch } from '../api';
+import ChatMessageText from '../ChatMessageText';
 import LinkExpired from '../common/LinkExpired';
+import { copyText } from '../compat';
 import GuestComposer from './GuestComposer';
 import GuestMessageList from './GuestMessageList';
 import { NetworkNotice } from '../ui/Notice';
@@ -461,6 +463,15 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const isOwn = (m: Message) => m.sender_type === 'VISITOR';
   const menuItems = (msg: Message) => {
     const items: { label: string; action: () => void; disabled?: boolean }[] = [];
+    if (msg.status !== 'recalled' && msg.message_type !== 'image' && msg.content) {
+      items.push({
+        label: '复制文本',
+        action: () => {
+          copyText(String(msg.content || '')).then(() => showToast('已复制')).catch((e) => showToast(e?.message || '复制失败'));
+          setContextMenu(null);
+        },
+      });
+    }
     if (msg.status !== 'recalled') items.push({ label: '引用', action: () => { setQuote(msg); setContextMenu(null); } });
     if (isOwn(msg) && msg.status !== 'recalled') items.push({ label: '撤回', action: () => { doRecall(msg); setContextMenu(null); }, disabled: recallLoading === msg.id });
     if (isOwn(msg) && !msg.deleted_at) items.push({ label: '删除', action: () => { doDelete(msg); setContextMenu(null); }, disabled: deleteLoading === msg.id });
@@ -478,7 +489,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
           <div className={'msg ' + (own ? 'user' : 'agent')} onContextMenu={(e) => handleContextMenu(e, m)}
             onTouchStart={isMobile && !m.deleted_at ? handleLongPress(m) : undefined}>
             {m.quote_message_id && <div className="quote-box">{[messages.find(x => x.id === m.quote_message_id)].map(q => q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : q.content || '[未知消息]') : '引用消息不可用').join('')}</div>}
-            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="图片" loading="lazy" /></a> : <span>{m.content || '[未知消息]'}</span>}
+            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="图片" loading="lazy" /></a> : <ChatMessageText text={m.content || ''} />}
             {(m.status === 'sending' || m.status === 'failed') && <div className={`time message-status ${m.status}`}>{m.status === 'sending' ? '发送中...' : '发送失败，请稍后重试'}</div>}
           </div>
         )}

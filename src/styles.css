@@ -39,6 +39,9 @@
 .chat-page .msg.agent{margin-right:auto;background:var(--bubble);color:var(--text);border-bottom-left-radius:6px;box-shadow:0 1px 4px var(--shadow)}
 .chat-page .msg img{border-radius:12px;display:block;max-width:100%;width:auto;height:auto;object-fit:contain;margin:4px 0}
 .message-image-link{display:block;max-width:100%;overflow:hidden;color:inherit;text-decoration:none}
+.message-text{white-space:pre-wrap;user-select:text;-webkit-user-select:text}
+.message-link{color:inherit;text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere;word-break:break-word;user-select:text;-webkit-user-select:text}
+.msg{user-select:text;-webkit-user-select:text}
 .message-avatar{width:32px;height:32px;flex:0 0 32px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;color:#fff;background:#64748b;box-shadow:0 2px 8px var(--shadow);user-select:none}
 .agent-avatar{background:#0ea5e9}
 .customer-avatar{background:#2563eb}

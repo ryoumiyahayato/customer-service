@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { apiFetch } from '../api';
+import ChatMessageText from '../ChatMessageText';
+import { copyText } from '../compat';
 import InviteLinkPanel from './InviteLinkPanel';
 import AdminLogin from './AdminLogin';
 import AdminMessageList from './AdminMessageList';
@@ -343,6 +345,15 @@ export default function AdminDashboard() {
   const isOwnMsg = (m: Message) => m.sender_type === 'OPERATOR' && admin && m.sender_id === admin.id;
   const adminMenuItems = (msg: Message) => {
     const items: { label: string; action: () => void; disabled?: boolean }[] = [];
+    if (msg.status !== 'recalled' && !msg.deleted_at && msg.message_type !== 'image' && msg.content) {
+      items.push({
+        label: '复制文本',
+        action: () => {
+          copyText(String(msg.content || '')).then(() => showToast('已复制')).catch((e) => showToast(e?.message || '复制失败'));
+          setContextMenu(null);
+        },
+      });
+    }
     if (msg.status !== 'recalled' && !msg.deleted_at) items.push({ label: '引用', action: () => { setQuote(msg); setContextMenu(null); } });
     if (isOwnMsg(msg) && msg.status !== 'recalled' && !msg.deleted_at) items.push({ label: '撤回', action: () => { doRecall(msg); setContextMenu(null); }, disabled: recallLoading === msg.id });
     if (isOwnMsg(msg) && !msg.deleted_at) items.push({ label: '删除', action: () => { doDelete(msg); setContextMenu(null); }, disabled: deleteLoading === msg.id });
@@ -361,7 +372,7 @@ export default function AdminDashboard() {
             onContextMenu={(e) => handleContextMenu(e, m)}
             onTouchStart={handleLongPress(m)}>
             {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
-            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="聊天图片" loading="lazy" /></a> : <span>{m.content || '[未知消息]'}</span>}
+            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="聊天图片" loading="lazy" /></a> : <ChatMessageText text={m.content || ''} />}
             <div className={`time message-status${m.status === 'failed' ? ' failed' : m.status === 'sending' ? ' sending' : ''}`}>{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败，请稍后重试' : `${formatTime(m.created_at)} ${own ? (m.is_read ? '客户已读' : '未读') : ''}`}</div>
           </div>
         )}
