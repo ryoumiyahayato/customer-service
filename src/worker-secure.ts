@@ -26,6 +26,9 @@ const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 const UPLOAD_REQUEST_MAX_BYTES = 6 * 1024 * 1024;
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 const HEX_INVITE_TOKEN = /^[a-f0-9]{40}$/;
+const VISITOR_COOKIE = 'visitor_account';
+const GUEST_COOKIE = 'guest_session';
+const enc = new TextEncoder();
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'same-origin',
@@ -96,6 +99,51 @@ function contentLengthExceeds(req: Request, maxBytes: number) {
   return Boolean(raw && Number(raw) > maxBytes);
 }
 
+function getCookie(req: Request, name: string) {
+  return (req.headers.get('cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+
+function clearCookie(name: string) {
+  return `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure`;
+}
+
+async function hmac(secret: string, value: string) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(value));
+  return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function constantTimeEqual(a: string, b: string) {
+  const left = enc.encode(a);
+  const right = enc.encode(b);
+  let diff = left.length ^ right.length;
+  const len = Math.max(left.length, right.length);
+  for (let i = 0; i < len; i++) diff |= (left[i] || 0) ^ (right[i] || 0);
+  return diff === 0;
+}
+
+async function verifySignedId(env: Env, token?: string) {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [value, sig] = parts;
+  if (!value || !sig) return null;
+  return constantTimeEqual(sig, await hmac(env.SESSION_SECRET, value)) ? value : null;
+}
+
+async function tokenHash(env: Env, value: string) {
+  return await hmac(env.SESSION_SECRET, 'session:' + value);
+}
+
+async function currentGuestVisitorKey(env: Env, req: Request) {
+  const sessionId = await verifySignedId(env, getCookie(req, GUEST_COOKIE));
+  if (!sessionId) return null;
+  const row = await env.DB.prepare(
+    'SELECT visitor_key FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>? AND visitor_key IS NOT NULL',
+  ).bind(sessionId, await tokenHash(env, sessionId), new Date().toISOString()).first<{ visitor_key: string }>();
+  return row?.visitor_key || null;
+}
+
 function validAdminUsername(username: string) {
   return ADMIN_USERNAME_RE.test(username);
 }
@@ -131,6 +179,28 @@ async function consumeLimit(env: Env, key: string, limit: number, windowMs: numb
   return null;
 }
 
+async function protectBootstrapConfig(env: Env) {
+  const username = env.SUPER_ADMIN_USERNAME?.trim() || '';
+  const password = typeof env.SUPER_ADMIN_PASSWORD === 'string' ? env.SUPER_ADMIN_PASSWORD : '';
+  if (!username && !password) return null;
+
+  const existing = await env.DB.prepare("SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1").first<{ id: string }>();
+  if (existing?.id) return null;
+
+  if (!validAdminUsername(username) || !validAdminPassword(password)) {
+    console.error('security: invalid SUPER_ADMIN_USERNAME/SUPER_ADMIN_PASSWORD bootstrap config; refusing unsafe auto-bootstrap');
+    return json({ error: 'bootstrap_admin_config_invalid' }, { status: 500 });
+  }
+  return null;
+}
+
+async function protectSetupMutation(req: Request) {
+  const path = new URL(req.url).pathname;
+  if (!path.startsWith('/api/setup/') || req.method === 'GET') return null;
+  if (contentLengthExceeds(req, JSON_REQUEST_MAX_BYTES)) return invalidInput('请求体过大', 413);
+  return null;
+}
+
 async function protectLogin(req: Request, env: Env) {
   const path = new URL(req.url).pathname;
   if (req.method !== 'POST' || !['/api/auth/login', '/api/login', '/api/account/login'].includes(path)) return null;
@@ -159,10 +229,27 @@ async function protectPublicRegister(req: Request, env: Env) {
   const username = String(body.username || '').trim();
   const password = typeof body.password === 'string' ? body.password : '';
   const displayName = String(body.displayName || username).trim();
+  const visitorId = typeof body.visitorId === 'string' ? body.visitorId.trim() : '';
+  const wantsGuestMutation = Boolean(body.claimGuest || body.discardGuest || visitorId);
   if (!PUBLIC_USERNAME_RE.test(username)) return invalidInput('用户名必须为 3-64 位字母、数字、下划线、点、@ 或 -');
   if (password.length < PUBLIC_PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) return invalidInput(`密码长度必须为 ${PUBLIC_PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} 位`);
   if (!displayName || displayName.length > 80) return invalidInput('显示名称长度不能超过 80 位');
+  if (wantsGuestMutation) {
+    const currentVisitorKey = await currentGuestVisitorKey(env, req);
+    if (!visitorId || visitorId !== currentVisitorKey) return json({ error: 'Forbidden' }, { status: 403 });
+  }
   return null;
+}
+
+async function protectVisitorLogout(req: Request, env: Env) {
+  const path = new URL(req.url).pathname;
+  if (path !== '/api/account/logout' || req.method !== 'POST') return null;
+
+  const sessionId = await verifySignedId(env, getCookie(req, VISITOR_COOKIE));
+  if (sessionId) {
+    await env.DB.prepare('UPDATE visitor_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=? AND token_hash=?').bind(new Date().toISOString(), sessionId, await tokenHash(env, sessionId)).run();
+  }
+  return json({ ok: true }, { headers: { 'Set-Cookie': clearCookie(VISITOR_COOKIE) } });
 }
 
 async function protectAdminMutation(req: Request) {
@@ -322,8 +409,17 @@ async function preflightSecurity(req: Request, env: Env) {
     return json({ error: 'Forbidden' }, { status: 403 });
   }
 
+  const bootstrapRejected = await protectBootstrapConfig(env);
+  if (bootstrapRejected) return bootstrapRejected;
+
+  const setupRejected = await protectSetupMutation(req);
+  if (setupRejected) return setupRejected;
+
   const guestRejected = await protectGuestInvite(req);
   if (guestRejected) return guestRejected;
+
+  const logoutHandled = await protectVisitorLogout(req, env);
+  if (logoutHandled) return logoutHandled;
 
   const loginLimited = await protectLogin(req, env);
   if (loginLimited) return loginLimited;
