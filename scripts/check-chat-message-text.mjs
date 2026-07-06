@@ -81,6 +81,16 @@ try {
   assert.match(guestSource, /copyMessageText\(String\(msg\.content \|\| ''\)\)/);
   assert.match(guestSource, /target\?\.closest\('a,button'\)/);
 
+  // Visitor menu must only have copy and quote, no recall/delete
+  assert.doesNotMatch(guestSource, /label: '\u64a4\u56de'/);
+  assert.doesNotMatch(guestSource, /label: '\u5220\u9664'/);
+  assert.match(guestSource, /label: '\u590d\u5236\u6587\u672c'/);
+  assert.match(guestSource, /label: '\u5f15\u7528'/);
+
+  // Admin menu retains recall/delete
+  assert.match(adminSource, /label: '\u64a4\u56de'/);
+  assert.match(adminSource, /label: '\u5220\u9664'/);
+
   console.log('chat message text link checks passed');
 } finally {
   await rm(tempDir, { recursive: true, force: true });
