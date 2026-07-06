@@ -13,7 +13,7 @@ import '../styles.css';
 type Message = any;
 type Session = any;
 type Admin = any;
-type SessionGroup = 'active' | 'ended' | 'archived' | 'deleted';
+type SessionGroup = 'active' | 'archived' | 'trash';
 
 const formatTime = (ts?: string) => (ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
@@ -40,13 +40,13 @@ const fallbackDelay = (misses: number) => misses < 3 ? 2000 : misses < 12 ? 5000
 const chatMetric = (name: string, started: number, extra?: Record<string, number | string>) => {
   try { console.debug('[chat_metric]', name, Math.round(performance.now() - started), extra || {}); } catch {}
 };
-const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
-const isArchivedSession = (session?: Session | null) => Boolean(session?.archived_at || session?.status === 'ARCHIVED');
+const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.purged_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
+const isArchivedSession = (session?: Session | null) => Boolean(session?.archived_at || session?.status === 'ARCHIVED' || session?.status === 'CLOSED');
 const sessionGroupOf = (session?: Session | null): SessionGroup | null => {
   if (!session) return null;
-  if (session.deleted_at) return 'deleted';
+  if (session.purged_at) return null;
+  if (session.deleted_at) return 'trash';
   if (isArchivedSession(session)) return 'archived';
-  if (session.status === 'CLOSED') return 'ended';
   return 'active';
 };
 const fallbackCustomerName = (session?: Session | null) => {
@@ -105,9 +105,8 @@ export default function AdminDashboard() {
   const currentSessionEnded = sessionEnded(cur);
   const sessionGroupCounts = useMemo(() => ({
     active: sessions.filter(s => sessionGroupOf(s) === 'active').length,
-    ended: sessions.filter(s => sessionGroupOf(s) === 'ended').length,
     archived: sessions.filter(s => sessionGroupOf(s) === 'archived').length,
-    deleted: sessions.filter(s => sessionGroupOf(s) === 'deleted').length,
+    trash: sessions.filter(s => sessionGroupOf(s) === 'trash').length,
   }), [sessions]);
   const visibleSessions = useMemo(() => sessions.filter(s => sessionGroupOf(s) === sessionGroup), [sessionGroup, sessions]);
   const customerName = useCallback((session?: Session | null) => String(session?.customer_remark_name || '').trim() || fallbackCustomerName(session), []);
@@ -396,8 +395,8 @@ export default function AdminDashboard() {
       await apiFetch(`/api/sessions/${s.id}/close`, { method: 'POST' });
       setQuote(null);
       await fetchSessions();
-      setCur((c: Session | null) => c?.id === s.id ? { ...c, status: 'CLOSED', assigned_operator_id: null } : c);
-      setSessionGroup('ended');
+      setCur((c: Session | null) => c?.id === s.id ? { ...c, status: 'ARCHIVED', archived_at: new Date().toISOString(), assigned_operator_id: null } : c);
+      setSessionGroup('archived');
       showToast('会话已结束');
     } catch (e: any) {
       showToast(e?.message || '结束会话失败，请稍后重试');
@@ -413,7 +412,7 @@ export default function AdminDashboard() {
   }, []);
 
   const archiveSession = async (s: Session) => {
-    if (!s || sessionActionLoading || s.deleted_at || isArchivedSession(s) || s.status !== 'CLOSED') return;
+    if (!s || sessionActionLoading || s.deleted_at || sessionEnded(s)) return;
     setSessionActionLoading(`archive:${s.id}`);
     try {
       const res: any = await apiFetch(`/api/sessions/${s.id}/archive`, { method: 'POST' });
@@ -429,28 +428,28 @@ export default function AdminDashboard() {
   };
 
   const unarchiveSession = async (s: Session) => {
-    if (!s || sessionActionLoading || !isArchivedSession(s)) return;
+    if (!s || sessionActionLoading || !isArchivedSession(s) || s.deleted_at) return;
     setSessionActionLoading(`unarchive:${s.id}`);
     try {
       const res: any = await apiFetch(`/api/sessions/${s.id}/unarchive`, { method: 'POST' });
       applySessionUpdate(res.session);
-      setSessionGroup('ended');
+      setSessionGroup('archived');
       await fetchSessions();
-      showToast('会话已恢复到已结束');
+      showToast('会话已还原');
     } catch (e: any) {
-      showToast(e?.message || '恢复失败');
+      showToast(e?.message || '还原失败');
     } finally {
       setSessionActionLoading(null);
     }
   };
 
   const moveSessionToTrash = async (s: Session) => {
-    if (!s || sessionActionLoading || s.deleted_at || (!isArchivedSession(s) && s.status !== 'CLOSED')) return;
+    if (!s || sessionActionLoading || s.deleted_at || !isArchivedSession(s)) return;
     setSessionActionLoading(`delete:${s.id}`);
     try {
       const res: any = await apiFetch(`/api/sessions/${s.id}/delete`, { method: 'POST' });
       applySessionUpdate(res.session);
-      setSessionGroup('deleted');
+      setSessionGroup('trash');
       await fetchSessions();
       showToast('会话已移入回收站');
     } catch (e: any) {
@@ -466,7 +465,7 @@ export default function AdminDashboard() {
     try {
       const res: any = await apiFetch(`/api/sessions/${s.id}/restore`, { method: 'POST' });
       applySessionUpdate(res.session);
-      setSessionGroup(sessionGroupOf(res.session) || 'active');
+      setSessionGroup(sessionGroupOf(res.session) || 'archived');
       await fetchSessions();
       showToast('会话已恢复');
     } catch (e: any) {
@@ -476,7 +475,7 @@ export default function AdminDashboard() {
     }
   };
 
-  const canClearHistorySession = (session?: Session | null) => Boolean(isSuper && session && (session.deleted_at || isArchivedSession(session) || session.status === 'CLOSED'));
+  const canClearHistorySession = (session?: Session | null) => Boolean(isSuper && session && !session.purged_at && (session.deleted_at || isArchivedSession(session)));
 
   const startClearHistory = async (session: Session) => {
     if (!canClearHistorySession(session) || clearHistoryLoading) return;
@@ -516,33 +515,17 @@ export default function AdminDashboard() {
 
   const renderSessionLifecycleActions = (session?: Session | null) => {
     if (!session) return null;
-    if (session.deleted_at) return <>
+    const bucket = sessionGroupOf(session);
+    if (bucket === 'trash') return <>
       <button type="button" className="secondary session-action-btn" onClick={() => restoreDeletedSession(session)} disabled={sessionActionLoading === `restore:${session.id}`}>{sessionActionLoading === `restore:${session.id}` ? '恢复中...' : '恢复'}</button>
       {renderClearHistoryButton(session)}
     </>;
-    if (isArchivedSession(session)) return <>
-      <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
+    if (bucket === 'archived') return <>
       <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
       {renderClearHistoryButton(session)}
     </>;
-    if (session.status === 'CLOSED') return <>
-      <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>
-      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
-      {renderClearHistoryButton(session)}
-    </>;
-    if (session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => restoreDeletedSession(session)} disabled={sessionActionLoading === `restore:${session.id}`}>{sessionActionLoading === `restore:${session.id}` ? '恢复中...' : '恢复'}</button>;
-    if (isArchivedSession(session)) return <>
-      <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>
-      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
-    </>;
-    if (session.status === 'CLOSED') return <>
-      <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>
-      <button type="button" className="secondary session-action-btn trash-action-btn" onClick={() => moveSessionToTrash(session)} disabled={sessionActionLoading === `delete:${session.id}`}>{sessionActionLoading === `delete:${session.id}` ? '移入中...' : '移入回收站'}</button>
-    </>;
-    if (isArchivedSession(session)) return <button type="button" className="secondary session-action-btn" onClick={() => unarchiveSession(session)} disabled={sessionActionLoading === `unarchive:${session.id}`}>{sessionActionLoading === `unarchive:${session.id}` ? '恢复中...' : '恢复'}</button>;
-    if (session.status === 'CLOSED' && !session.deleted_at) return <button type="button" className="secondary session-action-btn" onClick={() => archiveSession(session)} disabled={sessionActionLoading === `archive:${session.id}`}>{sessionActionLoading === `archive:${session.id}` ? '归档中...' : '归档'}</button>;
     if (!currentSessionEnded) return <button type="button" className="danger close-session-btn" onClick={() => closeSession(session)} disabled={closingSessionId === session.id}>{closingSessionId === session.id ? '结束中...' : '结束会话'}</button>;
-    return <span className="ended-chip">会话已结束</span>;
+    return null;
   };
 
   const applyCustomerRemark = useCallback((sessionId: string, remarkName: string | null) => {
@@ -712,7 +695,7 @@ export default function AdminDashboard() {
           <div className="mobile-topbar-actions">
             <button type="button" onClick={() => setMobileInviteOpen(true)}>{'\u9080\u8bf7'}</button>
             {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="primary-action" onClick={() => assignSession(cur)}>接管</button>}
-            {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中' : '结束'}</button>}
+              {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中' : '结束会话'}</button>}
             <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '\u9000\u51fa\u4e2d' : '\u9000\u51fa'}</button>
           </div>
         </div>
@@ -768,7 +751,7 @@ export default function AdminDashboard() {
               <div className="mobile-chat-workspace">
                 <section className="chat-panel">
                   <div className="session-action-bar">
-                    <div><b>{currentCustomerName}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
+                    <div><b>{currentCustomerName}</b><span>{sessionGroupOf(cur) === 'archived' ? '已归档' : sessionGroupOf(cur) === 'trash' ? '回收站' : currentSessionEnded ? '已结束' : '进行中'}</span></div>
                     {renderCustomerRemarkEditor()}
                     {renderSessionLifecycleActions(cur)}
                   </div>
@@ -780,7 +763,7 @@ export default function AdminDashboard() {
                     showEmpty={selectedMsgs.length === 0 && !loadingMsgs}
                     emptyText={currentSessionEnded ? '历史已清空' : '暂无消息，发送第一条回复开始沟通。'}
                   />
-                  {currentSessionEnded ? <div className="session-ended-state">会话已结束，消息输入已关闭。</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
+                  {currentSessionEnded ? <div className="session-ended-state">{sessionGroupOf(cur) === 'trash' ? '会话在回收站中。' : '会话已归档，消息输入已关闭。'}</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
                     <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
                     <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
@@ -842,7 +825,7 @@ export default function AdminDashboard() {
               <div className="workspace">
                 <section className="chat-panel">
                   {cur ? <div className="session-action-bar">
-                    <div><b>{currentCustomerName}</b><span>{currentSessionEnded ? '已结束' : cur.status}</span></div>
+                    <div><b>{currentCustomerName}</b><span>{sessionGroupOf(cur) === 'archived' ? '已归档' : sessionGroupOf(cur) === 'trash' ? '回收站' : currentSessionEnded ? '已结束' : '进行中'}</span></div>
                     {renderCustomerRemarkEditor()}
                     {renderSessionLifecycleActions(cur)}
                   </div> : null}
@@ -862,7 +845,7 @@ export default function AdminDashboard() {
                       <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                     </form>
                   ) : (
-                    <StatusBlock>{cur ? '会话已结束，消息输入已关闭。' : '请选择一个访客会话查看沟通记录。'}</StatusBlock>
+                    <StatusBlock>{cur ? (sessionGroupOf(cur) === 'trash' ? '会话在回收站中。' : '会话已归档，消息输入已关闭。') : '请选择一个访客会话查看沟通记录。'}</StatusBlock>
                   )}
                 </section>
               </div>
