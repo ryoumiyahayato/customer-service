@@ -1,7 +1,7 @@
 import { StatusBlock } from '../ui/StatusBlock';
 
 type Session = any;
-type SessionGroup = 'active' | 'ended' | 'archived' | 'deleted';
+type SessionGroup = 'active' | 'archived' | 'trash';
 
 type AdminSessionListProps = {
   sessions: Session[];
@@ -21,9 +21,8 @@ type AdminSessionListProps = {
 
 const sessionGroups: Array<{ key: SessionGroup; label: string }> = [
   { key: 'active', label: '进行中' },
-  { key: 'ended', label: '已结束' },
   { key: 'archived', label: '已归档' },
-  { key: 'deleted', label: '已删除' },
+  { key: 'trash', label: '回收站' },
 ];
 
 export default function AdminSessionList({
@@ -66,11 +65,10 @@ export default function AdminSessionList({
             onClick={() => onSelectSession(session)}
           >
             <div className="avatar-dot">{customerAvatar(session)}</div>
-            <div className="session-main"><b>{customerName(session)}</b><p>{session.status}</p></div>
+            <div className="session-main"><b>{customerName(session)}</b><p>{session.deleted_at ? '回收站' : session.archived_at || session.status === 'ARCHIVED' || session.status === 'CLOSED' ? '已归档' : '进行中'}</p></div>
             <div className="session-meta">
               <small>{formatTime(session.updated_at)}</small>
               {session.unread_count > 0 && <span className="badge">{session.unread_count}</span>}
-              {session.deleted_at && <em>已删除</em>}
             </div>
           </button>
         ))}

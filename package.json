@@ -6,6 +6,7 @@
     "doctor:online": "node scripts/doctor.mjs --online",
     "lifecycle:dry-run": "node scripts/lifecycle-dry-run.mjs",
     "lifecycle:ci-check": "node scripts/lifecycle-ci-check.mjs",
+    "check-session-lifecycle": "node scripts/check-session-lifecycle.mjs",
     "bootstrap:cloudflare": "node scripts/bootstrap-cloudflare.mjs",
     "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
     "build": "vite build && wrangler deploy --dry-run --outdir .wrangler-dry-run",

@@ -151,3 +151,41 @@ Phase 3:
 - 可选：外部下载链接风险提示。
 - 可选：可配置的允许域名 allowlist。
 - 可选：链接点击审计，但不得记录敏感 query。
+
+## 会话生命周期（Session Lifecycle）
+
+### 状态模型
+
+会话生命周期经过统一后，共有 4 个状态（bucket），其中第 4 个对用户不可见：
+
+| 业务语义 | Bucket | 数据库特征 | UI 显示 |
+|---------|--------|-----------|--------|
+| 进行中 | active | `deleted_at IS NULL`, `purged_at IS NULL`, `archived_at IS NULL`, status 为 PENDING/OPEN | 进行中列表 |
+| 已归档 | archived | `deleted_at IS NULL`, `purged_at IS NULL`, `archived_at IS NOT NULL`, 或 status 为 CLOSED/ARCHIVED | 已归档列表 |
+| 回收站 | trash | `deleted_at IS NOT NULL`, `purged_at IS NULL` | 回收站列表 |
+| 已清理 | purged | `purged_at IS NOT NULL` | 不显示 |
+
+### 核心规则
+
+1. **自动归档**：进行中会话超过 24 小时无新活动（fallback: `updated_at` → `created_at`），生命周期任务自动将其归档。
+2. **回收站自动清除**：回收站会话 `deleted_at` 超过 24 小时后，生命周期任务设置 `purged_at`，使其在所有列表中消失。
+3. **手动结束/归档同一逻辑**：手动点击"结束会话"、手动点击"归档"、自动 24h 生命周期，均调用同一核心函数 `archiveSession()`，设置 `status='ARCHIVED'`、`closed_at`、`archived_at`。
+4. **恢复语义**：从回收站恢复的会话回到"已归档"（不清除 `archived_at`），不回到"进行中"。
+5. **列表过滤**：所有会话列表 API 过滤 `purged_at IS NOT NULL` 的会话。
+
+### 生命周期任务
+
+每小时运行一次（`crons = ["0 * * * *"]`），执行：
+1. `autoArchiveActiveSessions()` — 归档 24 小时无活动的进行中会话
+2. `purgeTrashSessions()` — 清除 24 小时前的回收站会话
+
+日志只输出聚合计数（`archivedCount`, `purgedCount`, `errorCount`），不记录 message body、session ID、token、R2 key。
+
+### 测试
+
+```bash
+node scripts/check-session-lifecycle.mjs     # 静态代码检查
+npm run lifecycle:ci-check                   # 安全边界检查（不访问 Cloudflare/D1）
+```
+
+`lifecycle:dry-run` 需要明确授权，不应在普通 CI 中运行。
