@@ -139,9 +139,9 @@ async function writeAuditLog(env: Env, actor: AuditActor, event: AuditEvent, req
   ).bind(auditId(), 'INFO', event.event, actor.id, auditMessage(event, req), new Date().toISOString()).run();
 }
 
-async function auditAfterSuccess(req: Request, env: Env, response: Response) {
+async function auditAfterSuccess(req: Request, env: Env, response: Response, eventPromise: Promise<AuditEvent | null>) {
   if (response.status < 200 || response.status >= 300) return;
-  const event = await classifyAdminMutation(req);
+  const event = await eventPromise;
   if (!event) return;
   const actor = await currentAuditActor(env, req);
   if (!actor) return;
@@ -154,8 +154,10 @@ export default {
   },
 
   async fetch(req: Request, env: Env, ctx: ExecutionContext) {
+    const auditReq = req.clone();
+    const eventPromise = Promise.resolve(classifyAdminMutation(auditReq)).catch(() => null);
     const response = await inner.fetch(req, env, ctx);
-    ctx.waitUntil(auditAfterSuccess(req, env, response.clone()).catch((error) => {
+    ctx.waitUntil(auditAfterSuccess(req, env, response.clone(), eventPromise).catch((error) => {
       console.error('security: audit log write failed', error);
     }));
     return response;
