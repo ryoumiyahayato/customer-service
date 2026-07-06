@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -60,6 +60,26 @@ try {
   assert.equal(long.length, 1);
   assert.equal(long[0].href, longUrl);
   assert.equal(long[0].text, longUrl);
+
+  const chatTextSource = await readFile(path.join(root, 'src', 'ChatMessageText.tsx'), 'utf8');
+  const guestSource = await readFile(path.join(root, 'src', 'visitor', 'GuestChat.tsx'), 'utf8');
+  const adminSource = await readFile(path.join(root, 'src', 'admin', 'AdminDashboard.tsx'), 'utf8');
+
+  assert.match(chatTextSource, /<a\s/);
+  assert.match(chatTextSource, /href=\{part\.href\}/);
+  assert.match(chatTextSource, /target="_blank"/);
+  assert.match(chatTextSource, /rel="noopener noreferrer"/);
+  assert.match(chatTextSource, /onClick=\{keepLinkInteractionOnLink\}/);
+  assert.match(chatTextSource, /onTouchStart=\{keepLinkInteractionOnLink\}/);
+  assert.doesNotMatch(chatTextSource, /dangerouslySetInnerHTML|innerHTML/);
+
+  assert.match(guestSource, /<ChatMessageText text=\{m\.content \|\| ''\}/);
+  assert.match(adminSource, /<ChatMessageText text=\{m\.content \|\| ''\}/);
+  assert.doesNotMatch(guestSource, /<span>\{m\.content \|\| '\[未知消息\]'\}<\/span>/);
+  assert.doesNotMatch(adminSource, /<span>\{m\.content \|\| '\[未知消息\]'\}<\/span>/);
+  assert.match(guestSource, /className="message-copy-btn"/);
+  assert.match(guestSource, /copyMessageText\(String\(m\.content \|\| ''\)\)/);
+  assert.match(guestSource, /target\?\.closest\('a,button'\)/);
 
   console.log('chat message text link checks passed');
 } finally {
