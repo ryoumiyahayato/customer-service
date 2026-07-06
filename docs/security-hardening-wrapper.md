@@ -7,6 +7,10 @@ The wrapper is intentionally small and focused on request-level controls that do
 - Same-origin write protection for non-safe `/api/*` requests, excluding WebSocket upgrade paths.
 - Login throttling for admin and visitor login endpoints, keyed by IP and username.
 - Public account registration throttling and input validation.
+- Guest-history registration binding requires the current signed guest session to match the requested `visitorId`.
+- Visitor-account logout revokes the stored session row before clearing the cookie.
+- Unsafe environment bootstrap super-admin credentials are rejected before the legacy worker can auto-create the account.
+- Setup mutation requests use the same JSON body-size guard as other mutation endpoints.
 - Server-side validation for administrator/operator usernames and passwords on account creation/profile mutation.
 - Message length limits for chat and internal staff-chat writes.
 - Image message validation to ensure referenced attachments belong to the target session and are still unconsumed.
