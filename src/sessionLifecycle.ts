@@ -4,6 +4,7 @@ export interface LifecycleResult {
   archivedCount: number;
   purgedCount: number;
   expiredAttachmentCount: number;
+  expiredRateLimitCount: number;
   errorCount: number;
 }
 
@@ -145,12 +146,40 @@ export async function cleanupExpiredOrphanAttachments(
   return { expiredAttachmentCount: cleanedIds.length };
 }
 
+export async function cleanupExpiredRateLimits(
+  env: LifecycleEnv,
+  limit = 200,
+): Promise<{ expiredRateLimitCount: number }> {
+  const cleanupLimit = Math.max(0, Math.min(500, Math.floor(limit)));
+  if (!cleanupLimit) return { expiredRateLimitCount: 0 };
+
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const rows = (
+    await env.DB.prepare(
+      `SELECT key FROM rate_limits
+       WHERE reset_at <= ?
+       ORDER BY reset_at ASC
+       LIMIT ?`
+    ).bind(cutoff, cleanupLimit).all<any>()
+  ).results || [];
+  const keys = rows.map((row: any) => String(row.key || '')).filter(Boolean);
+  if (!keys.length) return { expiredRateLimitCount: 0 };
+
+  for (let i = 0; i < keys.length; i += 80) {
+    const chunk = keys.slice(i, i + 80);
+    if (chunk.length) await env.DB.prepare(`DELETE FROM rate_limits WHERE key IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
+  }
+
+  return { expiredRateLimitCount: keys.length };
+}
+
 export async function runLifecycle(
   env: LifecycleEnv,
 ): Promise<LifecycleResult> {
   let archivedCount = 0;
   let purgedCount = 0;
   let expiredAttachmentCount = 0;
+  let expiredRateLimitCount = 0;
   let errorCount = 0;
 
   try {
@@ -177,5 +206,13 @@ export async function runLifecycle(
     console.error('lifecycle: cleanupExpiredOrphanAttachments failed', e);
   }
 
-  return { archivedCount, purgedCount, expiredAttachmentCount, errorCount };
+  try {
+    const cleanupResult = await cleanupExpiredRateLimits(env, 200);
+    expiredRateLimitCount = cleanupResult.expiredRateLimitCount;
+  } catch (e) {
+    errorCount++;
+    console.error('lifecycle: cleanupExpiredRateLimits failed', e);
+  }
+
+  return { archivedCount, purgedCount, expiredAttachmentCount, expiredRateLimitCount, errorCount };
 }
