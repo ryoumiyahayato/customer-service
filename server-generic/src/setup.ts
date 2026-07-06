@@ -22,10 +22,19 @@ export async function getSetupStatus(config: GenericServerConfig, db: PostgresAd
     };
   }
 
+  if (!config.setupToken.trim()) {
+    return {
+      ok: true,
+      setupAvailable: false,
+      requiresSetupToken: true,
+      reason: 'missing_setup_token',
+    };
+  }
+
   return {
     ok: true,
     setupAvailable: true,
-    requiresSetupToken: Boolean(config.setupToken),
+    requiresSetupToken: true,
     reason: 'no_admins',
   };
 }
@@ -47,10 +56,11 @@ function validateUsername(username: string) {
 export async function initializeSetup(config: GenericServerConfig, db: PostgresAdapter, body: Record<string, unknown>) {
   if (await hasAnyAdmin(db)) throw new HttpError(409, 'already_configured');
 
-  if (config.setupToken) {
-    const setupToken = requireString(body.setupToken, 'setupToken');
-    if (!timingSafeTextEqual(setupToken, config.setupToken)) throw new HttpError(403, 'invalid_setup_token');
-  }
+  const expectedSetupToken = config.setupToken.trim();
+  if (!expectedSetupToken) throw new HttpError(403, 'missing_setup_token');
+
+  const setupToken = requireString(body.setupToken, 'setupToken');
+  if (!timingSafeTextEqual(setupToken, expectedSetupToken)) throw new HttpError(403, 'invalid_setup_token');
 
   const username = requireString(body.username, 'username').trim();
   validateUsername(username);

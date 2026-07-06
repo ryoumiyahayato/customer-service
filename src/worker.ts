@@ -176,6 +176,50 @@ function parseAttachmentPath(path?: string | null) {
   }
 }
 function attachmentKeyFromPath(path?: string | null) { return parseAttachmentPath(path).key; }
+type AttachmentDownloadRecord = {
+  object_key: string;
+  conversation_id: string;
+  message_id: string | null;
+  mime_type: string | null;
+};
+async function findAttachmentForDownload(env: Env, key: string) {
+  if (!key) return null;
+  return await env.DB.prepare(
+    `SELECT a.object_key,a.conversation_id,a.message_id,a.mime_type
+       FROM attachments a
+       LEFT JOIN messages m ON m.id=a.message_id
+      WHERE a.object_key=?
+        AND a.deleted_at IS NULL
+        AND (a.message_id IS NULL OR m.session_id=a.conversation_id)
+      LIMIT 1`,
+  ).bind(key).first<AttachmentDownloadRecord>();
+}
+async function canDownloadAttachment(env: Env, req: Request, attachment: AttachmentDownloadRecord) {
+  const session = await getSessionById(env, attachment.conversation_id);
+  if (!session) return { allowed: false, status: 404 };
+
+  const admin = await currentAdmin(env, req);
+  if (admin) return { allowed: canAccessSession(admin, session), status: 403 };
+
+  const guest = await currentGuestSession(env, req);
+  if (guest && guest.session.id === session.id && guest.user.id === session.user_id) return { allowed: true, status: 200 };
+
+  const hasSessionProof = Boolean(getCookie(req, ADMIN_COOKIE) || getCookie(req, GUEST_COOKIE));
+  return { allowed: false, status: hasSessionProof ? 403 : 401 };
+}
+async function downloadAttachment(req: Request, env: Env, rawKey: string) {
+  const parsed = parseAttachmentPath(`${ATTACHMENT_PATH_PREFIX}${rawKey}`);
+  if (!parsed.key) return new Response('Not found', { status: 404 });
+
+  const attachment = await findAttachmentForDownload(env, parsed.key);
+  if (!attachment) return new Response('Not found', { status: 404 });
+
+  const auth = await canDownloadAttachment(env, req, attachment);
+  if (!auth.allowed) return new Response(auth.status === 401 ? 'Unauthorized' : auth.status === 403 ? 'Forbidden' : 'Not found', { status: auth.status });
+
+  const obj = await env.UPLOADS.get(attachment.object_key);
+  return obj ? new Response(obj.body, { headers: { 'Content-Type': obj.httpMetadata?.contentType || attachment.mime_type || 'application/octet-stream', 'Cache-Control': 'no-store' } }) : new Response('Not found', { status: 404 });
+}
 async function broadcast(env: Env, room: string, payload: unknown) {
   if (!env.CHAT_ROOM) throw new Error('CHAT_ROOM Durable Object binding is missing. Check wrangler.toml and deployment config.');
   await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room)).fetch('https://room/broadcast', { method: 'POST', body: JSON.stringify(payload) });
@@ -497,7 +541,7 @@ async function api(req: Request, env: Env) {
   if (path === '/api/staff-chat' && req.method === 'POST') { const admin = await requireAdmin(env, req); const b: any = await readJson(req); const content = String(b.content || '').trim(); const msg = { id: rid('staffmsg'), sender_admin_id: admin.id, sender_name: admin.username, content, created_at: now() }; await env.DB.prepare('INSERT INTO staff_messages(id,sender_admin_id,content,created_at) VALUES(?,?,?,?)').bind(msg.id, admin.id, content, msg.created_at).run(); await broadcast(env, 'staff', { type: 'staff:new', message: msg }); return json({ message: msg }); }
   if (path === '/api/upload' && req.method === 'POST') return upload(req, env);
   const att = path.match(/^\/api\/attachments\/(.+)$/);
-  if (att) { const obj = await env.UPLOADS.get(att[1]); return obj ? new Response(obj.body, { headers: { 'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream', 'Cache-Control': 'public, max-age=31536000, immutable' } }) : new Response('Not found', { status: 404 }); }
+  if (att) return downloadAttachment(req, env, att[1]);
   if (path === '/api/ws/admin') { await requireAdmin(env, req); return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName('admin-feed')).fetch(req); }
   if (path === '/api/ws/staff') { await requireAdmin(env, req); return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName('staff')).fetch(req); }
   const ws = path.match(/^\/api\/ws\/conversations\/([^/]+)$/);

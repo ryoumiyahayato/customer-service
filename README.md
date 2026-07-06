@@ -90,6 +90,8 @@ pnpm run cf:dev
 
 Open the local Wrangler URL. `/` is the visitor chat and `/admin` is the admin console.
 
+For routine audit and CI validation, use `npm.cmd run lifecycle:ci-check`; it does not access Cloudflare or D1. `npm.cmd run lifecycle:dry-run` performs a Wrangler remote read-only D1 check and should only run in an explicitly authorized Cloudflare/D1 environment.
+
 ## Deployment
 
 ```bash

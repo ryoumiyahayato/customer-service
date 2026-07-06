@@ -13,6 +13,7 @@ import { HttpError } from '../dist/http.js';
 import { normalizeLifecycleOptions } from '../dist/lifecycle.js';
 import { normalizeMessageBody, prepareMessageBodyForStorage } from '../dist/messages.js';
 import { errorResponseBody } from '../dist/response.js';
+import { getSetupStatus, initializeSetup } from '../dist/setup.js';
 import { normalizeContentType } from '../dist/storage/contentType.js';
 import { createLocalStorage } from '../dist/storage/localStorage.js';
 import { generateAttachmentStorageKey, sanitizeDisplayFilename } from '../dist/storage/storageKeys.js';
@@ -149,6 +150,40 @@ if (response.status !== 401 || response.body.error !== 'smoke_error') {
   throw new Error('response helper smoke failed');
 }
 
+const setupQueries = [];
+const emptyAdminDb = {
+  async query(sql, params) {
+    setupQueries.push({ sql, params });
+    if (sql.includes('COUNT(*)::text AS count FROM admins')) return [{ count: '0' }];
+    throw new Error('setup smoke should not write without SETUP_TOKEN');
+  },
+};
+const missingTokenSetupStatus = await getSetupStatus({ ...config, setupToken: '' }, emptyAdminDb);
+if (
+  missingTokenSetupStatus.setupAvailable ||
+  !missingTokenSetupStatus.requiresSetupToken ||
+  missingTokenSetupStatus.reason !== 'missing_setup_token'
+) {
+  throw new Error('setup missing token status smoke failed');
+}
+
+try {
+  await initializeSetup({ ...config, setupToken: '' }, emptyAdminDb, {
+    username: 'smoke-admin',
+    password: 'local-smoke-password-only',
+    confirmPassword: 'local-smoke-password-only',
+  });
+  throw new Error('setup missing token initialize smoke failed');
+} catch (error) {
+  if (error instanceof Error && error.message === 'setup missing token initialize smoke failed') throw error;
+  if (!(error instanceof HttpError) || error.status !== 403 || error.code !== 'missing_setup_token') {
+    throw new Error('setup missing token initialize error smoke failed');
+  }
+}
+if (setupQueries.some(({ sql }) => sql.includes('INSERT INTO admins'))) {
+  throw new Error('setup missing token wrote admin smoke failed');
+}
+
 const broadcast = createBroadcastPayload({
   type: 'session_closed',
   sessionId: 'smoke-session',
@@ -168,4 +203,4 @@ if (!broadcast.includes('session_closed') || broadcast.includes(visitorToken)) {
   throw new Error('websocket broadcast smoke failed');
 }
 
-console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, encryption helpers, message payload, storage helpers, lifecycle options, websocket payload');
+console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, setup fail-closed, encryption helpers, message payload, storage helpers, lifecycle options, websocket payload');

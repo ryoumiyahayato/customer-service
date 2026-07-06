@@ -131,7 +131,7 @@
 - 消息列表返回安全附件元数据：id、filename、mime type、size、created at，不返回内部 storage key 或真实路径。
 - 新增 `server-generic/migrations/0003_attachments_and_lifecycle.sql`，补齐附件展示名、附件删除标记、history_cleared_by 和相关索引。
 - lifecycle 骨架支持 admin 手动 archive、recycle、clear-history；clear-history 复用统一附件删除 helper，附件删除成功后才写 history_cleared_at。
-- 自动 lifecycle runner 当前提供 dry-run 统计，输出候选数量，不输出 session 明细。
+- 自动 lifecycle runner 当前提供 dry-run 统计，输出候选数量，不输出 session 明细。普通 CI/audit 默认使用 `npm.cmd run lifecycle:ci-check`，该检查不访问 Cloudflare/D1；`npm.cmd run lifecycle:dry-run` 会访问 Wrangler remote read-only D1，必须有明确 Cloudflare/D1 授权。
 
 ## server-generic 服务端加密存储第一包状态
 

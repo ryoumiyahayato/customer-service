@@ -7,7 +7,7 @@ This directory is the first generic Linux server adapter for the customer chat s
 - Starts a Node HTTP server.
 - Serves `GET /healthz`.
 - Serves `GET /api/setup/status`.
-- Serves `POST /api/setup/initialize` for first-admin creation only.
+- Serves `POST /api/setup/initialize` for first-admin creation only when `SETUP_TOKEN` is configured.
 - Serves `POST /api/admin/login`, `POST /api/admin/logout`, and `GET /api/auth/me`.
 - Serves `POST /api/visitor/sessions`.
 - Serves visitor message list/send APIs guarded by visitor token hash.
@@ -34,6 +34,8 @@ This directory is the first generic Linux server adapter for the customer chat s
 - `npm run migrate`
 
 The migration commands read `DATABASE_URL` and must only be run by an operator in the intended server environment.
+
+Setup is fail-closed when `SETUP_TOKEN` is missing: `/api/setup/status` reports `missing_setup_token`, and `/api/setup/initialize` rejects the request without creating an admin or setting a session cookie.
 
 ## Safety
 
