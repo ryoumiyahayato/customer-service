@@ -3,10 +3,13 @@ export type SessionBucket = 'active' | 'archived' | 'trash' | 'purged';
 export interface LifecycleResult {
   archivedCount: number;
   purgedCount: number;
+  expiredAttachmentCount: number;
   errorCount: number;
 }
 
 const now = () => new Date().toISOString();
+
+type LifecycleEnv = { DB: D1Database; UPLOADS?: R2Bucket };
 
 export function normalizeSessionBucket(session: any): SessionBucket | null {
   if (!session) return null;
@@ -21,7 +24,7 @@ export function sessionEnded(session: any): boolean {
 }
 
 export async function archiveSession(
-  env: { DB: D1Database },
+  env: LifecycleEnv,
   sessionId: string,
   archivedBy: string | null = null,
 ): Promise<void> {
@@ -32,7 +35,7 @@ export async function archiveSession(
 }
 
 export async function autoArchiveActiveSessions(
-  env: { DB: D1Database },
+  env: LifecycleEnv,
   limit = 50,
 ): Promise<{ archivedCount: number }> {
   const archiveLimit = Math.max(0, Math.min(100, Math.floor(limit)));
@@ -68,7 +71,7 @@ export async function autoArchiveActiveSessions(
 }
 
 export async function purgeTrashSessions(
-  env: { DB: D1Database },
+  env: LifecycleEnv,
   limit = 50,
 ): Promise<{ purgedCount: number }> {
   const purgeLimit = Math.max(0, Math.min(100, Math.floor(limit)));
@@ -99,11 +102,55 @@ export async function purgeTrashSessions(
   return { purgedCount: Number(result?.meta?.changes || 0) };
 }
 
+export async function cleanupExpiredOrphanAttachments(
+  env: LifecycleEnv,
+  limit = 50,
+): Promise<{ expiredAttachmentCount: number }> {
+  const cleanupLimit = Math.max(0, Math.min(100, Math.floor(limit)));
+  if (!cleanupLimit || !env.UPLOADS) return { expiredAttachmentCount: 0 };
+
+  const cutoff = now();
+  const rows = (
+    await env.DB.prepare(
+      `SELECT id, object_key FROM attachments
+       WHERE message_id IS NULL
+         AND deleted_at IS NULL
+         AND expires_at IS NOT NULL
+         AND expires_at <= ?
+       ORDER BY expires_at ASC
+       LIMIT ?`
+    ).bind(cutoff, cleanupLimit).all<any>()
+  ).results || [];
+
+  const cleanedIds: string[] = [];
+  for (const row of rows) {
+    const id = String(row.id || '');
+    const objectKey = String(row.object_key || '');
+    if (!id || !objectKey) continue;
+    try {
+      await env.UPLOADS.delete(objectKey);
+      cleanedIds.push(id);
+    } catch (error) {
+      console.error('lifecycle: cleanupExpiredOrphanAttachments R2 delete failed', { id, objectKey, error });
+    }
+  }
+
+  for (let i = 0; i < cleanedIds.length; i += 80) {
+    const chunk = cleanedIds.slice(i, i + 80);
+    if (chunk.length) {
+      await env.DB.prepare(`DELETE FROM attachments WHERE id IN (${chunk.map(() => '?').join(',')}) AND message_id IS NULL`).bind(...chunk).run();
+    }
+  }
+
+  return { expiredAttachmentCount: cleanedIds.length };
+}
+
 export async function runLifecycle(
-  env: { DB: D1Database },
+  env: LifecycleEnv,
 ): Promise<LifecycleResult> {
   let archivedCount = 0;
   let purgedCount = 0;
+  let expiredAttachmentCount = 0;
   let errorCount = 0;
 
   try {
@@ -122,5 +169,13 @@ export async function runLifecycle(
     console.error('lifecycle: purgeTrashSessions failed', e);
   }
 
-  return { archivedCount, purgedCount, errorCount };
+  try {
+    const cleanupResult = await cleanupExpiredOrphanAttachments(env, 50);
+    expiredAttachmentCount = cleanupResult.expiredAttachmentCount;
+  } catch (e) {
+    errorCount++;
+    console.error('lifecycle: cleanupExpiredOrphanAttachments failed', e);
+  }
+
+  return { archivedCount, purgedCount, expiredAttachmentCount, errorCount };
 }
