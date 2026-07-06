@@ -1,10 +1,11 @@
 export { ChatRoom } from './worker';
 import secureWorker from './worker-secure';
-import type { Env } from './worker';
+
+type AuditEnv = { DB: D1Database; SESSION_SECRET: string };
 
 type WorkerModule = {
-  fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response>;
-  scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>;
+  fetch(req: Request, env: AuditEnv, ctx: ExecutionContext): Promise<Response>;
+  scheduled?(controller: ScheduledController, env: AuditEnv, ctx: ExecutionContext): Promise<void> | void;
 };
 
 type AuditActor = { id: string; username: string; role: string };
@@ -37,7 +38,7 @@ function constantTimeEqual(a: string, b: string) {
   return diff === 0;
 }
 
-async function verifySignedId(env: Env, token?: string) {
+async function verifySignedId(env: AuditEnv, token?: string) {
   if (!token) return null;
   const parts = token.split('.');
   if (parts.length !== 2) return null;
@@ -46,11 +47,11 @@ async function verifySignedId(env: Env, token?: string) {
   return constantTimeEqual(sig, await hmac(env.SESSION_SECRET, value)) ? value : null;
 }
 
-async function tokenHash(env: Env, value: string) {
+async function tokenHash(env: AuditEnv, value: string) {
   return await hmac(env.SESSION_SECRET, `session:${value}`);
 }
 
-async function currentAuditActor(env: Env, req: Request): Promise<AuditActor | null> {
+async function currentAuditActor(env: AuditEnv, req: Request): Promise<AuditActor | null> {
   const sessionId = await verifySignedId(env, getCookie(req, ADMIN_COOKIE));
   if (!sessionId) return null;
   const session = await env.DB.prepare(
@@ -64,11 +65,30 @@ async function currentAuditActor(env: Env, req: Request): Promise<AuditActor | n
 }
 
 async function readJsonBody(req: Request) {
-  return await req.clone().json().catch(() => ({} as any));
+  return await req.json().catch(() => ({} as Record<string, unknown>));
 }
 
 function pickString(value: unknown, maxLength = 120) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : undefined;
+}
+
+function isAuditedAdminMutation(req: Request) {
+  const url = new URL(req.url);
+  const path = url.pathname;
+  const method = req.method.toUpperCase();
+
+  if (path === '/api/invites' && method === 'POST') return true;
+  if (path === '/api/admins' && method === 'POST') return true;
+  if (path === '/api/admins/operators' && method === 'DELETE') return true;
+  if (path === '/api/admins/profile' && method === 'PATCH') return true;
+  if (path === '/api/messages/purge-images' && method === 'POST') return true;
+  if (/^\/api\/sessions\/[^/]+\/(assign|close|archive|unarchive|delete|restore)$/.test(path) && method === 'POST') return true;
+  if (/^\/api\/sessions\/[^/]+\/customer-remark$/.test(path) && method === 'PATCH') return true;
+  if (/^\/api\/sessions\/[^/]+\/clear-history$/.test(path) && method === 'POST') return true;
+  if (/^\/api\/messages\/[^/]+\/recall$/.test(path) && method === 'POST') return true;
+  if (/^\/api\/messages\/[^/]+\/delete$/.test(path) && method === 'POST') return true;
+
+  return false;
 }
 
 function classifyAdminMutation(req: Request): Promise<AuditEvent | null> | AuditEvent | null {
@@ -133,13 +153,13 @@ function auditMessage(event: AuditEvent, req: Request) {
   });
 }
 
-async function writeAuditLog(env: Env, actor: AuditActor, event: AuditEvent, req: Request) {
+async function writeAuditLog(env: AuditEnv, actor: AuditActor, event: AuditEvent, req: Request) {
   await env.DB.prepare(
     'INSERT INTO system_logs(id,level,event,actor_id,message,created_at) VALUES(?,?,?,?,?,?)',
   ).bind(auditId(), 'INFO', event.event, actor.id, auditMessage(event, req), new Date().toISOString()).run();
 }
 
-async function auditAfterSuccess(req: Request, env: Env, response: Response, eventPromise: Promise<AuditEvent | null>) {
+async function auditAfterSuccess(req: Request, env: AuditEnv, response: Response, eventPromise: Promise<AuditEvent | null>) {
   if (response.status < 200 || response.status >= 300) return;
   const event = await eventPromise;
   if (!event) return;
@@ -149,15 +169,17 @@ async function auditAfterSuccess(req: Request, env: Env, response: Response, eve
 }
 
 export default {
-  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    return inner.scheduled?.(controller, env, ctx);
+  async scheduled(controller: ScheduledController, env: AuditEnv, ctx: ExecutionContext) {
+    await inner.scheduled?.(controller, env, ctx);
   },
 
-  async fetch(req: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(req: Request, env: AuditEnv, ctx: ExecutionContext) {
+    if (!isAuditedAdminMutation(req)) return inner.fetch(req, env, ctx);
+
     const auditReq = req.clone();
     const eventPromise = Promise.resolve(classifyAdminMutation(auditReq)).catch(() => null);
     const response = await inner.fetch(req, env, ctx);
-    ctx.waitUntil(auditAfterSuccess(req, env, response.clone(), eventPromise).catch((error) => {
+    ctx.waitUntil(auditAfterSuccess(req, env, response, eventPromise).catch((error) => {
       console.error('security: audit log write failed', error);
     }));
     return response;
