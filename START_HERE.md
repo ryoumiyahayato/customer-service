@@ -85,3 +85,42 @@ npx.cmd wrangler deploy
 Do not use `npm.cmd run lifecycle:dry-run` for routine local audit or CI. It performs a Wrangler remote read-only D1 dry-run and requires explicit Cloudflare/D1 authorization.
 
 Do not commit or document `.dev.vars`, `.env.production`, secrets, cookies, or Cloudflare tokens.
+
+## Safe Cloudflare Deployment
+
+Use the safe deploy tool for routine Cloudflare test environment deployment:
+
+```powershell
+npm.cmd run deploy:safe
+```
+
+This command automatically:
+- Checks that the current branch is `main` and working tree is clean
+- Syncs with `origin/main`
+- Runs obvious code issue scan (conflict markers, debugger, dangerous HTML injection, hardcoded secrets, forbidden commands)
+- Runs `check-chat-message-text`, `check-session-lifecycle`, `typecheck`, `doctor`, and `lifecycle:ci-check`
+- Checks for pending D1 remote migrations
+- Builds and deploys if no pending migrations
+- Cleans up `dist` after deployment
+
+**No pending migration:** Deployment proceeds automatically without manual confirmation.
+
+**Pending migration detected:** The tool blocks deployment. To allow migration and deploy:
+
+```powershell
+npm.cmd run deploy:safe -- --apply-migrations
+```
+
+Then type exactly:
+
+```
+APPLY REMOTE D1 MIGRATIONS
+```
+
+**Important:**
+- `deploy:safe` does NOT run `lifecycle:dry-run`
+- `deploy:safe` does NOT auto commit, push, or tag
+- `deploy:safe` does NOT modify Wrangler secrets
+- `deploy:safe` does NOT delete R2 objects
+- D1 migrations must be applied before deploy
+- This workflow is for the Cloudflare test environment only; customer self-deployments use a different process
