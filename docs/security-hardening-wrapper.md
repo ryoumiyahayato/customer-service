@@ -18,8 +18,9 @@ The wrapper is intentionally small and focused on request-level controls that do
 - Upload request preflight checks for size, MIME type, and image magic bytes before the legacy upload handler stores the file.
 - Attachment download preflight checks for method, deleted records, and expired orphan uploads.
 - Invite token shape validation before guest invite consumption reaches the legacy router.
+- Chat links are rendered as external links with `noopener`, `noreferrer`, and `nofollow`.
 - Baseline response security headers, including CSP, `X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy`.
 
 The existing application worker remains the source of business logic. The wrapper can be collapsed into `src/worker.ts` later after the router is split into smaller modules.
 
-The lifecycle task also deletes expired orphan attachment rows and their R2 objects. This only targets uploads that never became attached to a message, reducing storage abuse without deleting valid chat history images. It also removes stale `rate_limits` records to limit unbounded table growth from expired throttling keys.
+The lifecycle task deletes expired orphan attachment rows and their R2 objects. This only targets uploads that never became attached to a message, reducing storage abuse without deleting valid chat history images. It also removes stale `rate_limits` records, expired/revoked auth session rows, and stale invite links to limit unbounded table growth from expired throttling/session/invite keys.

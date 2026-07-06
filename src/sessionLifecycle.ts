@@ -5,6 +5,8 @@ export interface LifecycleResult {
   purgedCount: number;
   expiredAttachmentCount: number;
   expiredRateLimitCount: number;
+  expiredSessionCount: number;
+  expiredInviteCount: number;
   errorCount: number;
 }
 
@@ -173,6 +175,71 @@ export async function cleanupExpiredRateLimits(
   return { expiredRateLimitCount: keys.length };
 }
 
+export async function cleanupExpiredAuthSessions(
+  env: LifecycleEnv,
+  limit = 200,
+): Promise<{ expiredSessionCount: number }> {
+  const cleanupLimit = Math.max(0, Math.min(500, Math.floor(limit)));
+  if (!cleanupLimit) return { expiredSessionCount: 0 };
+
+  const cutoff = now();
+  let expiredSessionCount = 0;
+  for (const table of ['admin_sessions', 'visitor_sessions']) {
+    const rows = (
+      await env.DB.prepare(
+        `SELECT id FROM ${table}
+         WHERE revoked_at IS NOT NULL
+            OR expires_at <= ?
+         ORDER BY COALESCE(revoked_at, expires_at, created_at) ASC
+         LIMIT ?`
+      ).bind(cutoff, cleanupLimit).all<any>()
+    ).results || [];
+    const ids = rows.map((row: any) => String(row.id || '')).filter(Boolean);
+    for (let i = 0; i < ids.length; i += 80) {
+      const chunk = ids.slice(i, i + 80);
+      if (chunk.length) {
+        const result: any = await env.DB.prepare(`DELETE FROM ${table} WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
+        expiredSessionCount += Number(result?.meta?.changes || chunk.length);
+      }
+    }
+  }
+
+  return { expiredSessionCount };
+}
+
+export async function cleanupExpiredInviteLinks(
+  env: LifecycleEnv,
+  limit = 100,
+): Promise<{ expiredInviteCount: number }> {
+  const cleanupLimit = Math.max(0, Math.min(500, Math.floor(limit)));
+  if (!cleanupLimit) return { expiredInviteCount: 0 };
+
+  const cutoff = now();
+  const rows = (
+    await env.DB.prepare(
+      `SELECT id FROM invite_links
+       WHERE expires_at <= ?
+          OR revoked_at IS NOT NULL
+          OR (consumed_at IS NOT NULL AND consumed_at <= datetime('now', '-7 days'))
+       ORDER BY COALESCE(revoked_at, consumed_at, expires_at, created_at) ASC
+       LIMIT ?`
+    ).bind(cutoff, cleanupLimit).all<any>()
+  ).results || [];
+  const ids = rows.map((row: any) => String(row.id || '')).filter(Boolean);
+  if (!ids.length) return { expiredInviteCount: 0 };
+
+  let expiredInviteCount = 0;
+  for (let i = 0; i < ids.length; i += 80) {
+    const chunk = ids.slice(i, i + 80);
+    if (chunk.length) {
+      const result: any = await env.DB.prepare(`DELETE FROM invite_links WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
+      expiredInviteCount += Number(result?.meta?.changes || chunk.length);
+    }
+  }
+
+  return { expiredInviteCount };
+}
+
 export async function runLifecycle(
   env: LifecycleEnv,
 ): Promise<LifecycleResult> {
@@ -180,6 +247,8 @@ export async function runLifecycle(
   let purgedCount = 0;
   let expiredAttachmentCount = 0;
   let expiredRateLimitCount = 0;
+  let expiredSessionCount = 0;
+  let expiredInviteCount = 0;
   let errorCount = 0;
 
   try {
@@ -214,5 +283,21 @@ export async function runLifecycle(
     console.error('lifecycle: cleanupExpiredRateLimits failed', e);
   }
 
-  return { archivedCount, purgedCount, expiredAttachmentCount, expiredRateLimitCount, errorCount };
+  try {
+    const cleanupResult = await cleanupExpiredAuthSessions(env, 200);
+    expiredSessionCount = cleanupResult.expiredSessionCount;
+  } catch (e) {
+    errorCount++;
+    console.error('lifecycle: cleanupExpiredAuthSessions failed', e);
+  }
+
+  try {
+    const cleanupResult = await cleanupExpiredInviteLinks(env, 100);
+    expiredInviteCount = cleanupResult.expiredInviteCount;
+  } catch (e) {
+    errorCount++;
+    console.error('lifecycle: cleanupExpiredInviteLinks failed', e);
+  }
+
+  return { archivedCount, purgedCount, expiredAttachmentCount, expiredRateLimitCount, expiredSessionCount, expiredInviteCount, errorCount };
 }
