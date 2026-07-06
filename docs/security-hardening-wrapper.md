@@ -1,8 +1,8 @@
 # Security hardening wrapper
 
-This deployment now routes Cloudflare Worker traffic through `src/worker-secure.ts` before delegating to the existing application worker.
+This deployment now routes Cloudflare Worker traffic through `src/worker-audit.ts`, then `src/worker-secure.ts`, before delegating to the existing application worker.
 
-The wrapper is intentionally small and focused on request-level controls that do not require changing the large legacy router immediately:
+The wrappers are intentionally small and focused on request-level controls that do not require changing the large legacy router immediately:
 
 - Same-origin write protection for non-safe `/api/*` requests, excluding WebSocket upgrade paths.
 - Login throttling for admin and visitor login endpoints, keyed by IP and username.
@@ -20,7 +20,8 @@ The wrapper is intentionally small and focused on request-level controls that do
 - Invite token shape validation before guest invite consumption reaches the legacy router.
 - Chat links are rendered as external links with `noopener`, `noreferrer`, and `nofollow`.
 - Baseline response security headers, including CSP, `X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy`.
+- Successful high-risk admin mutations are written to `system_logs` without storing passwords, message bodies, attachment contents, or invite tokens.
 
-The existing application worker remains the source of business logic. The wrapper can be collapsed into `src/worker.ts` later after the router is split into smaller modules.
+The existing application worker remains the source of business logic. The wrappers can be collapsed into `src/worker.ts` later after the router is split into smaller modules.
 
 The lifecycle task deletes expired orphan attachment rows and their R2 objects. This only targets uploads that never became attached to a message, reducing storage abuse without deleting valid chat history images. It also removes stale `rate_limits` records, expired/revoked auth session rows, and stale invite links to limit unbounded table growth from expired throttling/session/invite keys.
