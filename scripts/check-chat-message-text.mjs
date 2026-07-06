@@ -77,8 +77,8 @@ try {
   assert.match(adminSource, /<ChatMessageText text=\{m\.content \|\| ''\}/);
   assert.doesNotMatch(guestSource, /<span>\{m\.content \|\| '\[未知消息\]'\}<\/span>/);
   assert.doesNotMatch(adminSource, /<span>\{m\.content \|\| '\[未知消息\]'\}<\/span>/);
-  assert.match(guestSource, /className="message-copy-btn"/);
-  assert.match(guestSource, /copyMessageText\(String\(m\.content \|\| ''\)\)/);
+  assert.doesNotMatch(guestSource, /className="message-copy-btn"/);
+  assert.match(guestSource, /copyMessageText\(String\(msg\.content \|\| ''\)\)/);
   assert.match(guestSource, /target\?\.closest\('a,button'\)/);
 
   console.log('chat message text link checks passed');

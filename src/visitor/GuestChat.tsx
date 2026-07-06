@@ -122,6 +122,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     setMessages([]);
     setText('');
     setQuote(null);
+    setContextMenu(null);
     localStorage.removeItem('chat_session_id');
     clearTimeout(initRetryTimer.current);
     clearTimeout(reconnectTimer.current);
@@ -387,6 +388,16 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   useEffect(() => { const f = (e: StorageEvent) => { if (e.key === 'chat_visitor_id' && e.newValue && e.newValue !== visitorId) window.location.reload(); }; addEventListener('storage', f); return () => removeEventListener('storage', f); }, [visitorId]);
   useEffect(() => { scrollToBottom('smooth'); }, [messages, scrollToBottom]);
   useEffect(() => { if (networkBanner) { const t = setTimeout(() => setNetworkBanner(false), 10000); return () => clearTimeout(t); } }, [networkBanner]);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    document.addEventListener('touchmove', close, { passive: true });
+    document.addEventListener('scroll', close, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener('touchmove', close);
+      document.removeEventListener('scroll', close, { capture: true });
+    };
+  }, [contextMenu]);
 
   const send = async () => {
     if (accessError || sessionClosed || !sessionId) return;
@@ -413,6 +424,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     setMessages(prev => mergeMessage(prev, optimisticMessage));
     setText('');
     setQuote(null);
+    setContextMenu(null);
     focusMessageInput();
     try {
       const postStarted = performance.now();
@@ -457,7 +469,12 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const handleLongPress = useCallback((msg: Message) => (e: React.TouchEvent) => {
     const target = e.target as HTMLElement | null;
     if (target?.closest('a,button')) return;
-    const timer = setTimeout(() => { setContextMenu({ msg, x: e.touches[0].clientX, y: e.touches[0].clientY }); }, 500);
+    const x = e.touches[0].clientX;
+    const y = e.touches[0].clientY;
+    const timer = setTimeout(() => {
+      window.getSelection()?.removeAllRanges();
+      setContextMenu({ msg, x, y });
+    }, 500);
     const clear = () => { clearTimeout(timer); e.target?.removeEventListener('touchend', clear); e.target?.removeEventListener('touchmove', clear); };
     e.target.addEventListener('touchend', clear, { once: true }); e.target.addEventListener('touchmove', clear, { once: true });
   }, []);
@@ -495,7 +512,6 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
             onTouchStart={isMobile && !m.deleted_at ? handleLongPress(m) : undefined}>
             {m.quote_message_id && <div className="quote-box">{[messages.find(x => x.id === m.quote_message_id)].map(q => q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : q.content || '[未知消息]') : '引用消息不可用').join('')}</div>}
             {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="图片" loading="lazy" /></a> : <ChatMessageText text={m.content || ''} />}
-            {!own && m.status !== 'recalled' && m.message_type !== 'image' && m.content ? <button type="button" className="message-copy-btn" onClick={(event) => { event.stopPropagation(); copyMessageText(String(m.content || '')); }} onPointerDown={(event) => event.stopPropagation()} onTouchStart={(event) => event.stopPropagation()}>复制文本</button> : null}
             {(m.status === 'sending' || m.status === 'failed') && <div className={`time message-status ${m.status}`}>{m.status === 'sending' ? '发送中...' : '发送失败，请稍后重试'}</div>}
           </div>
         )}
