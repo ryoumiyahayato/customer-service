@@ -11,7 +11,7 @@ type WorkerModule = {
 type AuditActor = { id: string; username: string; role: string };
 type AuditEvent = { event: string; resource?: string; details?: Record<string, unknown> };
 
-const inner = secureWorker as WorkerModule;
+const inner = secureWorker as unknown as WorkerModule;
 const ADMIN_COOKIE = 'support_admin';
 const enc = new TextEncoder();
 
