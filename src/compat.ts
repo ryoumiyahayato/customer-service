@@ -16,7 +16,20 @@ export function copyText(text: string) {
   if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
     return navigator.clipboard.writeText(text);
   }
-  return Promise.reject(new Error('当前浏览器不支持复制，请长按选择错误信息后手动复制'));
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  return copied
+    ? Promise.resolve()
+    : Promise.reject(new Error('当前浏览器不支持自动复制，请长按选择文本后手动复制'));
 }
 
 export function isWebSocketSupported() {

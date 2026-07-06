@@ -42,6 +42,8 @@
 .message-text{white-space:pre-wrap;user-select:text;-webkit-user-select:text}
 .message-link{color:inherit;text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere;word-break:break-word;user-select:text;-webkit-user-select:text}
 .msg{user-select:text;-webkit-user-select:text}
+.message-copy-btn{display:block;width:max-content;margin-top:8px;padding:4px 8px;min-height:28px;border-radius:999px;background:var(--panel-2);color:var(--brand);border:1px solid var(--line);font-size:12px;line-height:1.2}
+.message-copy-btn:active{transform:scale(.98)}
 .message-avatar{width:32px;height:32px;flex:0 0 32px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;color:#fff;background:#64748b;box-shadow:0 2px 8px var(--shadow);user-select:none}
 .agent-avatar{background:#0ea5e9}
 .customer-avatar{background:#2563eb}

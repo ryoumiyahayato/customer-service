@@ -1,9 +1,14 @@
+import type { SyntheticEvent } from 'react';
 import { parseChatMessageText } from './chatMessageTokens';
 
 type ChatMessageTextProps = {
   text: string;
   fallback?: string;
 };
+
+function keepLinkInteractionOnLink(event: SyntheticEvent<HTMLAnchorElement>) {
+  event.stopPropagation();
+}
 
 export default function ChatMessageText({ text, fallback = '[未知消息]' }: ChatMessageTextProps) {
   const content = text || fallback;
@@ -17,6 +22,9 @@ export default function ChatMessageText({ text, fallback = '[未知消息]' }: C
             href={part.href}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={keepLinkInteractionOnLink}
+            onPointerDown={keepLinkInteractionOnLink}
+            onTouchStart={keepLinkInteractionOnLink}
           >
             {part.text}
           </a>
