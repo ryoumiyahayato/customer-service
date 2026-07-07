@@ -18,6 +18,7 @@
 
 - `.env.example`：环境变量模板，只包含占位值，不包含真实值。
 - `docker-compose.yml`：app、postgres、caddy 三服务编排。
+- `docker-compose.local.yml`：本地 HTTP smoke 覆盖文件，只给 app 暴露 localhost 端口，不启动真实 HTTPS。
 - `Dockerfile`：构建通用服务器适配层并复制前端 `dist` 产物。
 - `app.env.example`：容器内应用变量示例。
 - `Caddyfile`：使用 `APP_DOMAIN` / `VISITOR_ROOT_DOMAIN` 的 HTTPS 自动证书和反向代理配置。
@@ -44,6 +45,74 @@
 9. 健康检查通过后打开 `https://你的后台域名/setup`。
 
 当前通用服务器适配层已经具备 setup、admin auth、admin session、访客会话、文本消息、附件上传、基础 WebSocket 广播、lifecycle 骨架、服务端加密存储和 PostgreSQL migration 基础闭环。完整 read receipt、自动 runner 调度接线和生产数据迁移工具仍会在后续包继续推进。
+
+## 本地 Docker self-host smoke
+
+本地 smoke 只使用 `127.0.0.1` 和 HTTP，不申请真实 HTTPS，不访问 Cloudflare，不访问 D1/R2，不需要真实域名。它用于验证 `server-generic`、PostgreSQL、前端 `dist` 和 frontend compatibility API 的最小文本聊天闭环。
+
+在仓库根目录先生成前端产物：
+
+```bash
+npm install --package-lock=false --no-audit --no-fund
+npm run build
+```
+
+然后准备本地 `.env`。这些值只用于本机 smoke，不要提交 `.env`：
+
+```bash
+cd deploy/linux
+cat > .env <<'EOF'
+APP_DOMAIN=127.0.0.1
+VISITOR_ROOT_DOMAIN=127.0.0.1
+POSTGRES_DB=customer_chat
+POSTGRES_USER=customer_chat
+POSTGRES_PASSWORD=local-smoke-postgres-password
+DATABASE_URL=postgres://customer_chat:local-smoke-postgres-password@postgres:5432/customer_chat
+APP_PORT=3000
+LOCAL_APP_PORT=8788
+SESSION_SECRET=local-smoke-session-secret-change-me-at-least-32-chars
+SETUP_TOKEN=local-smoke-setup-token-change-me
+ADMIN_SESSION_TTL=86400
+ENCRYPTION_ENABLED=0
+ENCRYPTION_KEY=
+ENCRYPTION_KEY_VERSION=v1
+STORAGE_DRIVER=local
+STORAGE_PATH=/app/storage
+MAX_UPLOAD_SIZE=10485760
+LIFECYCLE_CRON=0 * * * *
+LOG_LEVEL=info
+BACKUP_DIR=./backup
+EOF
+```
+
+启动本地 Postgres 和 app，不启动 Caddy：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml build app
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres
+docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app npm run migrate
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app
+```
+
+回到仓库根目录运行本地 e2e smoke：
+
+```bash
+cd ../..
+SELF_HOST_BASE_URL=http://127.0.0.1:8788 \
+SETUP_TOKEN=local-smoke-setup-token-change-me \
+ADMIN_USERNAME=local-smoke-admin \
+ADMIN_PASSWORD=local-smoke-admin-password \
+npm --prefix server-generic run e2e:local-smoke
+```
+
+该 smoke 会检查 `/healthz`、`/api/setup/status`、本地 setup 初始化、`/api/auth/login`、`/api/auth/me`、`/api/invites`、`/api/guest/:token`、访客文本发送、管理员会话列表、管理员消息读取、管理员文本回复、访客读取回复。脚本只打印步骤结果，不打印 password、token、cookie、session id、消息正文或附件 key。
+
+清理本地 smoke 容器和匿名运行状态：
+
+```bash
+cd deploy/linux
+docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
+```
 
 ## PostgreSQL migration 与 setup
 
