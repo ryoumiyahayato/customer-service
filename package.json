@@ -19,6 +19,7 @@
     "typegen": "wrangler types",
     "typecheck": "tsc --noEmit",
     "check:obvious": "node scripts/check-obvious-code-issues.mjs",
+    "check:admin-race": "node scripts/check-admin-message-race-guard.mjs",
     "deploy:safe": "node scripts/deploy-cloudflare-safe.mjs"
   },
   "dependencies": {

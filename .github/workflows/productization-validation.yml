@@ -58,6 +58,9 @@ jobs:
             npm install --package-lock=false --no-audit --no-fund
           fi
 
+      - name: Root admin message race guard
+        run: npm run check:admin-race
+
       - name: Root typecheck
         run: npm run typecheck
 
