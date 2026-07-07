@@ -248,7 +248,12 @@ jobs:
       - name: Run local self-host migrations
         working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app npm run migrate
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app npm run migrate >/tmp/local-self-host-migrate.log 2>&1 || {
+            cat /tmp/local-self-host-migrate.log
+            exit 1
+          }
 
       - name: Start local self-host app
         working-directory: deploy/linux
@@ -294,5 +299,5 @@ jobs:
         shell: bash
         run: |
           if [ -f deploy/linux/docker-compose.yml ]; then
-            docker compose -f deploy/linux/docker-compose.yml -f docker-compose.local.yml down -v || true
+            docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml down -v || true
           fi
