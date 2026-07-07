@@ -182,8 +182,8 @@ jobs:
         run: |
           set -euo pipefail
           git init -q .
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -c http.extraHeader="AUTHORIZATION: bearer ${GITHUB_TOKEN}" fetch -q --depth=1 origin "${GITHUB_SHA}"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=1 origin "${GITHUB_SHA}"
           git checkout -q FETCH_HEAD
 
       - name: Install root dependencies
@@ -276,14 +276,17 @@ jobs:
 
       - name: Local self-host failure diagnostics
         if: failure()
-        working-directory: deploy/linux
         shell: bash
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.local.yml ps
-          docker compose -f docker-compose.yml -f docker-compose.local.yml logs --tail=120 app postgres
+          if [ -f deploy/linux/docker-compose.yml ]; then
+            docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml ps || true
+            docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres || true
+          fi
 
       - name: Cleanup local self-host compose
         if: always()
-        working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
+        run: |
+          if [ -f deploy/linux/docker-compose.yml ]; then
+            docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml down -v || true
+          fi
