@@ -188,13 +188,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
-            npm ci --no-audit --no-fund
+            npm ci --no-audit --no-fund --silent
           else
-            npm install --package-lock=false --no-audit --no-fund
+            npm install --package-lock=false --no-audit --no-fund --silent
           fi
 
       - name: Root build
-        run: npm run build
+        run: npm run build --silent
 
       - name: Write local self-host env
         working-directory: deploy/linux
@@ -229,12 +229,12 @@ jobs:
       - name: Build local self-host app image
         working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml build app
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml build --quiet app
 
       - name: Start local self-host postgres
         working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres >/dev/null
 
       - name: Run local self-host migrations
         working-directory: deploy/linux
@@ -244,7 +244,7 @@ jobs:
       - name: Start local self-host app
         working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app >/dev/null
 
       - name: Wait for local self-host app
         shell: bash
@@ -258,7 +258,7 @@ jobs:
             sleep 2
           done
           echo "local self-host app did not become ready"
-          docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs app postgres
+          docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres
           exit 1
 
       - name: Run local self-host e2e smoke
@@ -270,6 +270,14 @@ jobs:
           ADMIN_USERNAME=local-smoke-admin \
           ADMIN_PASSWORD=local-smoke-admin-password \
           npm --prefix server-generic run e2e:local-smoke
+
+      - name: Local self-host failure diagnostics
+        if: failure()
+        working-directory: deploy/linux
+        shell: bash
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.local.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.local.yml logs --tail=120 app postgres
 
       - name: Cleanup local self-host compose
         if: always()
