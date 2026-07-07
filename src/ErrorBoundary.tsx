@@ -1,46 +1,43 @@
-﻿import { Component, ErrorInfo, ReactNode } from 'react';
-import { copyText, getErrorMessage, isExpectedError } from './compat';
+import { Component, ErrorInfo, ReactNode } from 'react';
+import { isExpectedError } from './compat';
 
 type Props = { children: ReactNode; isAdmin?: boolean };
-type State = { error: string; isExpected: boolean };
+type State = { error: boolean; isExpected: boolean };
+
+const SUPPORT_ERROR_MESSAGE = '页面加载失败，请刷新重试，或更换浏览器。';
+const NETWORK_ERROR_MESSAGE = '网络不稳定，请检查网络后重试。';
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: '', isExpected: false };
+  state: State = { error: false, isExpected: false };
 
   static getDerivedStateFromError(error: unknown) {
-    if (isExpectedError(error)) {
-      return { error: '', isExpected: true };
-    }
-    return { error: getErrorMessage(error), isExpected: false };
+    return { error: true, isExpected: isExpectedError(error) };
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo) {
-    if (!isExpectedError(error)) {
+    if (import.meta.env.DEV && !isExpectedError(error)) {
       console.error('React render error', error, info);
     }
   }
 
   render() {
     if (!this.state.error) return this.props.children;
-    return <CrashScreen message={this.state.error} isExpected={this.state.isExpected} isAdmin={this.props.isAdmin} />;
+    return <CrashScreen isExpected={this.state.isExpected} isAdmin={this.props.isAdmin} />;
   }
 }
 
-export function CrashScreen({ message, isExpected, isAdmin }: { message: string; isExpected?: boolean; isAdmin?: boolean }) {
-  const displayMessage = isExpected ? '网络不稳定，请重试' : message;
+export function CrashScreen({ isExpected, isAdmin }: { isExpected?: boolean; isAdmin?: boolean }) {
+  const title = isExpected ? '网络不稳定' : '页面加载失败';
+  const message = isExpected ? NETWORK_ERROR_MESSAGE : SUPPORT_ERROR_MESSAGE;
 
-  async function copy() {
-    try {
-      await copyText(message);
-      alert('错误信息已复制');
-    } catch (error) {
-      alert(getErrorMessage(error));
-    }
-  }
-
-  if (isExpected || !isAdmin) {
-    return <div className="page crash-page"><div className="crash-card"><h1>网络不稳定</h1><p>请求超时，请检查网络后重试</p><pre>错误信息：网络不稳定，请重试</pre><button className="secondary" onClick={() => location.reload()}>刷新重试</button></div></div>;
-  }
-
-  return <div className="page crash-page"><div className="crash-card"><h1>页面加载失败</h1><p>请刷新重试，或更换浏览器。</p><pre>错误信息：{displayMessage}</pre><button onClick={copy}>复制错误信息</button><button className="secondary" onClick={() => location.reload()}>刷新重试</button></div></div>;
+  return (
+    <div className="page crash-page">
+      <div className="crash-card">
+        <h1>{title}</h1>
+        <p>{message}</p>
+        <pre>错误信息：{isExpected || !isAdmin ? '网络不稳定，请重试' : '页面加载失败'}</pre>
+        <button className="secondary" onClick={() => location.reload()}>刷新重试</button>
+      </div>
+    </div>
+  );
 }

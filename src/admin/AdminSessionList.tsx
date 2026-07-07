@@ -1,4 +1,5 @@
 import { StatusBlock } from '../ui/StatusBlock';
+import { setActiveAdminSessionId } from './activeSessionGuard';
 
 type Session = any;
 type SessionGroup = 'active' | 'archived' | 'trash';
@@ -42,6 +43,11 @@ export default function AdminSessionList({
 }: AdminSessionListProps) {
   const visibleSessions = typeof maxItems === 'number' ? sessions.slice(0, maxItems) : sessions;
 
+  function selectSession(session: Session) {
+    setActiveAdminSessionId(session.id);
+    onSelectSession(session);
+  }
+
   return (
     <>
       <div className={`session-group-tabs${tabsClassName ? ` ${tabsClassName}` : ''}`}>
@@ -62,7 +68,7 @@ export default function AdminSessionList({
             type="button"
             key={session.id}
             className={`session conversation-item${currentSessionId === session.id ? ' active' : ''}`}
-            onClick={() => onSelectSession(session)}
+            onClick={() => selectSession(session)}
           >
             <div className="avatar-dot">{customerAvatar(session)}</div>
             <div className="session-main"><b>{customerName(session)}</b><p>{session.deleted_at ? '回收站' : session.archived_at || session.status === 'ARCHIVED' || session.status === 'CLOSED' ? '已归档' : '进行中'}</p></div>

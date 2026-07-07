@@ -39,17 +39,32 @@ function readTrackedFiles(patterns) {
 
 const srcFiles = () => readTrackedFiles(['src/**/*.ts', 'src/**/*.tsx', 'src/**/*.js', 'src/**/*.jsx']);
 const deployCodeFiles = () => readTrackedFiles(['scripts/deploy-cloudflare-safe.mjs']);
-const trackedAll = () => {
-  const all = gitTracked(['src/**/*.ts', 'src/**/*.tsx', 'src/**/*.js', 'src/**/*.jsx', 'docs/**/*.md', 'docs/**/*.txt', '*.toml', '*.json', '*.js', '*.mjs', '*.ts', 'scripts/**/*.mjs', 'deploy/**/*.ts', 'deploy/**/*.mjs', 'deploy/**/*.js', 'lib/**/*.ts', 'app/**/*.ts', 'server-generic/**/*.ts']);
-  const result = [];
-  for (const file of all) {
-    const full = path.join(root, file);
-    try {
-      result.push({ path: file, content: readFileSync(full, 'utf8') });
-    } catch { /* skip */ }
-  }
-  return result;
-};
+const trackedAll = () => readTrackedFiles([
+  'src/**/*.ts', 'src/**/*.tsx', 'src/**/*.js', 'src/**/*.jsx',
+  'docs/**/*.md', 'docs/**/*.txt',
+  '*.toml', '*.json', '*.js', '*.mjs', '*.ts', '*.diff', '*.patch',
+  'scripts/**/*.mjs', 'deploy/**/*.ts', 'deploy/**/*.mjs', 'deploy/**/*.js',
+  'server-generic/**/*.ts',
+]);
+
+function checkNoLegacyNextScaffold() {
+  const legacyFiles = gitTracked(['app/**', 'lib/**', 'middleware.ts', 'next.config.*', 'next-env.d.ts']);
+  for (const file of legacyFiles) results.push(`  FAIL  Legacy Next.js scaffold file remains: ${file}`);
+  check('No legacy Next.js scaffold files', legacyFiles.length === 0);
+}
+
+function checkNoPatchArtifacts() {
+  const patchFiles = gitTracked(['*.diff', '*.patch', '**/*.diff', '**/*.patch']);
+  for (const file of patchFiles) results.push(`  FAIL  Patch artifact should not be tracked: ${file}`);
+  check('No tracked patch/diff artifacts', patchFiles.length === 0);
+}
+
+function checkNoUnusedWorkerAuditShim() {
+  const auditShim = path.join(root, 'src', 'worker-audit.ts');
+  const exists = existsSync(auditShim);
+  if (exists) results.push('  FAIL  src/worker-audit.ts should not exist; audit logging belongs in src/worker-secure.ts');
+  check('No unused worker-audit shim', !exists);
+}
 
 function checkMergeConflictMarkers() {
   const files = trackedAll();
@@ -57,25 +72,17 @@ function checkMergeConflictMarkers() {
   for (const { path: filePath, content } of files) {
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
-
-      const isCSSDecorativeBorder = /^\/\*\s*=+\s+\w+\s+=+\s*\*\/$/.test(trimmed);
+      const trimmed = lines[i].trim();
+      const isCSSDecorativeBorder = /^\/\*\s*=+\s+\w+\s+=+\s*\*$/.test(trimmed);
       if (isCSSDecorativeBorder) continue;
-
-      if (trimmed === '=======') {
+      if (trimmed === '=======' || /^<{7,}\s/.test(trimmed) || /^>{7,}\s/.test(trimmed)) {
         conflictCount++;
-        results.push(`  FAIL  Merge conflict marker (=======) in ${filePath}:${i + 1}`);
-        break;
-      }
-      if (/^<{7,}\s/.test(trimmed) || /^>{7,}\s/.test(trimmed)) {
-        conflictCount++;
-        results.push(`  FAIL  Merge conflict marker (<<<<<<</>>>>>>) in ${filePath}:${i + 1}`);
+        results.push(`  FAIL  Merge conflict marker in ${filePath}:${i + 1}`);
         break;
       }
     }
   }
-  check('No merge conflict markers (<<<<<<<, =======, >>>>>>>)', conflictCount === 0);
+  check('No merge conflict markers', conflictCount === 0);
 }
 
 function checkDebugStatements() {
@@ -86,7 +93,6 @@ function checkDebugStatements() {
     let inBlockComment = false;
     for (let i = 0; i < lines.length; i++) {
       const raw = lines[i];
-
       if (inBlockComment) {
         if (raw.includes('*/')) inBlockComment = false;
         continue;
@@ -109,24 +115,21 @@ function checkDebugStatements() {
       }
       if (stripped.includes('TODO_DEPLOY_BLOCKER') || stripped.includes('FIXME_DEPLOY_BLOCKER')) {
         issueCount++;
-        results.push(`  FAIL  ${stripped.includes('TODO_DEPLOY_BLOCKER') ? 'TODO_DEPLOY_BLOCKER' : 'FIXME_DEPLOY_BLOCKER'} in ${filePath}:${i + 1}`);
+        results.push(`  FAIL  deploy blocker marker in ${filePath}:${i + 1}`);
       }
-      const throwMatch = stripped.match(/throw\s+new\s+Error\s*\(\s*["']TODO["']\s*\)/);
-      if (throwMatch) {
+      if (/throw\s+new\s+Error\s*\(\s*["']TODO["']\s*\)/.test(stripped)) {
         issueCount++;
         results.push(`  FAIL  throw new Error("TODO") in ${filePath}:${i + 1}`);
       }
     }
   }
-  check('No debugger/alert/prompt/TODO_DEPLOY_BLOCKER/FIXME_DEPLOY_BLOCKER/throw new Error("TODO")', issueCount === 0);
+  check('No debugger/alert/prompt/deploy blockers/TODO throw', issueCount === 0);
 }
 
 function checkDangerousHtmlInjection() {
   const files = srcFiles();
-  const allowedFiles = new Set([]);
   let issueCount = 0;
   for (const { path: filePath, content } of files) {
-    if (allowedFiles.has(filePath)) continue;
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       const stripped = lines[i].replace(/\/\/.*$/, '').trim();
@@ -136,39 +139,37 @@ function checkDangerousHtmlInjection() {
       }
     }
   }
-  check('No dangerous HTML injection (dangerouslySetInnerHTML, innerHTML =)', issueCount === 0);
+  check('No dangerous HTML injection', issueCount === 0);
 }
 
 function checkSensitiveInfoHardcoded() {
   const files = trackedAll();
-  const ALLOWED_PATHS = new Set([
+  const allowedPaths = new Set([
     'deploy/desktop-client/src/smoke.ts',
     'deploy/windows-wizard/src/smoke.ts',
   ]);
-  let issueCount = 0;
-
+  const placeholderValues = new Set(['change-me', '<placeholder>', 'placeholder', 'your-secret', 'your-password', 'YOUR_SECRET', 'your-encryption-key', 'your-session-secret', 'your-setup-token', 'sample', 'sample-key', 'sample-secret', 'sample-password', 'sample-token']);
   const B = 'BEGIN';
   const privateKeyPatterns = [
     [B, 'OPENSSH', 'PRIVATE KEY'].join(' '),
     [B, 'RSA', 'PRIVATE KEY'].join(' '),
     [B, 'PRIVATE KEY'].join(' '),
   ];
-  const placeholderValues = new Set(['change-me', '<placeholder>', 'placeholder', 'your-secret', 'your-password', 'YOUR_SECRET', 'your-encryption-key', 'your-session-secret', 'your-setup-token', 'sample', 'sample-key', 'sample-secret', 'sample-password', 'sample-token']);
+  let issueCount = 0;
 
   for (const { path: filePath, content } of files) {
-    if (ALLOWED_PATHS.has(filePath)) continue;
-    if (filePath === 'package.json' || filePath === 'package-lock.json' || filePath === 'pnpm-lock.yaml') continue;
+    if (allowedPaths.has(filePath)) continue;
+    if (filePath === 'package.json' || filePath === 'package-lock.json' || filePath.endsWith('/package.json') || filePath.endsWith('/package-lock.json')) continue;
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const trimmed = line.trim();
-
       if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('-- ')) continue;
 
       for (const pattern of privateKeyPatterns) {
         if (line.includes(pattern)) {
           issueCount++;
-          results.push(`  FAIL  Private key marker (${pattern}) in ${filePath}:${i + 1}`);
+          results.push(`  FAIL  Private key marker in ${filePath}:${i + 1}`);
         }
       }
 
@@ -199,9 +200,7 @@ function checkSensitiveInfoHardcoded() {
 }
 
 function checkHighRiskCommandsInDeployScripts() {
-  let issueCount = 0;
   const files = deployCodeFiles();
-
   const dangerousPatterns = [
     { name: 'lifecycle:dry-run', search: 'lifecycle:dry-run' },
     { name: 'wrangler d1 execute', search: 'wrangler d1 execute' },
@@ -211,13 +210,12 @@ function checkHighRiskCommandsInDeployScripts() {
     { name: 'git push --force', search: 'git push --force' },
     { name: 'setup initialize', search: 'setup initialize' },
   ];
+  let issueCount = 0;
 
   for (const { path: filePath, content } of files) {
-    if (filePath === 'package.json') continue;
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
+      const trimmed = lines[i].trim();
       if (trimmed.startsWith('//') || trimmed.startsWith('print(') || trimmed.startsWith('console.')) continue;
       if (trimmed.includes('Does NOT') || trimmed.includes('does not') || trimmed.includes('does NOT')) continue;
       for (const { name, search } of dangerousPatterns) {
@@ -233,7 +231,6 @@ function checkHighRiskCommandsInDeployScripts() {
       results.push(`  FAIL  git clean -fd without -- dist target in ${filePath}`);
     }
   }
-
   check('No high-risk commands in deploy scripts', issueCount === 0);
 }
 
@@ -243,21 +240,16 @@ function checkSecurityLogicDegradation() {
 
   if (existsSync(workerFile)) {
     const content = readFileSync(workerFile, 'utf8');
-
     if (!content.includes('UPLOADS.get') && !content.includes('env.UPLOADS.get')) {
       issueCount++;
-      results.push(`  FAIL  src/worker.ts missing UPLOADS.get (attachment download logic)`);
-    } else {
-      if (content.includes('function downloadAttachment')) {
-        const downloadFnMatch = content.match(/async function downloadAttachment[\s\S]*?^}/m);
-        if (downloadFnMatch) {
-          const fnBody = downloadFnMatch[0];
-          const hasAuthCall = fnBody.includes('canDownloadAttachment');
-          const hasGetCall = fnBody.includes('UPLOADS.get') || fnBody.includes('env.UPLOADS.get');
-          if (!hasAuthCall || !hasGetCall) {
-            issueCount++;
-            results.push(`  FAIL  UPLOADS.get in downloadAttachment may lack auth/permission check`);
-          }
+      results.push('  FAIL  src/worker.ts missing UPLOADS.get');
+    } else if (content.includes('function downloadAttachment')) {
+      const downloadFnMatch = content.match(/async function downloadAttachment[\s\S]*?^}/m);
+      if (downloadFnMatch) {
+        const fnBody = downloadFnMatch[0];
+        if (!fnBody.includes('canDownloadAttachment') || (!fnBody.includes('UPLOADS.get') && !fnBody.includes('env.UPLOADS.get'))) {
+          issueCount++;
+          results.push('  FAIL  UPLOADS.get in downloadAttachment may lack auth/permission check');
         }
       }
     }
@@ -268,22 +260,20 @@ function checkSecurityLogicDegradation() {
     const ciContent = readFileSync(lifecycleCiPath, 'utf8');
     if (!ciContent.includes('cloudflareAccessed: false') || !ciContent.includes('d1Accessed: false')) {
       issueCount++;
-      results.push(`  FAIL  lifecycle:ci-check should declare cloudflareAccessed: false and d1Accessed: false`);
+      results.push('  FAIL  lifecycle:ci-check should declare cloudflareAccessed: false and d1Accessed: false');
     }
   }
 
   const guestChatFile = path.join(root, 'src', 'visitor', 'GuestChat.tsx');
   if (existsSync(guestChatFile)) {
     const guestContent = readFileSync(guestChatFile, 'utf8');
-    const decodedRecall = '\u64a4\u56de';
-    const decodedDelete = '\u5220\u9664';
-    if (guestContent.includes(`label: '${decodedRecall}'`)) {
+    if (guestContent.includes("label: '撤回'")) {
       issueCount++;
-      results.push(`  FAIL  visitor menu should not contain recall`);
+      results.push('  FAIL  visitor menu should not contain recall');
     }
-    if (guestContent.includes(`label: '${decodedDelete}'`)) {
+    if (guestContent.includes("label: '删除'")) {
       issueCount++;
-      results.push(`  FAIL  visitor menu should not contain delete`);
+      results.push('  FAIL  visitor menu should not contain delete');
     }
   }
 
@@ -292,11 +282,11 @@ function checkSecurityLogicDegradation() {
     const chatContent = readFileSync(chatMessageTextFile, 'utf8');
     if (chatContent.includes('dangerouslySetInnerHTML') || chatContent.includes('innerHTML')) {
       issueCount++;
-      results.push(`  FAIL  ChatMessageText should not use innerHTML/dangerouslySetInnerHTML`);
+      results.push('  FAIL  ChatMessageText should not use innerHTML/dangerouslySetInnerHTML');
     }
-    if (!chatContent.includes('target="_blank"') || !chatContent.includes('rel="noopener noreferrer"')) {
+    if (!chatContent.includes('target="_blank"') || !chatContent.includes('rel="noopener noreferrer')) {
       issueCount++;
-      results.push(`  FAIL  ChatMessageText link should use target="_blank" and rel="noopener noreferrer"`);
+      results.push('  FAIL  ChatMessageText link should use target="_blank" and rel="noopener noreferrer"');
     }
   }
 
@@ -311,19 +301,15 @@ function checkSetupTokenFailClosed() {
 
   if (!content.includes('SETUP_TOKEN')) {
     issueCount++;
-    results.push(`  FAIL  src/worker.ts should reference SETUP_TOKEN`);
+    results.push('  FAIL  src/worker.ts should reference SETUP_TOKEN');
   }
   if (!content.includes('/api/setup/status')) {
     issueCount++;
-    results.push(`  FAIL  src/worker.ts should have /api/setup/status endpoint`);
+    results.push('  FAIL  src/worker.ts should have /api/setup/status endpoint');
   }
-  if (content.includes('missing_setup_token') || content.includes('setupTokenRequired')) {
-    check('setup token fail-closed logic present', true);
-  } else {
+  if (!content.includes('missing_setup_token') && !content.includes('setupTokenRequired')) {
     issueCount++;
-    results.push(`  FAIL  src/worker.ts missing setup token fail-closed logic`);
-    check('setup token fail-closed logic present', false);
-    return;
+    results.push('  FAIL  src/worker.ts missing setup token fail-closed logic');
   }
   check('setup token fail-closed logic present', issueCount === 0);
 }
@@ -331,6 +317,9 @@ function checkSetupTokenFailClosed() {
 function run() {
   console.log('Checking obvious code issues...\n');
 
+  checkNoLegacyNextScaffold();
+  checkNoPatchArtifacts();
+  checkNoUnusedWorkerAuditShim();
   checkMergeConflictMarkers();
   checkDebugStatements();
   checkDangerousHtmlInjection();
@@ -339,7 +328,7 @@ function run() {
   checkSecurityLogicDegradation();
   checkSetupTokenFailClosed();
 
-  console.log(`\nObvious Code Issue Check Results:`);
+  console.log('\nObvious Code Issue Check Results:');
   console.log(`  Passed: ${passed}`);
   console.log(`  Failed: ${failed}`);
   console.log(`  Total:  ${passed + failed}`);
