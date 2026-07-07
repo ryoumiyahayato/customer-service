@@ -12,11 +12,6 @@ const adminDisplayName = process.env.ADMIN_DISPLAY_NAME || 'Local Smoke Admin';
 if (!setupToken) failConfig('SETUP_TOKEN is required for local self-host smoke.');
 if (!adminPassword || adminPassword.length < 12) failConfig('ADMIN_PASSWORD is required and must be at least 12 characters.');
 
-const adminJar = new CookieJar();
-const visitorJar = new CookieJar();
-const visitorMessage = `local smoke visitor ${Date.now()}`;
-const adminMessage = `local smoke admin ${Date.now()}`;
-
 function failConfig(message) {
   console.error(`CONFIG ${message}`);
   console.error('Example: SELF_HOST_BASE_URL=http://127.0.0.1:8788 SETUP_TOKEN=... ADMIN_USERNAME=... ADMIN_PASSWORD=... npm run e2e:local-smoke');
@@ -56,6 +51,11 @@ class CookieJar {
     }
   }
 }
+
+const adminJar = new CookieJar();
+const visitorJar = new CookieJar();
+const visitorMessage = `local smoke visitor ${Date.now()}`;
+const adminMessage = `local smoke admin ${Date.now()}`;
 
 function splitSetCookieHeader(header) {
   return String(header).split(/,(?=\s*[^;,=]+=)/g).map(value => value.trim()).filter(Boolean);
