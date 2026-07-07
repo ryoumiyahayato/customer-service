@@ -18,6 +18,7 @@ const VISITOR_COOKIE_TTL = 60 * 60 * 24 * 30;
 export const FRONTEND_COMPAT_ROUTES = [
   'POST /api/auth/login',
   'POST /api/auth/logout',
+  'GET /api/auth/me',
   'GET /api/sessions',
   'GET /api/sessions/:id/messages',
   'POST /api/messages',
@@ -42,6 +43,15 @@ type ChatSessionRow = {
   archived_at: Date | null;
   deleted_at: Date | null;
   history_cleared_at: Date | null;
+};
+
+type FrontendAdminSource = {
+  id: string;
+  username: string;
+  email: string | null;
+  displayName: string | null;
+  role: string;
+  createdAt: string;
 };
 
 function isProductionCookie() {
@@ -118,7 +128,7 @@ export function mapFrontendMessage(message: ChatMessage, clientMessageId?: strin
   };
 }
 
-function mapFrontendAdmin(admin: { id: string; username: string; email: string | null; displayName: string | null; role: string; createdAt: string }) {
+export function mapFrontendAdmin(admin: FrontendAdminSource) {
   return {
     id: admin.id,
     username: admin.username,
@@ -127,6 +137,7 @@ function mapFrontendAdmin(admin: { id: string; username: string; email: string |
     displayName: admin.displayName,
     role: admin.role,
     created_at: admin.createdAt,
+    updated_at: null,
     disabled: false,
   };
 }
@@ -183,6 +194,11 @@ async function handleFrontendLogin(request: IncomingMessage, response: ServerRes
     },
     { 'set-cookie': serializeAdminSessionCookie(result.session.token, context.config) },
   );
+}
+
+async function handleFrontendMe(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
+  const admin = await requireAdmin(context.db, request);
+  sendJson(response, 200, { ok: true, admin: mapFrontendAdmin(admin), disabled: false });
 }
 
 async function handleFrontendLogout(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
@@ -288,6 +304,11 @@ export async function handleFrontendCompatRequest(
 ): Promise<boolean> {
   if (request.method === 'POST' && url.pathname === '/api/auth/login') {
     await handleFrontendLogin(request, response, context);
+    return true;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/auth/me') {
+    await handleFrontendMe(request, response, context);
     return true;
   }
 
