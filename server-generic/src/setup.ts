@@ -77,7 +77,7 @@ export async function initializeSetup(config: GenericServerConfig, db: PostgresA
   const passwordHash = await hashPassword(password);
   const rows = await db.query<NewAdminRow>(
     `INSERT INTO admins (username, email, display_name, password_hash, role)
-     VALUES ($1, $2, $3, $4, 'admin')
+     VALUES ($1, $2, $3, $4, 'SUPER_ADMIN')
      RETURNING id, username, email, display_name, role, created_at`,
     [username, email, displayName, passwordHash],
   );

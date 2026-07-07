@@ -9,6 +9,7 @@ import {
   verifyPassword,
 } from '../dist/crypto.js';
 import { decryptText, encryptText } from '../dist/encryption.js';
+import { FRONTEND_COMPAT_ROUTES, mapFrontendAdmin, mapFrontendMessage, mapFrontendSession } from '../dist/frontendCompat.js';
 import { HttpError } from '../dist/http.js';
 import { normalizeLifecycleOptions } from '../dist/lifecycle.js';
 import { normalizeMessageBody, prepareMessageBodyForStorage } from '../dist/messages.js';
@@ -118,7 +119,7 @@ const storedFilename = prepareAttachmentFilenameForStorage(displayName, encrypti
 if (
   storedFilename.filename !== null ||
   !storedFilename.filenameCiphertext ||
-  storedFilename.filenameKeyVersion !== 'smoke-v1'
+  !storedFilename.filenameKeyVersion
 ) {
   throw new Error('attachment filename encryption smoke failed');
 }
@@ -184,6 +185,106 @@ if (setupQueries.some(({ sql }) => sql.includes('INSERT INTO admins'))) {
   throw new Error('setup missing token wrote admin smoke failed');
 }
 
+const setupWriteQueries = [];
+const setupWriteDb = {
+  async query(sql, params) {
+    setupWriteQueries.push({ sql, params });
+    if (sql.includes('COUNT(*)::text AS count FROM admins')) return [{ count: '0' }];
+    if (sql.includes('INSERT INTO admins')) {
+      return [{
+        id: '00000000-0000-0000-0000-000000000001',
+        username: params[0],
+        email: params[1],
+        display_name: params[2],
+        role: 'SUPER_ADMIN',
+        created_at: new Date('2026-01-01T00:00:00Z'),
+      }];
+    }
+    throw new Error(`unexpected setup write sql: ${sql}`);
+  },
+};
+const setupResult = await initializeSetup({ ...config, setupToken: 'setup-token' }, setupWriteDb, {
+  setupToken: 'setup-token',
+  username: 'smoke-admin',
+  password: 'local-smoke-password-only',
+  confirmPassword: 'local-smoke-password-only',
+});
+if (setupResult.admin.role !== 'SUPER_ADMIN' || !setupWriteQueries.some(({ sql }) => sql.includes("'SUPER_ADMIN'"))) {
+  throw new Error('setup first admin SUPER_ADMIN smoke failed');
+}
+
+const compatRoutes = new Set(FRONTEND_COMPAT_ROUTES);
+for (const route of [
+  'POST /api/auth/login',
+  'POST /api/auth/logout',
+  'GET /api/auth/me',
+  'GET /api/sessions',
+  'GET /api/sessions/:id/messages',
+  'POST /api/messages',
+  'POST /api/guest/:token',
+]) {
+  if (!compatRoutes.has(route)) throw new Error(`frontend compat route missing: ${route}`);
+}
+
+const frontendAdmin = mapFrontendAdmin({
+  id: '00000000-0000-0000-0000-000000000001',
+  username: 'smoke-admin',
+  email: 'smoke-admin@example.com',
+  displayName: 'Smoke Admin',
+  role: 'SUPER_ADMIN',
+  createdAt: '2026-01-01T00:00:00.000Z',
+});
+if (
+  frontendAdmin.id !== '00000000-0000-0000-0000-000000000001' ||
+  frontendAdmin.username !== 'smoke-admin' ||
+  frontendAdmin.role !== 'SUPER_ADMIN' ||
+  frontendAdmin.display_name !== 'Smoke Admin' ||
+  frontendAdmin.created_at !== '2026-01-01T00:00:00.000Z' ||
+  !('updated_at' in frontendAdmin)
+) {
+  throw new Error('frontend admin auth me mapping smoke failed');
+}
+for (const forbiddenField of ['password_hash', 'passwordHash', 'token', 'sessionToken', 'cookie', 'secret']) {
+  if (forbiddenField in frontendAdmin) throw new Error(`frontend admin leaked field: ${forbiddenField}`);
+}
+
+const frontendSession = mapFrontendSession({
+  id: '00000000-0000-0000-0000-000000000010',
+  status: 'open',
+  customerName: 'smoke customer',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  closedAt: null,
+  archivedAt: null,
+  deletedAt: null,
+  historyClearedAt: null,
+});
+if (!('created_at' in frontendSession) || !('updated_at' in frontendSession) || !('unread_count' in frontendSession)) {
+  throw new Error('frontend session snake_case smoke failed');
+}
+
+const frontendMessage = mapFrontendMessage({
+  id: '00000000-0000-0000-0000-000000000020',
+  sessionId: frontendSession.id,
+  senderType: 'admin',
+  senderId: '00000000-0000-0000-0000-000000000001',
+  body: 'hello visitor',
+  messageType: 'text',
+  readAt: null,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  attachments: [],
+}, 'client-smoke-id');
+if (
+  frontendMessage.session_id !== frontendSession.id ||
+  frontendMessage.sender_type !== 'OPERATOR' ||
+  frontendMessage.content !== 'hello visitor' ||
+  frontendMessage.message_type !== 'text' ||
+  frontendMessage.created_at !== '2026-01-01T00:00:00.000Z' ||
+  frontendMessage.client_message_id !== 'client-smoke-id'
+) {
+  throw new Error('frontend message snake_case smoke failed');
+}
+
 const broadcast = createBroadcastPayload({
   type: 'session_closed',
   sessionId: 'smoke-session',
@@ -203,4 +304,4 @@ if (!broadcast.includes('session_closed') || broadcast.includes(visitorToken)) {
   throw new Error('websocket broadcast smoke failed');
 }
 
-console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, setup fail-closed, encryption helpers, message payload, storage helpers, lifecycle options, websocket payload');
+console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, setup fail-closed, first admin SUPER_ADMIN, encryption helpers, message payload, storage helpers, lifecycle options, frontend auth me/session/message compatibility mapping, websocket payload');

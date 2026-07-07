@@ -13,6 +13,7 @@ import {
 import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
 import { loadConfig } from './config.js';
 import { createPostgresAdapter } from './db/postgres.js';
+import { handleFrontendCompatRequest } from './frontendCompat.js';
 import { healthPayload } from './health.js';
 import { describeLifecycleMigration } from './lifecycle.js';
 import { readJsonBody, sendError, sendJson, sendNoContent, sendText } from './response.js';
@@ -100,6 +101,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const body = await readJsonBody<Record<string, unknown>>(request);
     const result = await initializeSetup(config, db, body);
     sendJson(response, 201, result);
+    return;
+  }
+
+  if (await handleFrontendCompatRequest(request, response, url, { config, db, hub: websocketHub })) {
     return;
   }
 
