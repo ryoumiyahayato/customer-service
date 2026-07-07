@@ -6,6 +6,7 @@ import InviteLinkPanel from './InviteLinkPanel';
 import AdminLogin from './AdminLogin';
 import AdminMessageList from './AdminMessageList';
 import AdminSessionList from './AdminSessionList';
+import { getActiveAdminSessionId, messageBelongsToActiveSession, setActiveAdminSessionId } from './activeSessionGuard';
 import { InlineNotice } from '../ui/Notice';
 import { LoadingState, StatusBlock } from '../ui/StatusBlock';
 import '../styles.css';
@@ -63,6 +64,8 @@ const applyReadReceipt = (messages: Message[], messageIds: string[] = [], readAt
     ? { ...message, is_read: 1, status: message.status === 'sent' ? 'read' : message.status, read_at: message.read_at || readAt || new Date().toISOString() }
     : message);
 };
+const messageSessionId = (message?: Message | null) => String(message?.session_id || message?.sessionId || '');
+const eventSessionId = (event: any, fallbackSessionId: string) => String(event?.session?.id || event?.message?.session_id || event?.message?.sessionId || event?.sessionId || fallbackSessionId || '');
 
 /* ========== ADMIN DASHBOARD ========== */
 export default function AdminDashboard() {
@@ -121,25 +124,46 @@ export default function AdminDashboard() {
   const uploadRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedMsgsRef = useRef<Message[]>([]);
+  const curRef = useRef<Session | null>(null);
   const convOnlineRef = useRef(false);
+  const activeSessionIdRef = useRef('');
+  const messageLoadRequestIdRef = useRef(0);
+  const messageSyncRequestIdRef = useRef(0);
   const messageFallbackMissesRef = useRef(0);
   const wsRefs = useRef<{ admin?: WebSocket; conv?: WebSocket; staff?: WebSocket }>({});
   const reconnectTimers = useRef<{ admin?: any; conv?: any; staff?: any }>({});
   const messageFallbackTimer = useRef<any>(null);
+
+  const clearActiveSessionState = useCallback(() => {
+    activeSessionIdRef.current = '';
+    setActiveAdminSessionId(null);
+    messageLoadRequestIdRef.current += 1;
+    messageSyncRequestIdRef.current += 1;
+    clearTimeout(messageFallbackTimer.current);
+    messageFallbackMissesRef.current = 0;
+    selectedMsgsRef.current = [];
+    curRef.current = null;
+    setLoadingMsgs(null);
+    setSelectedMsgs([]);
+    setQuote(null);
+    setContextMenu(null);
+    setConvOnline(false);
+  }, []);
+
   const resetAdminState = useCallback(() => {
     wsRefs.current.admin?.close();
     wsRefs.current.conv?.close();
     wsRefs.current.staff?.close();
+    clearActiveSessionState();
     setAdmin(null);
     setSessions([]);
     setCur(null);
-    setSelectedMsgs([]);
     setStaffMsgs([]);
     setView('sessions');
     setMobileView('dir');
     setDirOpen(false);
     setMobileInviteOpen(false);
-  }, []);
+  }, [clearActiveSessionState]);
 
   const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); }, []);
   const handleAuthExpired = useCallback(() => {
@@ -154,8 +178,14 @@ export default function AdminDashboard() {
     });
   }, []);
 
+  const isActiveAdminSession = useCallback((sid: string) => Boolean(sid && activeSessionIdRef.current === sid && getActiveAdminSessionId() === sid), []);
+  const isLatestMessageLoad = useCallback((sid: string, requestId: number) => isActiveAdminSession(sid) && requestId === messageLoadRequestIdRef.current, [isActiveAdminSession]);
+  const isLatestMessageSync = useCallback((sid: string, requestId: number) => isActiveAdminSession(sid) && requestId === messageSyncRequestIdRef.current, [isActiveAdminSession]);
+  const filterMessagesForSession = useCallback((messages: Message[] = [], sid: string) => messages.filter(message => messageBelongsToActiveSession(message, sid)), []);
+
   useEffect(() => { const on = () => setIsNarrow(window.innerWidth <= 820); addEventListener('resize', on); return () => removeEventListener('resize', on); }, []);
   useEffect(() => { selectedMsgsRef.current = selectedMsgs; }, [selectedMsgs]);
+  useEffect(() => { curRef.current = cur; }, [cur]);
   useEffect(() => { convOnlineRef.current = convOnline; }, [convOnline]);
   useEffect(() => { setRemarkDraft(String(cur?.customer_remark_name || '').slice(0, 40)); }, [cur?.id, cur?.customer_remark_name]);
 
@@ -170,24 +200,54 @@ export default function AdminDashboard() {
   useEffect(() => { if (admin) fetchSessions(); }, [admin]);
 
   const fetchMsgs = async (sid: string) => {
+    const requestId = ++messageLoadRequestIdRef.current;
     setLoadingMsgs(sid);
-    try { const res: any = await apiFetch(`/api/sessions/${sid}/messages`); setSelectedMsgs(mergeMessages([], res.messages || [])); setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s)); } catch (e: any) { if (e?.status === 401) handleAuthExpired(); }
-    setLoadingMsgs(null);
+    try {
+      const res: any = await apiFetch(`/api/sessions/${sid}/messages`);
+      if (!isLatestMessageLoad(sid, requestId)) return;
+      const messages = filterMessagesForSession(res.messages || [], sid);
+      setSelectedMsgs(mergeMessages([], messages));
+      setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s));
+    } catch (e: any) {
+      if (e?.status === 401) handleAuthExpired();
+    } finally {
+      if (isLatestMessageLoad(sid, requestId)) setLoadingMsgs(null);
+    }
   };
 
   const syncSelectedMsgs = useCallback(async (sid: string) => {
+    if (!isActiveAdminSession(sid)) return 0;
+    const requestId = ++messageSyncRequestIdRef.current;
     const started = performance.now();
-    const after = lastServerMessageTime(selectedMsgsRef.current);
+    const after = lastServerMessageTime(selectedMsgsRef.current.filter(message => messageBelongsToActiveSession(message, sid)));
     const url = `/api/sessions/${encodeURIComponent(sid)}/messages${after ? `?after=${encodeURIComponent(after)}` : ''}`;
     const res: any = await apiFetch(url, { retryGet: false });
-    const count = Array.isArray(res?.messages) ? res.messages.length : 0;
+    if (!isLatestMessageSync(sid, requestId)) return 0;
+    const messages = filterMessagesForSession(res?.messages || [], sid);
+    const count = messages.length;
     chatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
-    if (count) setSelectedMsgs(prev => mergeMessages(prev, res.messages));
+    if (count) setSelectedMsgs(prev => mergeMessages(filterMessagesForSession(prev, sid), messages));
     setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s));
     return count;
-  }, []);
+  }, [filterMessagesForSession, isActiveAdminSession, isLatestMessageSync]);
 
-  const selectSession = (s: Session) => { setCur(s); fetchMsgs(s.id); if (isNarrow) setMobileView('chat'); };
+  const selectSession = (s: Session) => {
+    activeSessionIdRef.current = s.id;
+    setActiveAdminSessionId(s.id);
+    messageLoadRequestIdRef.current += 1;
+    messageSyncRequestIdRef.current += 1;
+    clearTimeout(messageFallbackTimer.current);
+    messageFallbackMissesRef.current = 0;
+    selectedMsgsRef.current = [];
+    setSelectedMsgs([]);
+    setLoadingMsgs(s.id);
+    setQuote(null);
+    setContextMenu(null);
+    setConvOnline(false);
+    setCur(s);
+    fetchMsgs(s.id);
+    if (isNarrow) setMobileView('chat');
+  };
 
   const wsAdmin = useCallback(() => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -202,21 +262,37 @@ export default function AdminDashboard() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const connectStarted = performance.now();
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/conversations/${sid}`);
-    ws.onopen = () => { chatMetric('ws_connect_ms', connectStarted); clearTimeout(messageFallbackTimer.current); messageFallbackMissesRef.current = 0; setConvOnline(true); };
+    ws.onopen = () => {
+      if (!isActiveAdminSession(sid)) { ws.close(); return; }
+      chatMetric('ws_connect_ms', connectStarted);
+      clearTimeout(messageFallbackTimer.current);
+      messageFallbackMissesRef.current = 0;
+      setConvOnline(true);
+    };
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
-        if (isMessageCreatedEvent(d.type)) { setSelectedMsgs(prev => mergeMessage(prev, d.message)); if (d.session) { setCur((c: any) => c?.id === d.session.id ? d.session : c); } }
-        else if (d.type === 'message:updated') { setSelectedMsgs(prev => mergeMessage(prev, d.message)); }
-        else if (d.type === 'messages:read') { setSelectedMsgs(prev => applyReadReceipt(prev, d.messageIds, d.readAt)); }
-        else if (d.type === 'message:deleted') { setSelectedMsgs(prev => prev.map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
+        const sidFromEvent = eventSessionId(d, sid);
+        if (sidFromEvent && sidFromEvent !== sid) { if (d.session) setSessions(prev => prev.map(s => s.id === d.session.id ? { ...s, ...d.session } : s)); return; }
+        if (!isActiveAdminSession(sid)) { if (d.session) setSessions(prev => prev.map(s => s.id === d.session.id ? { ...s, ...d.session } : s)); return; }
+        if ((isMessageCreatedEvent(d.type) || d.type === 'message:updated') && d.message && !messageBelongsToActiveSession(d.message, sid)) return;
+        if (isMessageCreatedEvent(d.type)) { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); if (d.session) { setCur((c: any) => c?.id === d.session.id ? d.session : c); } }
+        else if (d.type === 'message:updated') { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); }
+        else if (d.type === 'messages:read') { setSelectedMsgs(prev => applyReadReceipt(filterMessagesForSession(prev, sid), d.messageIds, d.readAt)); }
+        else if (d.type === 'message:deleted') { setSelectedMsgs(prev => filterMessagesForSession(prev, sid).map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
         else if (d.type === 'session:updated') { setCur((c: any) => c?.id === d.session?.id ? { ...c, ...d.session } : c); }
       } catch {}
     };
     ws.onerror = () => ws.close();
-    ws.onclose = (e) => { try { console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 }); } catch {} setConvOnline(false); reconnectTimers.current.conv = setTimeout(() => wsConv(sid), 5000); };
+    ws.onclose = (e) => {
+      try { console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 }); } catch {}
+      if (isActiveAdminSession(sid)) {
+        setConvOnline(false);
+        reconnectTimers.current.conv = setTimeout(() => wsConv(sid), 5000);
+      }
+    };
     wsRefs.current.conv = ws;
-  }, []);
+  }, [filterMessagesForSession, isActiveAdminSession]);
 
   const wsStaff = useCallback(() => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -233,16 +309,18 @@ export default function AdminDashboard() {
   const scheduleMessageFallback = useCallback((sid: string, delay = 0) => {
     clearTimeout(messageFallbackTimer.current);
     messageFallbackTimer.current = setTimeout(async () => {
-      if (!sid || convOnlineRef.current || sessionEnded(cur)) return;
+      if (!sid || !isActiveAdminSession(sid) || convOnlineRef.current || sessionEnded(curRef.current)) return;
       try {
         const count = await syncSelectedMsgs(sid);
+        if (!isActiveAdminSession(sid)) return;
         messageFallbackMissesRef.current = count ? 0 : messageFallbackMissesRef.current + 1;
       } catch {
+        if (!isActiveAdminSession(sid)) return;
         messageFallbackMissesRef.current += 1;
       }
-      if (!convOnlineRef.current) scheduleMessageFallback(sid, fallbackDelay(messageFallbackMissesRef.current));
+      if (!convOnlineRef.current && isActiveAdminSession(sid)) scheduleMessageFallback(sid, fallbackDelay(messageFallbackMissesRef.current));
     }, delay);
-  }, [cur, syncSelectedMsgs]);
+  }, [isActiveAdminSession, syncSelectedMsgs]);
 
   useEffect(() => {
     clearTimeout(messageFallbackTimer.current);
@@ -254,16 +332,18 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const syncIfVisible = () => {
-      if (document.visibilityState === 'hidden' || !cur || currentSessionEnded || convOnline) return;
-      syncSelectedMsgs(cur.id).catch(() => {});
+      const sid = curRef.current?.id;
+      if (document.visibilityState === 'hidden' || !sid || !isActiveAdminSession(sid) || sessionEnded(curRef.current) || convOnlineRef.current) return;
+      syncSelectedMsgs(sid).catch(() => {});
     };
     addEventListener('focus', syncIfVisible);
     document.addEventListener('visibilitychange', syncIfVisible);
     return () => { removeEventListener('focus', syncIfVisible); document.removeEventListener('visibilitychange', syncIfVisible); };
-  }, [convOnline, cur?.id, currentSessionEnded, syncSelectedMsgs]);
+  }, [isActiveAdminSession, syncSelectedMsgs]);
 
   const send = async () => {
     if (!cur || currentSessionEnded) return;
+    const sid = cur.id;
     const content = text.trim();
     if (!content && !quote) return;
     const currentQuote = quote;
@@ -271,7 +351,7 @@ export default function AdminDashboard() {
     const tempId = localMessageId(clientMessageId);
     const optimisticMessage = {
       id: tempId,
-      session_id: cur.id,
+      session_id: sid,
       sender_type: 'OPERATOR',
       sender_id: admin?.id || '',
       content,
@@ -284,34 +364,39 @@ export default function AdminDashboard() {
       quote_message_id: currentQuote?.id || null,
       client_message_id: clientMessageId
     };
-    setSelectedMsgs(prev => mergeMessage(prev, optimisticMessage));
+    if (!isActiveAdminSession(sid)) return;
+    setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), optimisticMessage));
     setText('');
     setQuote(null);
     focusMessageInput();
     try {
       const postStarted = performance.now();
-      const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: cur.id, clientMessageId, content, senderType: 'OPERATOR', quoteMessageId: currentQuote?.id || null }) });
+      const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: sid, clientMessageId, content, senderType: 'OPERATOR', quoteMessageId: currentQuote?.id || null }) });
       chatMetric('api_post_total_ms', postStarted);
-      if (res?.message) setSelectedMsgs(prev => mergeMessage(prev, res.message));
+      if (!isActiveAdminSession(sid)) return;
+      if (res?.message && messageBelongsToActiveSession(res.message, sid)) setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), res.message));
       if (res?.session) setCur((c: any) => c?.id === res.session.id ? res.session : c);
-      syncSelectedMsgs(cur.id).catch(() => {});
-    } catch (e: any) { setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
+      syncSelectedMsgs(sid).catch(() => {});
+    } catch (e: any) { if (isActiveAdminSession(sid)) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
   };
 
   const upload = async (file: File) => {
     if (sending === 'image' || !cur || currentSessionEnded) return;
+    const sid = cur.id;
     let tempId = '';
     sendingRef.current = true; setSending('image');
     try {
       const clientMessageId = newClientMessageId();
-      const fd = new FormData(); fd.append('file', file); fd.append('sessionId', cur.id);
-      const res: any = await apiFetch(`/api/upload?sessionId=${encodeURIComponent(cur.id)}`, { method: 'POST', body: fd });
+      const fd = new FormData(); fd.append('file', file); fd.append('sessionId', sid);
+      const res: any = await apiFetch(`/api/upload?sessionId=${encodeURIComponent(sid)}`, { method: 'POST', body: fd });
+      if (!isActiveAdminSession(sid)) return;
       tempId = localMessageId(clientMessageId);
-      setSelectedMsgs(prev => mergeMessage(prev, { id: tempId, session_id: cur.id, sender_type: 'OPERATOR', sender_id: admin?.id || '', content: '', message_type: 'image', image_path: res.path, status: 'sending', created_at: new Date().toISOString(), read_at: null, is_read: 0, quote_message_id: null, client_message_id: clientMessageId }));
-      const msgRes: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: cur.id, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'OPERATOR' }) });
-      if (msgRes?.message) setSelectedMsgs(prev => mergeMessage(prev, msgRes.message));
+      setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), { id: tempId, session_id: sid, sender_type: 'OPERATOR', sender_id: admin?.id || '', content: '', message_type: 'image', image_path: res.path, status: 'sending', created_at: new Date().toISOString(), read_at: null, is_read: 0, quote_message_id: null, client_message_id: clientMessageId }));
+      const msgRes: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: sid, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'OPERATOR' }) });
+      if (!isActiveAdminSession(sid)) return;
+      if (msgRes?.message && messageBelongsToActiveSession(msgRes.message, sid)) setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), msgRes.message));
       if (msgRes?.session) setCur((c: any) => c?.id === msgRes.session.id ? msgRes.session : c);
-    } catch (e: any) { if (tempId) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
+    } catch (e: any) { if (tempId && isActiveAdminSession(sid)) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
     sendingRef.current = false; setSending('idle');
   };
 
@@ -330,7 +415,7 @@ export default function AdminDashboard() {
   };
 
   const quoteText = (qid: string) => {
-    const q = selectedMsgs.find(m => m.id === qid);
+    const q = selectedMsgs.find(m => m.id === qid && (!cur?.id || messageSessionId(m) === cur.id || !messageSessionId(m)));
     return q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : (q.content || '').slice(0, 60)) : '引用消息不可用';
   };
 
@@ -615,7 +700,6 @@ export default function AdminDashboard() {
     setStaffSending(false);
   };
 
-
   const logout = async () => {
     if (logoutLoading) return;
     setLogoutLoading(true);
@@ -623,7 +707,7 @@ export default function AdminDashboard() {
       await apiFetch('/api/auth/logout', { method: 'POST' });
       resetAdminState();
     } catch (e: any) {
-      showToast(e?.message || '\u9000\u51fa\u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u5237\u65b0\u540e\u91cd\u8bd5');
+      showToast(e?.message || '退出登录失败，请刷新后重试');
     } finally {
       setLogoutLoading(false);
     }
@@ -654,11 +738,10 @@ export default function AdminDashboard() {
           </div>
         </div>
       </div>}
-      {/* Desktop sidebar */}
       <aside className="side desktop-side">
         <div className="brand">
-          <div><h2>{'\u5ba2\u670d\u540e\u53f0'}</h2><span>{admin?.username}</span></div>
-          <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '\u9000\u51fa\u4e2d...' : '\u9000\u51fa'}</button>
+          <div><h2>{'客服后台'}</h2><span>{admin?.username}</span></div>
+          <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '退出中...' : '退出'}</button>
         </div>
         <nav className="side-nav">
           <button type="button" className={view === 'sessions' ? 'active' : ''} onClick={() => { setView('sessions'); if (isNarrow) setMobileView('dir'); }}>会话</button>
@@ -687,31 +770,28 @@ export default function AdminDashboard() {
         </div>}
       </aside>
 
-      {/* Mobile topbar */}
       {isNarrow && (
         <div className="mobile-admin-topbar">
           <button type="button" className="mobile-dir-btn" onClick={() => setDirOpen(true)}>☰ 目录</button>
           <div className="mobile-topbar-title">{view === 'sessions' ? (cur ? currentCustomerName : '会话') : view === 'operators' ? '客服管理' : '内部消息'}</div>
           <div className="mobile-topbar-actions">
-            <button type="button" onClick={() => setMobileInviteOpen(true)}>{'\u9080\u8bf7'}</button>
+            <button type="button" onClick={() => setMobileInviteOpen(true)}>{'邀请'}</button>
             {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="primary-action" onClick={() => assignSession(cur)}>接管</button>}
               {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中' : '结束会话'}</button>}
-            <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '\u9000\u51fa\u4e2d' : '\u9000\u51fa'}</button>
+            <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '退出中' : '退出'}</button>
           </div>
         </div>
       )}
 
-
       {isNarrow && mobileInviteOpen && (
         <div className="mobile-dir-overlay" onClick={() => setMobileInviteOpen(false)}>
           <div className="mobile-dir-panel invite-mobile-panel" onClick={e => e.stopPropagation()}>
-            <div className="mobile-dir-header"><h3>{'\u8bbf\u5ba2\u9080\u8bf7\u94fe\u63a5'}</h3><button type="button" onClick={() => setMobileInviteOpen(false)}>{'\u5173\u95ed'}</button></div>
+            <div className="mobile-dir-header"><h3>{'访客邀请链接'}</h3><button type="button" onClick={() => setMobileInviteOpen(false)}>{'关闭'}</button></div>
             <InviteLinkPanel adminRole={admin?.role} operators={operators} />
           </div>
         </div>
       )}
 
-      {/* Mobile directory overlay */}
       {isNarrow && dirOpen && (
         <div className="mobile-dir-overlay" onClick={() => setDirOpen(false)}>
           <div className="mobile-dir-panel" onClick={e => e.stopPropagation()}>
@@ -727,7 +807,6 @@ export default function AdminDashboard() {
 
       <main className="main">
         {isNarrow ? (
-          /* MOBILE CONTENT */
           <>
             {view === 'sessions' && mobileView === 'dir' && (
               <div className="mobile-session-list-view">
@@ -819,7 +898,6 @@ export default function AdminDashboard() {
             )}
           </>
         ) : (
-          /* DESKTOP CONTENT */
           <>
             {view === 'sessions' ? (
               <div className="workspace">
@@ -896,7 +974,6 @@ export default function AdminDashboard() {
         )}
       </main>
 
-      {/* Context menu */}
       {contextMenu && (() => {
         const items = adminMenuItems(contextMenu.msg);
         if (items.length === 0) { setContextMenu(null); return null; }
