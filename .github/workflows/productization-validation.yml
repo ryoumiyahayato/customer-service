@@ -188,110 +188,75 @@ jobs:
 
       - name: Install root dependencies
         shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
-            npm ci --no-audit --no-fund --silent
-          else
-            npm install --package-lock=false --no-audit --no-fund --silent
-          fi
+        run: if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then npm ci --no-audit --no-fund --silent; else npm install --package-lock=false --no-audit --no-fund --silent; fi
 
       - name: Root build
         shell: bash
-        run: |
-          set -euo pipefail
-          npm run build --silent >/tmp/local-self-host-root-build.log 2>&1 || {
-            cat /tmp/local-self-host-root-build.log
-            exit 1
-          }
+        run: npm run build --silent >/tmp/local-self-host-root-build.log 2>&1 || { cat /tmp/local-self-host-root-build.log; exit 1; }
 
       - name: Write local self-host env
         working-directory: deploy/linux
         shell: bash
-        run: node -e "require('node:fs').writeFileSync('.env', ['NODE_ENV=production','STATIC_DIR=/app/dist','APP_PORT=3000','LOCAL_APP_PORT=8788','APP_DOMAIN=127.0.0.1','VISITOR_ROOT_DOMAIN=127.0.0.1','POSTGRES_DB=customer_chat','POSTGRES_USER=customer_chat','POSTGRES_PASSWORD=local-postgres-password','DATABASE_URL=postgres://customer_chat:local-postgres-password@postgres:5432/customer_chat','SESSION_SECRET=local-session-secret-change-me-for-ci-only','SETUP_TOKEN=local-setup-token','ADMIN_SESSION_TTL=86400','STORAGE_DRIVER=local','STORAGE_PATH=/app/data/uploads','BACKUP_DIR=./backup','MAX_UPLOAD_SIZE=10485760','ENCRYPTION_ENABLED=0','ENCRYPTION_KEY=','ENCRYPTION_KEY_VERSION=v1','LIFECYCLE_CRON=0 * * * *','LOG_LEVEL=info'].join('\n') + '\n')"
+        env:
+          LOCAL_SELF_HOST_ENV: |
+            NODE_ENV=production
+            STATIC_DIR=/app/dist
+            APP_PORT=3000
+            LOCAL_APP_PORT=8788
+            APP_DOMAIN=127.0.0.1
+            VISITOR_ROOT_DOMAIN=127.0.0.1
+            POSTGRES_DB=customer_chat
+            POSTGRES_USER=customer_chat
+            POSTGRES_PASSWORD=local-postgres-password
+            DATABASE_URL=postgres://customer_chat:local-postgres-password@postgres:5432/customer_chat
+            SESSION_SECRET=local-session-secret-change-me-for-ci-only
+            SETUP_TOKEN=local-setup-token
+            ADMIN_SESSION_TTL=86400
+            STORAGE_DRIVER=local
+            STORAGE_PATH=/app/data/uploads
+            BACKUP_DIR=./backup
+            MAX_UPLOAD_SIZE=10485760
+            ENCRYPTION_ENABLED=0
+            ENCRYPTION_KEY=
+            ENCRYPTION_KEY_VERSION=v1
+            LIFECYCLE_CRON=0 * * * *
+            LOG_LEVEL=info
+        run: printf '%s\n' "$LOCAL_SELF_HOST_ENV" > .env
 
       - name: Build local self-host app image
         working-directory: deploy/linux
         shell: bash
-        run: |
-          set -euo pipefail
-          docker compose -f docker-compose.yml -f docker-compose.local.yml build --quiet app >/tmp/local-self-host-build-app.log 2>&1 || {
-            cat /tmp/local-self-host-build-app.log
-            exit 1
-          }
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml build --quiet app >/tmp/local-self-host-build-app.log 2>&1 || { cat /tmp/local-self-host-build-app.log; exit 1; }
 
       - name: Start local self-host postgres
         working-directory: deploy/linux
         shell: bash
-        run: |
-          set -euo pipefail
-          docker pull -q postgres:16-alpine >/tmp/local-self-host-postgres-pull.log 2>&1 || {
-            cat /tmp/local-self-host-postgres-pull.log
-            exit 1
-          }
-          docker compose -f docker-compose.yml -f docker-compose.local.yml up --no-build -d postgres >/tmp/local-self-host-postgres-up.log 2>&1 || {
-            cat /tmp/local-self-host-postgres-up.log
-            exit 1
-          }
+        run: docker pull -q postgres:16-alpine >/tmp/local-self-host-postgres-pull.log 2>&1 && docker compose -f docker-compose.yml -f docker-compose.local.yml up --no-build -d postgres >/tmp/local-self-host-postgres-up.log 2>&1 || { cat /tmp/local-self-host-postgres-pull.log /tmp/local-self-host-postgres-up.log 2>/dev/null || true; exit 1; }
 
       - name: Run local self-host migrations
         working-directory: deploy/linux
         shell: bash
-        run: |
-          set -euo pipefail
-          docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app npm run migrate >/tmp/local-self-host-migrate.log 2>&1 || {
-            cat /tmp/local-self-host-migrate.log
-            exit 1
-          }
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app npm run migrate >/tmp/local-self-host-migrate.log 2>&1 || { cat /tmp/local-self-host-migrate.log; exit 1; }
 
       - name: Start local self-host app
         working-directory: deploy/linux
         shell: bash
-        run: |
-          set -euo pipefail
-          docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app >/tmp/local-self-host-app-up.log 2>&1 || {
-            cat /tmp/local-self-host-app-up.log
-            exit 1
-          }
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app >/tmp/local-self-host-app-up.log 2>&1 || { cat /tmp/local-self-host-app-up.log; exit 1; }
 
       - name: Wait for local self-host app
         shell: bash
-        run: |
-          set -euo pipefail
-          for i in {1..60}; do
-            if curl -fsS http://127.0.0.1:8788/healthz >/dev/null; then
-              echo "local self-host app is ready"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "local self-host app did not become ready"
-          docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres
-          exit 1
+        run: for i in {1..60}; do if curl -fsS http://127.0.0.1:8788/healthz >/dev/null; then echo "local self-host app is ready"; exit 0; fi; sleep 2; done; echo "local self-host app did not become ready"; docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres; exit 1
 
       - name: Run local self-host e2e smoke
         shell: bash
-        run: |
-          set -euo pipefail
-          SELF_HOST_BASE_URL=http://127.0.0.1:8788 \
-          SETUP_TOKEN=local-setup-token \
-          ADMIN_USERNAME=local-smoke-admin \
-          ADMIN_PASSWORD=local-smoke-admin-password \
-          npm --prefix server-generic run e2e:local-smoke
+        run: SELF_HOST_BASE_URL=http://127.0.0.1:8788 SETUP_TOKEN=local-setup-token ADMIN_USERNAME=local-smoke-admin ADMIN_PASSWORD=local-smoke-admin-password npm --prefix server-generic run e2e:local-smoke
 
       - name: Local self-host failure diagnostics
         if: failure()
         shell: bash
-        run: |
-          if [ -f deploy/linux/docker-compose.yml ]; then
-            docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml ps || true
-            docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres || true
-          fi
+        run: if [ -f deploy/linux/docker-compose.yml ]; then docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml ps || true; docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres || true; fi
 
       - name: Cleanup local self-host compose
         if: always()
         shell: bash
-        run: |
-          if [ -f deploy/linux/docker-compose.yml ]; then
-            docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml down -v || true
-          fi
+        run: if [ -f deploy/linux/docker-compose.yml ]; then docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml down -v || true; fi
