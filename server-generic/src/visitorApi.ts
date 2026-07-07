@@ -37,6 +37,7 @@ export async function handleCreateVisitorAttachment(
       id: attachment.messageId,
       sessionId,
       senderType: 'visitor',
+      senderId: null,
       body: null,
       messageType: 'attachment',
       readAt: null,
