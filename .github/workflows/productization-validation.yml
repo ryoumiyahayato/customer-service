@@ -243,7 +243,7 @@ jobs:
       - name: Start local self-host postgres
         working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres >/dev/null
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up --quiet-pull -d postgres >/dev/null
 
       - name: Run local self-host migrations
         working-directory: deploy/linux
@@ -294,5 +294,5 @@ jobs:
         shell: bash
         run: |
           if [ -f deploy/linux/docker-compose.yml ]; then
-            docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml down -v || true
+            docker compose -f deploy/linux/docker-compose.yml -f docker-compose.local.yml down -v || true
           fi
