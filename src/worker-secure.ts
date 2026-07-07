@@ -8,7 +8,7 @@ type WorkerModule = {
 };
 
 type AuditActor = { id: string; username: string; role: string };
-type AuditEvent = { event: string; resource?: string; details?: Record<string, unknown> };
+type AuditEvent = { event: string; resource?: string; path: string; method: string; details?: Record<string, unknown> };
 
 const inner = worker as WorkerModule;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -408,8 +408,8 @@ async function protectGuestInvite(req: Request) {
   return null;
 }
 
-async function currentAuditActor(env: Env, req: Request): Promise<AuditActor | null> {
-  const sessionId = await verifySignedId(env, getCookie(req, ADMIN_COOKIE));
+async function currentAuditActor(env: Env, adminCookie?: string): Promise<AuditActor | null> {
+  const sessionId = await verifySignedId(env, adminCookie);
   if (!sessionId) return null;
   const session = await env.DB.prepare(
     'SELECT admin_id FROM admin_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>? LIMIT 1',
@@ -421,8 +421,9 @@ async function currentAuditActor(env: Env, req: Request): Promise<AuditActor | n
   return admin || null;
 }
 
-async function readJsonBody(req: Request) {
-  return await req.json().catch(() => ({} as any));
+async function readJsonBody(req: Request): Promise<any> {
+  const body = await req.json().catch(() => ({}));
+  return body as any;
 }
 
 function pickString(value: unknown, maxLength = 120) {
@@ -448,49 +449,53 @@ function isAuditedAdminMutation(req: Request) {
   return false;
 }
 
-function classifyAdminMutation(req: Request): Promise<AuditEvent | null> | AuditEvent | null {
+function makeAuditEvent(event: string, path: string, method: string, extra: Omit<AuditEvent, 'event' | 'path' | 'method'> = {}): AuditEvent {
+  return { event, path, method, ...extra };
+}
+
+async function classifyAdminMutation(req: Request): Promise<AuditEvent | null> {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method.toUpperCase();
 
-  if (path === '/api/invites' && method === 'POST') return { event: 'admin.invite.create' };
-  if (path === '/api/messages/purge-images' && method === 'POST') return { event: 'admin.messages.purge_images' };
+  if (path === '/api/invites' && method === 'POST') return makeAuditEvent('admin.invite.create', path, method);
+  if (path === '/api/messages/purge-images' && method === 'POST') return makeAuditEvent('admin.messages.purge_images', path, method);
   if (path === '/api/admins' && method === 'POST') {
-    return readJsonBody(req).then((body) => ({
-      event: 'admin.operator.create',
+    const body: any = await readJsonBody(req);
+    return makeAuditEvent('admin.operator.create', path, method, {
       details: { username: pickString(body.username) },
-    }));
+    });
   }
   if (path === '/api/admins/operators' && method === 'DELETE') {
-    return readJsonBody(req).then((body) => ({
-      event: body.hard ? 'admin.operator.delete' : 'admin.operator.disable',
+    const body: any = await readJsonBody(req);
+    return makeAuditEvent(body.hard ? 'admin.operator.delete' : 'admin.operator.disable', path, method, {
       resource: pickString(body.id),
-    }));
+    });
   }
   if (path === '/api/admins/profile' && method === 'PATCH') {
-    return readJsonBody(req).then((body) => ({
-      event: 'admin.profile.update',
+    const body: any = await readJsonBody(req);
+    return makeAuditEvent('admin.profile.update', path, method, {
       details: {
         usernameChanged: Boolean(body.username),
         passwordChanged: Boolean(body.password),
       },
-    }));
+    });
   }
 
   const sessionAction = path.match(/^\/api\/sessions\/([^/]+)\/(assign|close|archive|unarchive|delete|restore)$/);
-  if (sessionAction && method === 'POST') return { event: `admin.session.${sessionAction[2]}`, resource: sessionAction[1] };
+  if (sessionAction && method === 'POST') return makeAuditEvent(`admin.session.${sessionAction[2]}`, path, method, { resource: sessionAction[1] });
 
   const customerRemark = path.match(/^\/api\/sessions\/([^/]+)\/customer-remark$/);
-  if (customerRemark && method === 'PATCH') return { event: 'admin.session.customer_remark', resource: customerRemark[1] };
+  if (customerRemark && method === 'PATCH') return makeAuditEvent('admin.session.customer_remark', path, method, { resource: customerRemark[1] });
 
   const clearHistory = path.match(/^\/api\/sessions\/([^/]+)\/clear-history$/);
-  if (clearHistory && method === 'POST') return { event: 'admin.session.clear_history', resource: clearHistory[1] };
+  if (clearHistory && method === 'POST') return makeAuditEvent('admin.session.clear_history', path, method, { resource: clearHistory[1] });
 
   const recallMessage = path.match(/^\/api\/messages\/([^/]+)\/recall$/);
-  if (recallMessage && method === 'POST') return { event: 'admin.message.recall', resource: recallMessage[1] };
+  if (recallMessage && method === 'POST') return makeAuditEvent('admin.message.recall', path, method, { resource: recallMessage[1] });
 
   const deleteMessage = path.match(/^\/api\/messages\/([^/]+)\/delete$/);
-  if (deleteMessage && method === 'POST') return { event: 'admin.message.delete', resource: deleteMessage[1] };
+  if (deleteMessage && method === 'POST') return makeAuditEvent('admin.message.delete', path, method, { resource: deleteMessage[1] });
 
   return null;
 }
@@ -499,30 +504,29 @@ function auditId() {
   return `log_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
 }
 
-function auditMessage(event: AuditEvent, req: Request) {
-  const url = new URL(req.url);
+function auditMessage(event: AuditEvent) {
   return JSON.stringify({
     event: event.event,
     resource: event.resource || null,
-    path: url.pathname,
-    method: req.method.toUpperCase(),
+    path: event.path,
+    method: event.method,
     details: event.details || {},
   });
 }
 
-async function writeAuditLog(env: Env, actor: AuditActor, event: AuditEvent, req: Request) {
+async function writeAuditLog(env: Env, actor: AuditActor, event: AuditEvent) {
   await env.DB.prepare(
     'INSERT INTO system_logs(id,level,event,actor_id,message,created_at) VALUES(?,?,?,?,?,?)',
-  ).bind(auditId(), 'INFO', event.event, actor.id, auditMessage(event, req), new Date().toISOString()).run();
+  ).bind(auditId(), 'INFO', event.event, actor.id, auditMessage(event), new Date().toISOString()).run();
 }
 
-async function auditAfterSuccess(req: Request, env: Env, response: Response, eventPromise: Promise<AuditEvent | null>) {
+async function auditAfterSuccess(env: Env, response: Response, eventPromise: Promise<AuditEvent | null>, adminCookie?: string) {
   if (response.status < 200 || response.status >= 300) return;
   const event = await eventPromise;
   if (!event) return;
-  const actor = await currentAuditActor(env, req);
+  const actor = await currentAuditActor(env, adminCookie);
   if (!actor) return;
-  await writeAuditLog(env, actor, event, req);
+  await writeAuditLog(env, actor, event);
 }
 
 async function preflightSecurity(req: Request, env: Env) {
@@ -569,15 +573,17 @@ export default {
   },
 
   async fetch(req: Request, env: Env, ctx: ExecutionContext) {
-    const auditReq = isAuditedAdminMutation(req) ? req.clone() : null;
-    const eventPromise = auditReq ? Promise.resolve(classifyAdminMutation(auditReq)).catch(() => null) : null;
+    const shouldAudit = isAuditedAdminMutation(req);
+    const auditReq = shouldAudit ? (req.clone() as unknown as Request) : null;
+    const adminCookie = shouldAudit ? getCookie(req, ADMIN_COOKIE) : undefined;
+    const eventPromise = auditReq ? classifyAdminMutation(auditReq).catch(() => null) : null;
 
     const blocked = await preflightSecurity(req, env);
     if (blocked) return withSecurityHeaders(blocked);
 
     const response = withSecurityHeaders(await inner.fetch(req, env, ctx));
     if (eventPromise) {
-      ctx.waitUntil(auditAfterSuccess(req, env, response, eventPromise).catch((error) => {
+      ctx.waitUntil(auditAfterSuccess(env, response, eventPromise, adminCookie).catch((error) => {
         console.error('security: audit log write failed', error);
       }));
     }
