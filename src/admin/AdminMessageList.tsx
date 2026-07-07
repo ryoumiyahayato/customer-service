@@ -35,14 +35,15 @@ export default function AdminMessageList<T>({
     if (!hasCrossSessionMessages) setSafeMessages(filteredMessages);
   }, [activeSessionId, filteredMessages, hasCrossSessionMessages, safeSessionId]);
 
-  const waitingForActiveMessages = hasCrossSessionMessages && safeMessages.length === 0;
+  const displayMessages = safeSessionId === activeSessionId ? safeMessages : filteredMessages;
+  const waitingForActiveMessages = hasCrossSessionMessages && displayMessages.length === 0;
   const showLoading = loading || waitingForActiveMessages;
 
   return (
     <div className="msgs">
       {showLoading ? <LoadingState>正在加载会话消息...</LoadingState> : null}
-      {!showLoading && showEmpty && safeMessages.length === 0 && emptyText ? <StatusBlock>{emptyText}</StatusBlock> : null}
-      {!showLoading ? safeMessages.map(renderMessage) : null}
+      {!showLoading && showEmpty && displayMessages.length === 0 && emptyText ? <StatusBlock>{emptyText}</StatusBlock> : null}
+      {!showLoading ? displayMessages.map(renderMessage) : null}
     </div>
   );
 }
