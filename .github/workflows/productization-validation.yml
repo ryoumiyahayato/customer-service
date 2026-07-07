@@ -197,7 +197,13 @@ jobs:
           fi
 
       - name: Root build
-        run: npm run build --silent
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build --silent >/tmp/local-self-host-root-build.log 2>&1 || {
+            cat /tmp/local-self-host-root-build.log
+            exit 1
+          }
 
       - name: Write local self-host env
         working-directory: deploy/linux
