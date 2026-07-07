@@ -113,6 +113,89 @@ jobs:
           EOF
           docker compose -f deploy/linux/docker-compose.yml config
 
+      - name: Install server-generic dependencies
+        working-directory: server-generic
+        run: npm ci --no-audit --no-fund
+
+      - name: server-generic typecheck
+        working-directory: server-generic
+        run: npm run typecheck
+
+      - name: server-generic build
+        working-directory: server-generic
+        run: npm run build
+
+      - name: server-generic smoke
+        working-directory: server-generic
+        run: npm run smoke
+
+      - name: Install windows-wizard dependencies
+        working-directory: deploy/windows-wizard
+        run: npm ci --no-audit --no-fund
+
+      - name: windows-wizard smoke
+        working-directory: deploy/windows-wizard
+        run: npm run smoke
+
+      - name: windows-wizard plan
+        working-directory: deploy/windows-wizard
+        run: npm run plan -- --plan examples/deploy-plan.example.json
+
+      - name: windows-wizard deploy dry-run
+        working-directory: deploy/windows-wizard
+        run: npm run deploy -- --plan examples/deploy-plan.example.json --dry-run
+
+      - name: Install desktop-client dependencies
+        working-directory: deploy/desktop-client
+        run: npm ci --no-audit --no-fund
+
+      - name: desktop-client smoke
+        working-directory: deploy/desktop-client
+        run: npm run smoke
+
+      - name: desktop-client plan
+        working-directory: deploy/desktop-client
+        run: npm run plan
+
+      - name: desktop-client package check
+        working-directory: deploy/desktop-client
+        run: npm run package:check
+
+      - name: Android static checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f deploy/android-shell/settings.gradle
+          test -f deploy/android-shell/build.gradle
+          test -f deploy/android-shell/app/build.gradle
+          test -f deploy/android-shell/app/src/main/AndroidManifest.xml
+
+  local-self-host-docker-smoke:
+    name: Local self-host Docker smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install root dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --package-lock=false --no-audit --no-fund
+          fi
+
+      - name: Root build
+        run: npm run build
+
       - name: Write local self-host env
         working-directory: deploy/linux
         shell: bash
@@ -193,60 +276,3 @@ jobs:
         working-directory: deploy/linux
         shell: bash
         run: docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
-
-      - name: Install server-generic dependencies
-        working-directory: server-generic
-        run: npm ci --no-audit --no-fund
-
-      - name: server-generic typecheck
-        working-directory: server-generic
-        run: npm run typecheck
-
-      - name: server-generic build
-        working-directory: server-generic
-        run: npm run build
-
-      - name: server-generic smoke
-        working-directory: server-generic
-        run: npm run smoke
-
-      - name: Install windows-wizard dependencies
-        working-directory: deploy/windows-wizard
-        run: npm ci --no-audit --no-fund
-
-      - name: windows-wizard smoke
-        working-directory: deploy/windows-wizard
-        run: npm run smoke
-
-      - name: windows-wizard plan
-        working-directory: deploy/windows-wizard
-        run: npm run plan -- --plan examples/deploy-plan.example.json
-
-      - name: windows-wizard deploy dry-run
-        working-directory: deploy/windows-wizard
-        run: npm run deploy -- --plan examples/deploy-plan.example.json --dry-run
-
-      - name: Install desktop-client dependencies
-        working-directory: deploy/desktop-client
-        run: npm ci --no-audit --no-fund
-
-      - name: desktop-client smoke
-        working-directory: deploy/desktop-client
-        run: npm run smoke
-
-      - name: desktop-client plan
-        working-directory: deploy/desktop-client
-        run: npm run plan
-
-      - name: desktop-client package check
-        working-directory: deploy/desktop-client
-        run: npm run package:check
-
-      - name: Android static checks
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f deploy/android-shell/settings.gradle
-          test -f deploy/android-shell/build.gradle
-          test -f deploy/android-shell/app/build.gradle
-          test -f deploy/android-shell/app/src/main/AndroidManifest.xml
