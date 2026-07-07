@@ -25,3 +25,10 @@ The wrapper is intentionally small and focused on request-level controls that do
 The existing application worker remains the source of business logic. The security wrapper can be collapsed into `src/worker.ts` later after the router is split into smaller modules.
 
 The lifecycle task deletes expired orphan attachment rows and their R2 objects. This only targets uploads that never became attached to a message, reducing storage abuse without deleting valid chat history images. It also removes stale `rate_limits` records, expired/revoked auth session rows, and stale invite links to limit unbounded table growth from expired throttling/session/invite keys.
+
+Repository cleanup policy:
+
+- Legacy Next.js App Router scaffolding must not be reintroduced unless the deployment is intentionally moved back to Next.js.
+- Patch/diff artifacts must not be committed to the repository root or tracked source tree.
+- Unused Worker entrypoint shims must not be kept after the active `wrangler.toml` entrypoint has been restored.
+- Production crash screens must not expose raw exception messages or stack details to users.
