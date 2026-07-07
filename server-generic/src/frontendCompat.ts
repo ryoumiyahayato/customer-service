@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
 import { createVisitorSession, listAdminChatSessions, mapChatSession, requireAdminSessionExists, requireVisitorSession, type ChatSessionSummary } from './chat.js';
@@ -264,7 +265,7 @@ async function handleFrontendGuestBootstrap(request: IncomingMessage, response: 
 
 async function handleFrontendInviteCreate(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
   await requireAdmin(context.db, request);
-  const token = `selfhost-${crypto.randomUUID()}`;
+  const token = `selfhost-${randomUUID()}`;
   sendJson(response, 201, {
     ok: true,
     invite: {
