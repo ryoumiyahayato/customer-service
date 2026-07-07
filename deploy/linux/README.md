@@ -57,32 +57,12 @@ npm install --package-lock=false --no-audit --no-fund
 npm run build
 ```
 
-然后准备本地 `.env`。这些值只用于本机 smoke，不要提交 `.env`：
+然后准备本地 `.env`。复制 `.env.example`，只在本机文件里填入本地 smoke 值，并确保这些值彼此一致：`APP_DOMAIN` 使用 `127.0.0.1`，`VISITOR_ROOT_DOMAIN` 使用 `127.0.0.1`，`LOCAL_APP_PORT` 使用 `8788`，`DATABASE_URL` 指向 compose 内的 `postgres` 服务，`SESSION_SECRET` 和 `SETUP_TOKEN` 使用本地临时强随机值。
 
 ```bash
 cd deploy/linux
-cat > .env <<'EOF'
-APP_DOMAIN=127.0.0.1
-VISITOR_ROOT_DOMAIN=127.0.0.1
-POSTGRES_DB=customer_chat
-POSTGRES_USER=customer_chat
-POSTGRES_PASSWORD=local-smoke-postgres-password
-DATABASE_URL=postgres://customer_chat:local-smoke-postgres-password@postgres:5432/customer_chat
-APP_PORT=3000
-LOCAL_APP_PORT=8788
-SESSION_SECRET=local-smoke-session-secret-change-me-at-least-32-chars
-SETUP_TOKEN=local-smoke-setup-token-change-me
-ADMIN_SESSION_TTL=86400
-ENCRYPTION_ENABLED=0
-ENCRYPTION_KEY=
-ENCRYPTION_KEY_VERSION=v1
-STORAGE_DRIVER=local
-STORAGE_PATH=/app/storage
-MAX_UPLOAD_SIZE=10485760
-LIFECYCLE_CRON=0 * * * *
-LOG_LEVEL=info
-BACKUP_DIR=./backup
-EOF
+cp .env.example .env
+# Edit .env locally. Do not commit it.
 ```
 
 启动本地 Postgres 和 app，不启动 Caddy：
@@ -94,12 +74,12 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app np
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app
 ```
 
-回到仓库根目录运行本地 e2e smoke：
+回到仓库根目录运行本地 e2e smoke。命令里的 `SETUP_TOKEN` 要与本地 `.env` 中的 setup token 一致；不要把真实值粘贴到 issue、PR、日志或聊天记录里：
 
 ```bash
 cd ../..
 SELF_HOST_BASE_URL=http://127.0.0.1:8788 \
-SETUP_TOKEN=local-smoke-setup-token-change-me \
+SETUP_TOKEN=change-me \
 ADMIN_USERNAME=local-smoke-admin \
 ADMIN_PASSWORD=local-smoke-admin-password \
 npm --prefix server-generic run e2e:local-smoke
