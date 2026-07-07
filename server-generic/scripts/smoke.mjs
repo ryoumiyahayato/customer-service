@@ -9,7 +9,7 @@ import {
   verifyPassword,
 } from '../dist/crypto.js';
 import { decryptText, encryptText } from '../dist/encryption.js';
-import { FRONTEND_COMPAT_ROUTES, mapFrontendMessage, mapFrontendSession } from '../dist/frontendCompat.js';
+import { FRONTEND_COMPAT_ROUTES, mapFrontendAdmin, mapFrontendMessage, mapFrontendSession } from '../dist/frontendCompat.js';
 import { HttpError } from '../dist/http.js';
 import { normalizeLifecycleOptions } from '../dist/lifecycle.js';
 import { normalizeMessageBody, prepareMessageBodyForStorage } from '../dist/messages.js';
@@ -217,12 +217,35 @@ const compatRoutes = new Set(FRONTEND_COMPAT_ROUTES);
 for (const route of [
   'POST /api/auth/login',
   'POST /api/auth/logout',
+  'GET /api/auth/me',
   'GET /api/sessions',
   'GET /api/sessions/:id/messages',
   'POST /api/messages',
   'POST /api/guest/:token',
 ]) {
   if (!compatRoutes.has(route)) throw new Error(`frontend compat route missing: ${route}`);
+}
+
+const frontendAdmin = mapFrontendAdmin({
+  id: '00000000-0000-0000-0000-000000000001',
+  username: 'smoke-admin',
+  email: 'smoke-admin@example.com',
+  displayName: 'Smoke Admin',
+  role: 'SUPER_ADMIN',
+  createdAt: '2026-01-01T00:00:00.000Z',
+});
+if (
+  frontendAdmin.id !== '00000000-0000-0000-0000-000000000001' ||
+  frontendAdmin.username !== 'smoke-admin' ||
+  frontendAdmin.role !== 'SUPER_ADMIN' ||
+  frontendAdmin.display_name !== 'Smoke Admin' ||
+  frontendAdmin.created_at !== '2026-01-01T00:00:00.000Z' ||
+  !('updated_at' in frontendAdmin)
+) {
+  throw new Error('frontend admin auth me mapping smoke failed');
+}
+for (const forbiddenField of ['password_hash', 'passwordHash', 'token', 'sessionToken', 'cookie', 'secret']) {
+  if (forbiddenField in frontendAdmin) throw new Error(`frontend admin leaked field: ${forbiddenField}`);
 }
 
 const frontendSession = mapFrontendSession({
@@ -281,4 +304,4 @@ if (!broadcast.includes('session_closed') || broadcast.includes(visitorToken)) {
   throw new Error('websocket broadcast smoke failed');
 }
 
-console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, setup fail-closed, first admin SUPER_ADMIN, encryption helpers, message payload, storage helpers, lifecycle options, frontend compatibility mapping, websocket payload');
+console.log('server-generic smoke passed: config, password hash, session hash, visitor hash, response helper, setup fail-closed, first admin SUPER_ADMIN, encryption helpers, message payload, storage helpers, lifecycle options, frontend auth me/session/message compatibility mapping, websocket payload');
