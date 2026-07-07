@@ -8,6 +8,7 @@ export type ChatMessage = {
   id: string;
   sessionId: string;
   senderType: 'visitor' | 'admin' | string;
+  senderId: string | null;
   body: string | null;
   messageType: string;
   readAt: string | null;
@@ -19,6 +20,7 @@ type MessageRow = {
   id: string;
   session_id: string;
   sender_type: string;
+  sender_id: string | null;
   body: string | null;
   body_ciphertext: string | null;
   body_iv: string | null;
@@ -72,6 +74,7 @@ export function mapMessage(row: MessageRow, encryption: EncryptionConfig): ChatM
     id: row.id,
     sessionId: row.session_id,
     senderType: row.sender_type,
+    senderId: row.sender_id,
     body: maybeDecryptText(encryptedBodyFromRow(row), row.body, encryption),
     messageType: row.message_type,
     readAt: toIso(row.read_at),
@@ -86,7 +89,7 @@ export async function listSessionMessages(
   encryption: EncryptionConfig,
 ): Promise<ChatMessage[]> {
   const rows = await db.query<MessageRow>(
-    `SELECT id, session_id, sender_type, body, body_ciphertext, body_iv, body_tag,
+    `SELECT id, session_id, sender_type, sender_id, body, body_ciphertext, body_iv, body_tag,
             body_algorithm, body_key_version, message_type, read_at, created_at
        FROM messages
       WHERE session_id = $1
@@ -125,7 +128,7 @@ export async function createSessionMessage(
          body_tag, body_algorithm, body_key_version, message_type
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'text')
-       RETURNING id, session_id, sender_type, body, body_ciphertext, body_iv, body_tag,
+       RETURNING id, session_id, sender_type, sender_id, body, body_ciphertext, body_iv, body_tag,
                  body_algorithm, body_key_version, message_type, read_at, created_at`,
       [
         sessionId,
