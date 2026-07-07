@@ -208,42 +208,31 @@ jobs:
       - name: Write local self-host env
         working-directory: deploy/linux
         shell: bash
-        run: |
-          set -euo pipefail
-          cat > .env <<'EOF'
-          NODE_ENV=production
-          STATIC_DIR=/app/dist
-          APP_PORT=3000
-          LOCAL_APP_PORT=8788
-          APP_DOMAIN=127.0.0.1
-          VISITOR_ROOT_DOMAIN=127.0.0.1
-          POSTGRES_DB=customer_chat
-          POSTGRES_USER=customer_chat
-          POSTGRES_PASSWORD=local-postgres-password
-          DATABASE_URL=postgres://customer_chat:local-postgres-password@postgres:5432/customer_chat
-          SESSION_SECRET=local-session-secret-change-me-for-ci-only
-          SETUP_TOKEN=local-setup-token
-          ADMIN_SESSION_TTL=86400
-          STORAGE_DRIVER=local
-          STORAGE_PATH=/app/data/uploads
-          BACKUP_DIR=./backup
-          MAX_UPLOAD_SIZE=10485760
-          ENCRYPTION_ENABLED=0
-          ENCRYPTION_KEY=
-          ENCRYPTION_KEY_VERSION=v1
-          LIFECYCLE_CRON=0 * * * *
-          LOG_LEVEL=info
-          EOF
+        run: node -e "require('node:fs').writeFileSync('.env', ['NODE_ENV=production','STATIC_DIR=/app/dist','APP_PORT=3000','LOCAL_APP_PORT=8788','APP_DOMAIN=127.0.0.1','VISITOR_ROOT_DOMAIN=127.0.0.1','POSTGRES_DB=customer_chat','POSTGRES_USER=customer_chat','POSTGRES_PASSWORD=local-postgres-password','DATABASE_URL=postgres://customer_chat:local-postgres-password@postgres:5432/customer_chat','SESSION_SECRET=local-session-secret-change-me-for-ci-only','SETUP_TOKEN=local-setup-token','ADMIN_SESSION_TTL=86400','STORAGE_DRIVER=local','STORAGE_PATH=/app/data/uploads','BACKUP_DIR=./backup','MAX_UPLOAD_SIZE=10485760','ENCRYPTION_ENABLED=0','ENCRYPTION_KEY=','ENCRYPTION_KEY_VERSION=v1','LIFECYCLE_CRON=0 * * * *','LOG_LEVEL=info'].join('\n') + '\n')"
 
       - name: Build local self-host app image
         working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml build --quiet app
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.local.yml build --quiet app >/tmp/local-self-host-build-app.log 2>&1 || {
+            cat /tmp/local-self-host-build-app.log
+            exit 1
+          }
 
       - name: Start local self-host postgres
         working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up --quiet-pull -d postgres >/dev/null
+        run: |
+          set -euo pipefail
+          docker pull -q postgres:16-alpine >/tmp/local-self-host-postgres-pull.log 2>&1 || {
+            cat /tmp/local-self-host-postgres-pull.log
+            exit 1
+          }
+          docker compose -f docker-compose.yml -f docker-compose.local.yml up --no-build -d postgres >/tmp/local-self-host-postgres-up.log 2>&1 || {
+            cat /tmp/local-self-host-postgres-up.log
+            exit 1
+          }
 
       - name: Run local self-host migrations
         working-directory: deploy/linux
@@ -258,7 +247,12 @@ jobs:
       - name: Start local self-host app
         working-directory: deploy/linux
         shell: bash
-        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app >/dev/null
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app >/tmp/local-self-host-app-up.log 2>&1 || {
+            cat /tmp/local-self-host-app-up.log
+            exit 1
+          }
 
       - name: Wait for local self-host app
         shell: bash
