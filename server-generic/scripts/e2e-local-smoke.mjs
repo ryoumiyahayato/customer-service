@@ -60,11 +60,18 @@ function splitSetCookieHeader(header) {
   return String(header).split(/,(?=\s*[^;,=]+=)/g).map(value => value.trim()).filter(Boolean);
 }
 
-async function request(path, { method = 'GET', body, jar, expected = [200], skipJson = false } = {}) {
+function safeRequestLabel(path) {
+  return String(path)
+    .replace(/\/api\/guest\/[^/?#]+/, '/api/guest/:token')
+    .replace(/\/api\/sessions\/[^/?#]+\/messages/, '/api/sessions/:id/messages');
+}
+
+async function request(path, { method = 'GET', body, jar, expected = [200], skipJson = false, label } = {}) {
   const headers = { accept: 'application/json' };
   if (body !== undefined) headers['content-type'] = 'application/json';
   const cookie = jar?.header();
   if (cookie) headers.cookie = cookie;
+  const safeLabel = label || safeRequestLabel(path);
 
   let response;
   try {
@@ -87,7 +94,7 @@ async function request(path, { method = 'GET', body, jar, expected = [200], skip
       const data = await response.json();
       code = data?.error || data?.code || '';
     } catch {}
-    throw new Error(`${method} ${path} returned ${response.status}${code ? ` (${code})` : ''}`);
+    throw new Error(`${method} ${safeLabel} returned ${response.status}${code ? ` (${code})` : ''}`);
   }
   if (skipJson || response.status === 204) return null;
   return response.json();
