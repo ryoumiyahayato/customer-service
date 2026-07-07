@@ -9,7 +9,7 @@ This directory is the first generic Linux server adapter for the customer chat s
 - Serves `GET /api/setup/status`.
 - Serves `POST /api/setup/initialize` for first-admin creation only when `SETUP_TOKEN` is configured.
 - Serves `POST /api/admin/login`, `POST /api/admin/logout`, and `GET /api/auth/me`.
-- Serves frontend-compatible `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/sessions`, `GET /api/sessions/:id/messages`, and `POST /api/messages` for the current Vite frontend.
+- Serves frontend-compatible `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET /api/sessions`, `GET /api/sessions/:id/messages`, and `POST /api/messages` for the current Vite frontend.
 - Serves a minimal self-hosted visitor bootstrap at `POST /api/guest/:token`; this is not the full invite system and exists only to let the current frontend complete a text-chat self-hosted smoke path.
 - Serves `POST /api/visitor/sessions`.
 - Serves visitor message list/send APIs guarded by visitor token hash.
