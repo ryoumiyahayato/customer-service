@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+import http from 'node:http';
+import https from 'node:https';
+
 const baseUrl = (process.env.SELF_HOST_BASE_URL || 'http://127.0.0.1:8788').replace(/\/+$/, '');
 const setupToken = process.env.SETUP_TOKEN || '';
 const adminUsername = process.env.ADMIN_USERNAME || 'local-smoke-admin';
@@ -8,11 +11,6 @@ const adminDisplayName = process.env.ADMIN_DISPLAY_NAME || 'Local Smoke Admin';
 
 if (!setupToken) failConfig('SETUP_TOKEN is required for local self-host smoke.');
 if (!adminPassword || adminPassword.length < 12) failConfig('ADMIN_PASSWORD is required and must be at least 12 characters.');
-
-const adminJar = new CookieJar();
-const visitorJar = new CookieJar();
-const visitorMessage = `local smoke visitor ${Date.now()}`;
-const adminMessage = `local smoke admin ${Date.now()}`;
 
 function failConfig(message) {
   console.error(`CONFIG ${message}`);
@@ -33,9 +31,13 @@ class CookieJar {
   header() {
     return [...this.cookies.entries()].map(([key, value]) => `${key}=${value}`).join('; ');
   }
-  storeFrom(response) {
-    const headers = getSetCookieHeaders(response);
-    for (const header of headers) {
+  storeFrom(headers) {
+    const values = Array.isArray(headers?.['set-cookie'])
+      ? headers['set-cookie']
+      : headers?.['set-cookie']
+        ? [headers['set-cookie']]
+        : [];
+    for (const header of values) {
       for (const cookie of splitSetCookieHeader(header)) {
         const first = cookie.split(';')[0]?.trim();
         if (!first) continue;
@@ -50,29 +52,54 @@ class CookieJar {
   }
 }
 
-function getSetCookieHeaders(response) {
-  if (typeof response.headers.getSetCookie === 'function') return response.headers.getSetCookie();
-  const single = response.headers.get('set-cookie');
-  return single ? [single] : [];
-}
+const adminJar = new CookieJar();
+const visitorJar = new CookieJar();
+const visitorMessage = `local smoke visitor ${Date.now()}`;
+const adminMessage = `local smoke admin ${Date.now()}`;
 
 function splitSetCookieHeader(header) {
   return String(header).split(/,(?=\s*[^;,=]+=)/g).map(value => value.trim()).filter(Boolean);
 }
 
-async function request(path, { method = 'GET', body, jar, expected = [200], skipJson = false } = {}) {
+function safeRequestLabel(path) {
+  return String(path)
+    .replace(/\/api\/guest\/[^/?#]+/, '/api/guest/:token')
+    .replace(/\/api\/sessions\/[^/?#]+\/messages/, '/api/sessions/:id/messages');
+}
+
+function rawRequest(path, { method, headers, body }) {
+  const target = new URL(`${baseUrl}${path}`);
+  const client = target.protocol === 'https:' ? https : http;
+  const requestBody = body === undefined ? undefined : JSON.stringify(body);
+  const requestHeaders = { ...headers };
+  if (requestBody !== undefined) requestHeaders['content-length'] = Buffer.byteLength(requestBody);
+
+  return new Promise((resolve, reject) => {
+    const req = client.request(target, { method, headers: requestHeaders }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      res.on('end', () => resolve({
+        status: res.statusCode || 0,
+        headers: res.headers,
+        text: Buffer.concat(chunks).toString('utf8'),
+      }));
+    });
+    req.on('error', reject);
+    if (requestBody !== undefined) req.write(requestBody);
+    req.end();
+  });
+}
+
+async function request(path, { method = 'GET', body, jar, expected = [200], skipJson = false, label } = {}) {
   const headers = { accept: 'application/json' };
   if (body !== undefined) headers['content-type'] = 'application/json';
   const cookie = jar?.header();
   if (cookie) headers.cookie = cookie;
+  const safeLabel = label || safeRequestLabel(path);
 
   let response;
   try {
-    response = await fetch(`${baseUrl}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    response = await rawRequest(path, { method, headers, body });
   } catch (error) {
     console.error(`FAIL service_unreachable ${baseUrl}`);
     console.error('Start local compose first, then rerun this script.');
@@ -80,17 +107,17 @@ async function request(path, { method = 'GET', body, jar, expected = [200], skip
     process.exit(3);
   }
 
-  jar?.storeFrom(response);
+  jar?.storeFrom(response.headers);
   if (!expected.includes(response.status)) {
     let code = '';
     try {
-      const data = await response.json();
+      const data = JSON.parse(response.text || '{}');
       code = data?.error || data?.code || '';
     } catch {}
-    throw new Error(`${method} ${path} returned ${response.status}${code ? ` (${code})` : ''}`);
+    throw new Error(`${method} ${safeLabel} returned ${response.status}${code ? ` (${code})` : ''}`);
   }
   if (skipJson || response.status === 204) return null;
-  return response.json();
+  return JSON.parse(response.text || '{}');
 }
 
 function assert(condition, message) {
@@ -168,6 +195,7 @@ async function main() {
   const guest = await request(`/api/guest/${encodeURIComponent(token)}`, { method: 'POST', body: {}, jar: visitorJar });
   const sessionId = getSessionId(guest);
   assert(typeof guest.visitorId === 'string' && guest.visitorId.length > 0, 'visitor id missing');
+  visitorJar.cookies.set('support_visitor', guest.visitorId);
   logPass('guest bootstrap');
 
   await request('/api/messages', {
