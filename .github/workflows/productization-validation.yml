@@ -52,10 +52,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node --version
+          npm --version
+          npm config get registry
+          npm cache verify
           if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
-            npm ci --no-audit --no-fund
+            npm ci --no-audit --no-fund --loglevel verbose
           else
-            npm install --package-lock=false --no-audit --no-fund
+            npm install --package-lock=false --no-audit --no-fund --loglevel verbose
           fi
 
       - name: Root admin message race guard
@@ -188,7 +192,17 @@ jobs:
 
       - name: Install root dependencies
         shell: bash
-        run: if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then npm ci --no-audit --no-fund --silent; else npm install --package-lock=false --no-audit --no-fund --silent; fi
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          npm config get registry
+          npm cache verify
+          if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
+            npm ci --no-audit --no-fund --loglevel verbose
+          else
+            npm install --package-lock=false --no-audit --no-fund --loglevel verbose
+          fi
 
       - name: Root build
         shell: bash
