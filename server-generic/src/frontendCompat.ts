@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import {
+  abuseSessionPart,
+  abuseUsernamePart,
+  sendRateLimitResponse,
+  type AbuseGuard,
+} from './abuseGuard.js';
 import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
 import { createVisitorSession, listAdminChatSessions, mapChatSession, requireAdminSessionExists, requireVisitorSession, type ChatSessionSummary } from './chat.js';
 import type { GenericServerConfig } from './config.js';
@@ -31,6 +37,7 @@ type FrontendCompatContext = {
   config: GenericServerConfig;
   db: PostgresAdapter;
   hub: WebSocketHub;
+  abuseGuard: AbuseGuard;
 };
 
 type ChatSessionRow = {
@@ -152,6 +159,12 @@ function matchGuestBootstrap(pathname: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function enforceAbuseLimit(response: ServerResponse, decision: ReturnType<AbuseGuard['check']>) {
+  if (decision.allowed) return false;
+  sendRateLimitResponse(response, decision);
+  return true;
+}
+
 async function findSessionByVisitorToken(db: PostgresAdapter, visitorToken: string): Promise<ChatSessionSummary | null> {
   const rows = await db.query<ChatSessionRow>(
     `SELECT id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at
@@ -184,6 +197,7 @@ async function requireVisitorForSession(db: PostgresAdapter, sessionId: string, 
 
 async function handleFrontendLogin(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
   const body = await readJsonBody<Record<string, unknown>>(request);
+  if (enforceAbuseLimit(response, context.abuseGuard.check(request, 'admin_login', [abuseUsernamePart(body)]))) return;
   const result = await loginAdmin(context.config, context.db, body);
   sendJson(
     response,
@@ -226,6 +240,8 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
   const body = await readJsonBody<Record<string, unknown>>(request);
   const sessionId = (optionalString(body.sessionId) || optionalString(body.session_id) || '').trim();
   if (!sessionId || !isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
+  if (enforceAbuseLimit(response, context.abuseGuard.check(request, 'message_ip'))) return;
+  if (enforceAbuseLimit(response, context.abuseGuard.check(request, 'message_session', [abuseSessionPart(sessionId)]))) return;
 
   const content = (optionalString(body.content) ?? optionalString(body.body) ?? '').trim();
   const messageType = (optionalString(body.messageType) || optionalString(body.message_type) || 'text').trim().toLowerCase();
@@ -253,6 +269,7 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
 
 async function handleFrontendGuestBootstrap(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext, token: string) {
   if (!token || token.length > 128) throw new HttpError(404, 'invite_not_found');
+  if (enforceAbuseLimit(response, context.abuseGuard.check(request, 'guest_bootstrap', [token]))) return;
   const body = await readJsonBody<Record<string, unknown>>(request);
   let visitorToken = visitorTokenFromRequest(request, body);
   let session = visitorToken ? await findSessionByVisitorToken(context.db, visitorToken) : null;
@@ -292,7 +309,8 @@ async function handleFrontendInviteCreate(request: IncomingMessage, response: Se
   });
 }
 
-async function handleFrontendUploadUnsupported(_request: IncomingMessage, response: ServerResponse) {
+async function handleFrontendUploadUnsupported(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
+  if (enforceAbuseLimit(response, context.abuseGuard.check(request, 'upload'))) return;
   sendJson(response, 501, { ok: false, error: 'server_generic_upload_unsupported' });
 }
 
@@ -345,7 +363,7 @@ export async function handleFrontendCompatRequest(
   }
 
   if (request.method === 'POST' && url.pathname === '/api/upload') {
-    await handleFrontendUploadUnsupported(request, response);
+    await handleFrontendUploadUnsupported(request, response, context);
     return true;
   }
 
