@@ -1,18 +1,18 @@
 # Cloudflare Customer Support Chat
 
-This project is being migrated from a Next.js/Vercel-style serverless chat app to a Cloudflare-native architecture.
+This project is a customer support chat system using a Cloudflare-native production path, with a separate `server-generic` self-host adapter under active productization.
 
-## Target Architecture
+## Current production architecture
 
 - Frontend: React + Vite SPA served by Cloudflare static assets.
-- API backend: Cloudflare Worker in `src/worker.ts`.
+- API backend: Cloudflare Worker in `src/worker.ts` with security hardening in `src/worker-secure.ts`.
 - Realtime: Durable Objects + WebSocket in `src/durable-objects/ChatRoom.ts`.
 - Database: D1 database named `customer_chat_db`.
 - Attachments/images: R2 bucket named `customer-chat-uploads`.
 - Sessions: HttpOnly signed cookies backed by D1 `admin_sessions` and `visitor_sessions` tables.
 - Deployment: Wrangler.
 
-## Feature Inventory
+## Feature inventory
 
 - Visitor chat entry: guest, registered visitor login, and visitor registration are preserved.
 - Admin login: username/password login uses HttpOnly signed cookies and D1 session lookup.
@@ -28,17 +28,32 @@ This project is being migrated from a Next.js/Vercel-style serverless chat app t
 - Database models/tables: `admins`, `admin_sessions`, `visitor_accounts`, `visitor_sessions`, `users`, `sessions`, `conversations` view, `messages`, `attachments`, `staff_messages`, `system_logs`, `settings`, and `rate_limits`.
 - Environment variables/secrets: `SESSION_SECRET`, `SUPER_ADMIN_USERNAME`, and `SUPER_ADMIN_PASSWORD`. Old Vercel/Postgres/KV environment variables are no longer required for the Cloudflare Worker path.
 
-## Migration Plan
+## Current development commands
 
-1. Keep the Vite SPA and Worker API as the primary Cloudflare deployment path.
-2. Leave old Next.js API route files in place only as historical/reference code; Cloudflare runtime uses `src/worker.ts`.
-3. Use D1 for accounts, sessions, conversations, messages, attachment metadata, settings, and rate limiting.
-4. Use Durable Object rooms for visitor/admin/staff realtime updates. Do not reintroduce polling, `router.refresh()`, `window.location.reload()`, `location.reload()`, or full-page reload loops for realtime state.
-5. Use R2 for images/files. Do not write uploads to local filesystem paths in production.
-6. Store only signed session ids in HttpOnly cookies; validate sessions against D1.
-7. Bootstrap the first super admin from secrets only when no super admin exists. Do not store real secrets in code.
+Use npm for the current repository. The root project intentionally has no `pnpm-lock.yaml`; CI installs root dependencies with npm.
 
-## Cloudflare Resources
+```bash
+# Local Worker development
+npm run dev
+
+# Frontend SPA only
+npm run dev:spa
+
+# Typecheck
+npm run typecheck
+
+# CI-safe lifecycle audit; does not access Cloudflare or D1
+npm run lifecycle:ci-check
+
+# Build and Wrangler dry-run
+npm run build
+```
+
+For Windows shells, use the existing `npm.cmd` / `npx.cmd` equivalents where needed.
+
+Do not use `npm run lifecycle:dry-run` for routine local audit or CI. It performs a Wrangler remote read-only D1 dry-run and requires explicit Cloudflare/D1 authorization.
+
+## Cloudflare resources
 
 After Wrangler login is confirmed, create the D1 database:
 
@@ -78,38 +93,37 @@ npx wrangler secret put SUPER_ADMIN_USERNAME
 npx wrangler secret put SUPER_ADMIN_PASSWORD
 ```
 
-Generate `SESSION_SECRET` as a long random value, for example with a password manager or a cryptographically secure random generator.
-
-## Local Development
-
-```bash
-pnpm install
-pnpm run db:migrate:local
-pnpm run cf:dev
-```
-
-Open the local Wrangler URL. `/` is the visitor chat and `/admin` is the admin console.
-
-For routine audit and CI validation, use `npm.cmd run lifecycle:ci-check`; it does not access Cloudflare or D1. `npm.cmd run lifecycle:dry-run` performs a Wrangler remote read-only D1 check and should only run in an explicitly authorized Cloudflare/D1 environment.
+Generate `SESSION_SECRET` as a long random value with a password manager or cryptographically secure random generator.
 
 ## Deployment
 
+Run checks before production deployment:
+
 ```bash
-pnpm run db:migrate:remote
-pnpm run cf:deploy
+npm run typecheck
+npm run build
+npx wrangler deploy
 ```
 
 Before remote migration/deploy, replace the placeholder D1 `database_id` in `wrangler.toml` with the real value from `npx wrangler d1 create customer_chat_db`.
 
-## Custom Domain
+For routine guarded deployment, prefer:
 
-Bind a custom domain in the Cloudflare Dashboard:
+```bash
+npm run deploy:safe
+```
 
-Cloudflare Dashboard -> Workers & Pages -> Worker -> Settings / Domains & Routes -> Add Custom Domain
+`deploy:safe` checks the current branch, working tree, obvious code issues, lifecycle CI-safe checks, typecheck, doctor, build, and pending migrations before deploying. It does not modify Wrangler secrets, does not delete R2 objects, and does not auto commit, push, or tag.
 
-## Regression Checklist
+## Self-hosting track
 
-- Admin does not become `ÎÞÕË»§` unless the D1-backed admin session is invalid or revoked.
+Self-hosting work lives under `server-generic/` and `deploy/linux/`. It is separate from the Cloudflare Worker production path. Use the documents in `deploy/linux/` and `docs/PRODUCTIZATION_INDEX.md` for the current self-hosting status.
+
+Do not use old SQLite, Socket.IO, PM2, `server.js`, `app/`, or `lib/` deployment instructions. Those legacy Next.js-era files have been removed.
+
+## Regression checklist
+
+- Admin does not become `æ— è´¦å·` unless the D1-backed admin session is invalid or revoked.
 - No full-page refresh loop is used for realtime chat state.
 - No polling flicker is used for chat updates.
 - Conversation A messages never appear in Conversation B.
@@ -118,12 +132,8 @@ Cloudflare Dashboard -> Workers & Pages -> Worker -> Settings / Domains & Routes
 - Mobile navigation does not log out admin.
 - Attachments upload to R2, are recorded in D1, and display correctly.
 
-## Notes
+## Security and secrets
 
-The old Next.js route files under `app/api` still exist as migration reference code, but the configured Cloudflare entrypoint is `src/worker.ts`. Avoid adding Node-only APIs such as `fs`, `net`, `child_process`, Express servers, Socket.IO servers, or Prisma to the Worker path.
+Do not commit or document `.dev.vars`, `.env.production`, secrets, cookies, Cloudflare tokens, real usernames, or real passwords.
 
-## Current Production Admin And Database Operations
-
-The current production system uses Cloudflare Worker + Vite + D1. Do not use legacy Postgres initialization or admin-creation scripts for production accounts.
-
-Administrator creation and password changes should be handled through the admin UI or a controlled D1/Worker operations process. Do not document or store real usernames, passwords, session secrets, tokens, or cookies in this repository.
+Administrator creation and password changes should be handled through the admin UI or a controlled D1/Worker operations process. Do not use legacy Postgres initialization or admin-creation scripts for production Cloudflare accounts.
