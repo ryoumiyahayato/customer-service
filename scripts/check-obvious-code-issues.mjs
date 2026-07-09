@@ -41,7 +41,7 @@ const srcFiles = () => readTrackedFiles(['src/**/*.ts', 'src/**/*.tsx', 'src/**/
 const deployCodeFiles = () => readTrackedFiles(['scripts/deploy-cloudflare-safe.mjs']);
 const trackedAll = () => readTrackedFiles([
   'src/**/*.ts', 'src/**/*.tsx', 'src/**/*.js', 'src/**/*.jsx',
-  'docs/**/*.md', 'docs/**/*.txt',
+  'docs/**/*.md', 'docs/**/*.txt', '*.md',
   '*.toml', '*.json', '*.js', '*.mjs', '*.ts', '*.diff', '*.patch',
   'scripts/**/*.mjs', 'deploy/**/*.ts', 'deploy/**/*.mjs', 'deploy/**/*.js',
   'server-generic/**/*.ts',
@@ -51,6 +51,12 @@ function checkNoLegacyNextScaffold() {
   const legacyFiles = gitTracked(['app/**', 'lib/**', 'middleware.ts', 'next.config.*', 'next-env.d.ts']);
   for (const file of legacyFiles) results.push(`  FAIL  Legacy Next.js scaffold file remains: ${file}`);
   check('No legacy Next.js scaffold files', legacyFiles.length === 0);
+}
+
+function checkNoStaleDeploymentArtifacts() {
+  const staleFiles = gitTracked(['START_HERE.md', 'docs/DEPLOYMENT_MANUAL_ZH.md', 'pnpm-lock.yaml']);
+  for (const file of staleFiles) results.push(`  FAIL  Stale deployment artifact should not be tracked: ${file}`);
+  check('No stale deployment artifacts', staleFiles.length === 0);
 }
 
 function checkNoPatchArtifacts() {
@@ -318,6 +324,7 @@ function run() {
   console.log('Checking obvious code issues...\n');
 
   checkNoLegacyNextScaffold();
+  checkNoStaleDeploymentArtifacts();
   checkNoPatchArtifacts();
   checkNoUnusedWorkerAuditShim();
   checkMergeConflictMarkers();
