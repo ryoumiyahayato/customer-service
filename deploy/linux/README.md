@@ -22,6 +22,8 @@
 - `Dockerfile`：构建通用服务器适配层并复制前端 `dist` 产物。
 - `app.env.example`：容器内应用变量示例。
 - `Caddyfile`：使用 `APP_DOMAIN` / `VISITOR_ROOT_DOMAIN` 的 HTTPS 自动证书和反向代理配置。
+- `preflight.sh`：真实 VPS 部署前只读预检查，不安装、不改配置、不启动服务、不跑迁移、不打印 secret。
+- `VPS_ACCEPTANCE.md`：真实 Ubuntu VPS 自托管部署验收 runbook。
 - `install.sh`：部署入口，执行 preflight、compose 配置检查、构建、启动和健康检查。
 - `healthcheck.sh`：只读部署后健康检查。
 - `backup.sh`：数据库和 storage 备份。
@@ -32,6 +34,18 @@
 
 不要把真实 `.env` 提交 git。不要把 secret、密码、token、cookie、生产数据明细或附件 key 写入日志、文档或聊天记录。
 
+## CI 与真实 VPS 验收入口
+
+Productization validation 已覆盖 local Docker self-host smoke：CI 会在 GitHub Actions ubuntu runner 中使用本地 Docker Compose 构建 app 镜像、启动 PostgreSQL、运行 server-generic PostgreSQL migrations、启动 app、等待 `/healthz`，并执行 `npm --prefix server-generic run e2e:local-smoke`。该 smoke 只使用 `127.0.0.1` 和 HTTP，不访问 Cloudflare、D1/R2 或真实域名。
+
+真实 Ubuntu VPS 自托管部署验收请看 `VPS_ACCEPTANCE.md`。在真实部署前，先进入本目录运行只读预检查：
+
+```bash
+./preflight.sh
+```
+
+`preflight.sh` 只检查环境和配置，不安装依赖，不修改系统配置，不启动服务，不执行 migration，不访问 Cloudflare/D1/R2，也不会打印 `.env` 中的 secret 值。不要提交 `.env`。
+
 ## 最小执行路径
 
 1. 准备 Linux VPS / 云服务器，开放 80 / 443 端口。
@@ -39,10 +53,11 @@
 3. 准备后台域名和访客根域 DNS，解析到服务器。
 4. 复制本目录到服务器部署目录。
 5. 复制 `.env.example` 为 `.env`，只在服务器本地填写真实部署变量。
-6. 可先执行 `./install.sh --self-check` 做非破坏性配置检查。
-7. 首次空库需要初始化 schema 时，执行 `./install.sh --migrate`。
-8. 已完成 schema 初始化时，执行 `./install.sh`。
-9. 健康检查通过后打开 `https://你的后台域名/setup`。
+6. 先执行 `./preflight.sh` 做只读 VPS 部署前检查。
+7. 可再执行 `./install.sh --self-check` 做非破坏性配置检查。
+8. 首次空库需要初始化 schema 时，执行 `./install.sh --migrate`。
+9. 已完成 schema 初始化时，执行 `./install.sh`。
+10. 健康检查通过后打开 `https://你的后台域名/setup`。
 
 当前通用服务器适配层已经具备 setup、admin auth、admin session、访客会话、文本消息、附件上传、基础 WebSocket 广播、lifecycle 骨架、服务端加密存储和 PostgreSQL migration 基础闭环。完整 read receipt、自动 runner 调度接线和生产数据迁移工具仍会在后续包继续推进。
 
