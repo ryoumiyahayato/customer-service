@@ -4,6 +4,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  abuseSessionPart,
+  abuseUsernamePart,
+  createAbuseGuard,
+  sendRateLimitResponse,
+} from './abuseGuard.js';
+import {
   handleAdminAttachmentDownload,
   handleAdminMessages,
   handleAdminSessionLifecycleAction,
@@ -40,6 +46,7 @@ const config = loadConfig();
 const db = createPostgresAdapter(config);
 const storage = createLocalStorage(config.storagePath);
 const websocketHub = createWebSocketHub();
+const abuseGuard = createAbuseGuard(config);
 const staticRoot = path.resolve(config.staticDir || path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist'));
 
 function contentType(filePath: string) {
@@ -51,6 +58,17 @@ function contentType(filePath: string) {
   if (filePath.endsWith('.png')) return 'image/png';
   if (filePath.endsWith('.webp')) return 'image/webp';
   return 'application/octet-stream';
+}
+
+function enforceAbuseLimit(response: ServerResponse, decision: ReturnType<typeof abuseGuard.check>) {
+  if (decision.allowed) return false;
+  sendRateLimitResponse(response, decision);
+  return true;
+}
+
+function enforceMessageAbuseLimits(request: IncomingMessage, response: ServerResponse, sessionId: string) {
+  if (enforceAbuseLimit(response, abuseGuard.check(request, 'message_ip'))) return true;
+  return enforceAbuseLimit(response, abuseGuard.check(request, 'message_session', [abuseSessionPart(sessionId)]));
 }
 
 async function serveStatic(request: IncomingMessage, response: ServerResponse, url: URL) {
@@ -98,18 +116,20 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === 'POST' && url.pathname === '/api/setup/initialize') {
+    if (enforceAbuseLimit(response, abuseGuard.check(request, 'setup_initialize'))) return;
     const body = await readJsonBody<Record<string, unknown>>(request);
     const result = await initializeSetup(config, db, body);
     sendJson(response, 201, result);
     return;
   }
 
-  if (await handleFrontendCompatRequest(request, response, url, { config, db, hub: websocketHub })) {
+  if (await handleFrontendCompatRequest(request, response, url, { config, db, hub: websocketHub, abuseGuard })) {
     return;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/admin/login') {
     const body = await readJsonBody<Record<string, unknown>>(request);
+    if (enforceAbuseLimit(response, abuseGuard.check(request, 'admin_login', [abuseUsernamePart(body)]))) return;
     const result = await loginAdmin(config, db, body);
     sendJson(
       response,
@@ -142,6 +162,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const visitorAttachmentSessionId = matchVisitorSessionAttachments(url.pathname);
   if (request.method === 'POST' && visitorAttachmentSessionId) {
+    if (enforceAbuseLimit(response, abuseGuard.check(request, 'upload', [abuseSessionPart(visitorAttachmentSessionId)]))) return;
     await handleCreateVisitorAttachment(config, request, response, db, storage, websocketHub, url, visitorAttachmentSessionId);
     return;
   }
@@ -162,6 +183,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const visitorMessagesSessionId = matchSessionMessages(url.pathname, '/api/visitor');
   if (visitorMessagesSessionId) {
+    if (request.method === 'POST' && enforceMessageAbuseLimits(request, response, visitorMessagesSessionId)) return;
     await handleVisitorMessages(request, response, config, db, websocketHub, visitorMessagesSessionId);
     return;
   }
@@ -179,6 +201,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const adminMessagesSessionId = matchSessionMessages(url.pathname, '/api/admin');
   if (adminMessagesSessionId) {
+    if (request.method === 'POST' && enforceMessageAbuseLimits(request, response, adminMessagesSessionId)) return;
     await handleAdminMessages(request, response, config, db, websocketHub, adminMessagesSessionId);
     return;
   }
