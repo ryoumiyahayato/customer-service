@@ -8,7 +8,7 @@
     "lifecycle:ci-check": "node scripts/lifecycle-ci-check.mjs",
     "check-session-lifecycle": "node scripts/check-session-lifecycle.mjs",
     "check:lifecycle-boundaries": "node scripts/check-lifecycle-sql-boundaries.mjs",
-    "check:business-closures": "node scripts/check-high-risk-business-closures.mjs",
+    "check:business-closures": "node scripts/check-high-risk-business-closures.mjs && node scripts/check-lifecycle-sql-boundaries.mjs",
     "bootstrap:cloudflare": "node scripts/bootstrap-cloudflare.mjs",
     "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
     "build": "vite build && wrangler deploy --dry-run --outdir .wrangler-dry-run",
