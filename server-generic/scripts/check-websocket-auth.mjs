@@ -9,7 +9,7 @@ const indexSource = await readFile(new URL('../src/index.ts', import.meta.url), 
 const visitorSource = await readFile(new URL('../../src/visitor/GuestChat.tsx', import.meta.url), 'utf8');
 const adminSource = await readFile(new URL('../../src/admin/AdminDashboard.tsx', import.meta.url), 'utf8');
 
-assert.match(websocketSource, /\/api\/ws\/conversations/);
+assert.ok(websocketSource.includes("/^\\/api\\/ws\\/conversations\\/"));
 assert.match(websocketSource, /requireCurrentAdmin/);
 assert.match(websocketSource, /requireVisitorSession/);
 assert.match(websocketSource, /VISITOR_COOKIE_NAME = 'support_visitor'/);
