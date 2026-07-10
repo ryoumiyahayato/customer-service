@@ -101,7 +101,7 @@ export function mapFrontendSession(session: ChatSessionSummary) {
   };
 }
 
-export function mapFrontendMessage(message: ChatMessage) {
+export function mapFrontendMessage(message: ChatMessage, clientMessageIdOverride?: string | null) {
   const senderType = message.senderType === 'admin' ? 'OPERATOR' : 'VISITOR';
   const attachment = message.attachments[0] || null;
   return {
@@ -121,7 +121,7 @@ export function mapFrontendMessage(message: ChatMessage) {
     read_at: message.readAt,
     created_at: message.createdAt,
     quote_message_id: null,
-    client_message_id: message.clientMessageId,
+    client_message_id: clientMessageIdOverride ?? message.clientMessageId ?? null,
     deduped: Boolean(message.deduped),
     attachments: message.attachments,
   };
