@@ -43,7 +43,7 @@ assert.ok(lifecycle.indexOf('env.UPLOADS!.delete(key)') < lifecycle.indexOf('SET
 
 assert.match(websocket, /requireCurrentAdmin/);
 assert.match(websocket, /requireVisitorSession/);
-assert.match(websocket, /\/api\/ws\/conversations/);
+assert.ok(websocket.includes("/^\\/api\\/ws\\/conversations\\/"));
 assert.doesNotMatch(websocket, /type\s*===\s*['"]subscribe['"]/);
 assert.match(websocket, /client_messages_not_supported/);
 assert.match(genericIndex, /createWebSocketHub\(db\)/);
