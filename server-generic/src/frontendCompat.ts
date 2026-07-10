@@ -20,6 +20,7 @@ import type { WebSocketHub } from './websocket.js';
 
 const VISITOR_COOKIE_NAME = 'support_visitor';
 const VISITOR_COOKIE_TTL = 60 * 60 * 24 * 30;
+const MAX_READ_RECEIPT_MESSAGE_IDS = 500;
 
 export const FRONTEND_COMPAT_ROUTES = [
   'POST /api/auth/login',
@@ -148,6 +149,8 @@ function mapFrontendInvite(invite: PublicInvite) {
     id: invite.id,
     created_by_admin_id: invite.createdByAdminId,
     source_admin_id: invite.sourceAdminId,
+    source_operator_id: invite.sourceAdminId,
+    sourceOperatorId: invite.sourceAdminId,
     session_id: invite.sessionId,
     expires_at: invite.expiresAt,
     consumed_at: invite.consumedAt,
@@ -175,6 +178,24 @@ function matchGuestBootstrap(pathname: string): string | null {
 function matchInviteRevoke(pathname: string): string | null {
   const match = /^\/api\/invites\/([^/]+)\/revoke$/.exec(pathname);
   return match ? decodeURIComponent(match[1]) : null;
+}
+
+function normalizeRequestedMessageIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new HttpError(400, 'message_ids_required');
+  if (value.length > MAX_READ_RECEIPT_MESSAGE_IDS) throw new HttpError(400, 'invalid_message_ids');
+
+  const messageIds: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new HttpError(400, 'invalid_message_ids');
+    const id = raw.trim();
+    if (!id || !isSafeId(id)) throw new HttpError(400, 'invalid_message_ids');
+    if (!seen.has(id)) {
+      seen.add(id);
+      messageIds.push(id);
+    }
+  }
+  return messageIds;
 }
 
 function enforceAbuseLimit(response: ServerResponse, decision: ReturnType<AbuseGuard['check']>) {
@@ -211,7 +232,7 @@ async function requireVisitorIdentity(
 function broadcastReadReceipt(context: FrontendCompatContext, sessionId: string, messageIds: string[], readAt: string | null) {
   if (!messageIds.length) return;
   context.hub.broadcastToSession(sessionId, {
-    type: 'messages_read',
+    type: 'messages:read',
     sessionId,
     messageIds,
     readAt,
@@ -264,7 +285,11 @@ async function handleFrontendSessionMessages(
   const receipt = await markSessionMessagesRead(context.db, sessionId, readerType);
   broadcastReadReceipt(context, sessionId, receipt.messageIds, receipt.readAt);
   const messages = await listSessionMessages(context.db, sessionId, context.config.encryption);
-  sendJson(response, 200, { ok: true, messages: messages.map(mapFrontendMessage), read: receipt });
+  sendJson(response, 200, {
+    ok: true,
+    messages: messages.map((message) => mapFrontendMessage(message)),
+    read: receipt,
+  });
 }
 
 async function handleFrontendCustomerRead(
@@ -274,8 +299,10 @@ async function handleFrontendCustomerRead(
   sessionId: string,
 ) {
   if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
-  await requireVisitorIdentity(context.db, sessionId, request);
-  const receipt = await markSessionMessagesRead(context.db, sessionId, 'visitor');
+  const body = await readJsonBody<Record<string, unknown>>(request);
+  await requireVisitorIdentity(context.db, sessionId, request, body);
+  const requestedMessageIds = normalizeRequestedMessageIds(body.messageIds ?? body.message_ids);
+  const receipt = await markSessionMessagesRead(context.db, sessionId, 'visitor', requestedMessageIds);
   broadcastReadReceipt(context, sessionId, receipt.messageIds, receipt.readAt);
   sendJson(response, 200, { ok: true, ...receipt });
 }
@@ -360,7 +387,7 @@ async function handleFrontendGuestBootstrap(
       invite: mapFrontendInvite(consumed.invite),
       visitorId: consumed.visitorToken,
       session: mapFrontendSession(consumed.session),
-      messages: messages.map(mapFrontendMessage),
+      messages: messages.map((message) => mapFrontendMessage(message)),
     },
     { 'set-cookie': serializeVisitorCookie(consumed.visitorToken) },
   );
@@ -369,8 +396,15 @@ async function handleFrontendGuestBootstrap(
 async function handleFrontendInviteCreate(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
   const admin = await requireAdmin(context.db, request);
   const body = await readJsonBody<Record<string, unknown>>(request);
+  const requestedSourceAdminId = (
+    optionalString(body.sourceOperatorId) ||
+    optionalString(body.source_operator_id) ||
+    optionalString(body.sourceAdminId) ||
+    optionalString(body.source_admin_id)
+  )?.trim() || null;
+  const sourceAdminId = requestedSourceAdminId || (admin.role === 'OPERATOR' ? admin.id : null);
   const result = await createInvite(context.db, admin.id, {
-    sourceAdminId: optionalString(body.sourceAdminId) || optionalString(body.source_admin_id),
+    sourceAdminId,
     expiresInSeconds: body.expiresInSeconds ?? body.expires_in_seconds,
   });
   sendJson(response, 201, {

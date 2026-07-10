@@ -160,11 +160,12 @@ export async function createSessionMessage(
   return db.withTransaction(async (client) => {
     const session = await client.query<{
       status: string;
+      archived_at: Date | null;
       deleted_at: Date | null;
       purged_at: Date | null;
       history_cleared_at: Date | null;
     }>(
-      `SELECT status, deleted_at, purged_at, history_cleared_at
+      `SELECT status, archived_at, deleted_at, purged_at, history_cleared_at
          FROM chat_sessions
         WHERE id = $1
         FOR SHARE`,
@@ -172,7 +173,15 @@ export async function createSessionMessage(
     );
     const current = session.rows[0];
     if (!current) throw new HttpError(404, 'session_not_found');
-    if (current.status === 'closed' || current.status === 'archived' || current.deleted_at || current.purged_at || current.history_cleared_at) {
+    const normalizedStatus = current.status.toLowerCase();
+    if (
+      normalizedStatus === 'closed' ||
+      normalizedStatus === 'archived' ||
+      current.archived_at ||
+      current.deleted_at ||
+      current.purged_at ||
+      current.history_cleared_at
+    ) {
       throw new HttpError(409, 'session_ended');
     }
 
@@ -225,16 +234,25 @@ export async function markSessionMessagesRead(
   db: PostgresAdapter,
   sessionId: string,
   readerType: 'visitor' | 'admin',
+  requestedMessageIds?: string[],
 ): Promise<{ messageIds: string[]; readAt: string | null }> {
   const senderType = readerType === 'admin' ? 'visitor' : 'admin';
+  const messageIds = requestedMessageIds === undefined
+    ? null
+    : [...new Set(requestedMessageIds.map((id) => id.trim()).filter(Boolean))];
+  if (messageIds && messageIds.length === 0) return { messageIds: [], readAt: null };
+
+  const requestedFilter = messageIds ? 'AND id::text = ANY($3::text[])' : '';
+  const params: unknown[] = messageIds ? [sessionId, senderType, messageIds] : [sessionId, senderType];
   const rows = await db.query<{ id: string; read_at: Date }>(
     `UPDATE messages
         SET read_at = COALESCE(read_at, now()), updated_at = now()
       WHERE session_id = $1
         AND sender_type = $2
         AND read_at IS NULL
+        ${requestedFilter}
       RETURNING id, read_at`,
-    [sessionId, senderType],
+    params,
   );
   return {
     messageIds: rows.map((row) => row.id),

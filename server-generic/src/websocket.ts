@@ -19,7 +19,7 @@ export type WebSocketBroadcast =
       message: ChatMessage;
     }
   | {
-      type: 'messages_read';
+      type: 'messages:read';
       sessionId: string;
       messageIds: string[];
       readAt: string | null;

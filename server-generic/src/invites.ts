@@ -1,4 +1,5 @@
-import { generateSessionToken, generateVisitorToken, hashSessionToken, hashVisitorToken } from './crypto.js';
+import { randomBytes } from 'node:crypto';
+import { generateVisitorToken, hashSessionToken, hashVisitorToken } from './crypto.js';
 import { mapChatSession, type ChatSessionSummary } from './chat.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError } from './http.js';
@@ -6,6 +7,8 @@ import { HttpError } from './http.js';
 const DEFAULT_INVITE_TTL_SECONDS = 15 * 60;
 const MIN_INVITE_TTL_SECONDS = 60;
 const MAX_INVITE_TTL_SECONDS = 24 * 60 * 60;
+
+const generateInviteToken = () => randomBytes(20).toString('hex');
 
 type InviteRow = {
   id: string;
@@ -107,7 +110,7 @@ export async function createInvite(
   await requireActiveSourceAdmin(db, sourceAdminId);
 
   const ttlSeconds = normalizeTtlSeconds(input.expiresInSeconds);
-  const token = `shi_${generateSessionToken()}`;
+  const token = generateInviteToken();
   const tokenHash = hashSessionToken(token);
   const rows = await db.query<InviteRow>(
     `INSERT INTO invite_links (
