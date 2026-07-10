@@ -91,12 +91,18 @@ export function isLocalSelfHostDomain(value: string): boolean {
 }
 
 export function assertExperimentalPublicExposure(config: GenericServerConfig, env: NodeJS.ProcessEnv = process.env) {
-  if (env.NODE_ENV !== 'production') return;
-  const configuredDomains = [config.appDomain, config.visitorRootDomain].filter(Boolean);
-  const publicExposureConfigured = configuredDomains.some((domain) => !isLocalSelfHostDomain(domain));
-  if (!publicExposureConfigured || config.experimentalPublicAcknowledged) return;
+  if (env.NODE_ENV !== 'production' || config.experimentalPublicAcknowledged) return;
+
+  const requiredDomains = [config.appDomain, config.visitorRootDomain];
+  const domainsMissing = requiredDomains.some((domain) => !domain.trim());
+  const allDomainsLocal = !domainsMissing && requiredDomains.every((domain) => isLocalSelfHostDomain(domain));
+  if (allDomainsLocal) return;
+
+  const reason = domainsMissing
+    ? 'required production domains are missing'
+    : 'public domains are configured';
   throw new Error(
-    `server-generic public exposure is blocked because it remains experimental; set SELF_HOST_EXPERIMENTAL_PUBLIC_ACK=${EXPERIMENTAL_PUBLIC_ACK} only after reviewing the documented risks`,
+    `server-generic public exposure is blocked because ${reason} and the adapter remains experimental; set SELF_HOST_EXPERIMENTAL_PUBLIC_ACK=${EXPERIMENTAL_PUBLIC_ACK} only after reviewing the documented risks`,
   );
 }
 
