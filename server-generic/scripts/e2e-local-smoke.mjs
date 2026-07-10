@@ -59,6 +59,8 @@ const visitorMessage = `local smoke visitor ${Date.now()}`;
 const adminMessage = `local smoke admin ${Date.now()}`;
 const visitorClientMessageId = `visitor-${Date.now()}`;
 const adminClientMessageId = `admin-${Date.now()}`;
+const readTargetClientMessageId = `admin-read-target-${Date.now()}`;
+const unreadControlClientMessageId = `admin-unread-control-${Date.now()}`;
 
 function splitSetCookieHeader(header) {
   return String(header).split(/,(?=\s*[^;,=]+=)/g).map(value => value.trim()).filter(Boolean);
@@ -139,6 +141,7 @@ function extractInvite(inviteResponse) {
   const token = typeof invite.token === 'string' ? invite.token : '';
   const id = typeof invite.id === 'string' ? invite.id : '';
   assert(token && token.length < 256, 'invite token missing from response');
+  assert(/^[a-f0-9]{40}$/.test(token), 'invite token is not compatible with the visitor subdomain router');
   assert(id, 'invite id missing from response');
   return { token, id };
 }
@@ -307,13 +310,46 @@ async function main() {
   assert(countClientMessage(visitorMessages.messages, adminClientMessageId) === 1, 'admin idempotency created duplicate messages');
   logPass('visitor reads admin reply');
 
+  const readTarget = await request('/api/messages', {
+    method: 'POST',
+    body: {
+      sessionId,
+      senderType: 'OPERATOR',
+      content: `${adminMessage} read target`,
+      clientMessageId: readTargetClientMessageId,
+    },
+    jar: adminJar,
+    expected: [201],
+  });
+  const unreadControl = await request('/api/messages', {
+    method: 'POST',
+    body: {
+      sessionId,
+      senderType: 'OPERATOR',
+      content: `${adminMessage} unread control`,
+      clientMessageId: unreadControlClientMessageId,
+    },
+    jar: adminJar,
+    expected: [201],
+  });
+  const readTargetId = readTarget?.message?.id;
+  const unreadControlId = unreadControl?.message?.id;
+  assert(typeof readTargetId === 'string' && typeof unreadControlId === 'string', 'read receipt test messages missing ids');
+
   const readReceipt = await request(`/api/sessions/${encodeURIComponent(sessionId)}/customer-read`, {
     method: 'POST',
-    body: {},
+    body: { messageIds: [readTargetId] },
     jar: visitorJar,
   });
-  assert(readReceipt?.ok === true && Array.isArray(readReceipt.messageIds), 'customer read receipt failed');
-  logPass('customer read receipt');
+  assert(
+    readReceipt?.ok === true &&
+      Array.isArray(readReceipt.messageIds) &&
+      readReceipt.messageIds.length === 1 &&
+      readReceipt.messageIds[0] === readTargetId &&
+      !readReceipt.messageIds.includes(unreadControlId),
+    'customer read receipt did not honor the requested message ids',
+  );
+  logPass('customer read receipt id filtering');
 
   await request('/api/auth/logout', { method: 'POST', jar: adminJar, expected: [204], skipJson: true });
   logPass('admin logout');
