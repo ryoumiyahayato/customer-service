@@ -1,191 +1,152 @@
 # 产品化文档索引
 
-当前 Cloudflare 版已上线，作为产品化路线的基准版本。后续按大包推进，每轮完成可运行骨架、自检、审计和提交。
+当前 Cloudflare Worker 版是生产基准；`server-generic` 是正在补齐一致性的自托管预览后端。目录或 scaffold 存在不代表产品能力已经完成，实际状态以自动化验收和下列文档为准。
 
-## 文档入口
+## 当前权威文档
 
+- [v1 生命周期与双后端一致性 ADR](./ADR-001-session-lifecycle-and-backend-parity.md)
+- [v1 整改状态](./V1_REMEDIATION_STATUS.md)
 - [产品化路线图](./PRODUCTIZATION_ROADMAP_TO_2026-07-20.md)
-- [v0.4 通用服务器部署架构](./SERVER_DEPLOYMENT_ARCHITECTURE_v0.4.md)
-- [v0.6 Windows 部署向导 EXE](./WINDOWS_DEPLOY_WIZARD_v0.6.md)
-- [v0.7 客户端与 PWA](./CLIENTS_AND_PWA_v0.7.md)
-- [v0.8 服务端加密存储](./SERVER_SIDE_ENCRYPTION_v0.8.md)
+- [通用服务器部署架构](./SERVER_DEPLOYMENT_ARCHITECTURE_v0.4.md)
+- [Windows 部署向导边界](./WINDOWS_DEPLOY_WIZARD_v0.6.md)
+- [客户端与 PWA 边界](./CLIENTS_AND_PWA_v0.7.md)
+- [服务端加密存储](./SERVER_SIDE_ENCRYPTION_v0.8.md)
 - [产品化最终审计](./PRODUCTIZATION_FINAL_AUDIT.md)
 
-## 部署骨架
+`PROJECT_STATUS_v0.1.md` 仅是历史快照，不再作为状态机或发布验收依据。
 
-- `deploy/linux/README.md`
-- `deploy/linux/.env.example`
+## 架构基线
+
+### Cloudflare 生产路径
+
+- React + Vite 前端。
+- Cloudflare Worker API。
+- D1 数据库。
+- R2 附件对象。
+- Durable Objects + WebSocket。
+- Scheduled Trigger 生命周期任务。
+
+已经完成的高风险修复包括：
+
+- SQLite 时间比较统一使用 `datetime()`。
+- purge 先原子认领资格，再执行 R2、附件和消息清理，并支持重试。
+- 禁用客服撤销会话并解除当前分配，不删除客户会话或历史主体。
+- 物理删除客服默认拒绝。
+- 图片附件按会话、上传者和未绑定状态认领。
+- 图片消息相同 `clientMessageId` 重试保持幂等。
+
+Cloudflare deploy、远程 D1 migration、R2 删除和生产 lifecycle 仍必须单独授权。
+
+### server-generic 自托管预览路径
+
+当前具备：
+
+- Node.js + PostgreSQL。
+- setup、管理员认证和 visitor token hash。
+- 持久邀请表，数据库只保存 token hash。
+- 邀请创建人、来源客服、有效期、撤销、单次消费和原浏览器恢复。
+- PostgreSQL 事务与 `FOR UPDATE` 保护并发邀请消费。
+- 访客文本消息和管理员回复。
+- 发送者维度 `clientMessageId` 幂等。
+- `(created_at, id)` 稳定消息排序。
+- 基础 read receipt。
+- WebSocket 升级鉴权、URL 固定房间、心跳和载荷上限。
+- 本地 Docker Compose PostgreSQL migration 与 E2E。
+- 新消息正文和附件展示文件名 AES-256-GCM 加密基础。
+
+当前仍缺少：
+
+- 与现有前端完整兼容的图片上传、显示和下载。
+- 自动 lifecycle write runner 与完整归档、回收、恢复、purge 对齐。
+- 高风险管理操作审计日志。
+- 完整客服分配和私有会话权限模型。
+- PostgreSQL、storage 与 encryption key 联合备份恢复故障测试。
+- 真实 VPS、Caddy HTTPS 和资源限制验收。
+
+因此 `server-generic` 仍不得宣传为 Cloudflare 生产版的完整替代。
+
+## 会话生命周期
+
+唯一状态模型：
+
+| Bucket | 数据语义 | UI |
+|---|---|---|
+| `active` | `PENDING` / `OPEN`，未归档、未删除、未清理 | 进行中 |
+| `archived` | `status='ARCHIVED'`，有 `closed_at`、`archived_at` | 已归档 |
+| `trash` | `deleted_at IS NOT NULL`，内容尚可恢复 | 回收站 |
+| `purged` | 消息和附件已实际完成清理，只保留最小审计壳 | 不显示 |
+
+`CLOSED` 只作为旧数据兼容状态，不再作为新写入状态。
+
+核心规则：
+
+1. `active -> archived` 写入 `ARCHIVED`、`closed_at` 和 `archived_at`。
+2. `archived -> trash` 只写入删除标记，不立即删除内容。
+3. `trash -> archived` 清除删除标记，保留归档时间，不恢复为进行中。
+4. `trash -> purged` 必须先认领资格，再清理文件、附件元数据和消息；任一步失败都保持可重试，不能报告完全成功。
+5. 已 purged 会话不能恢复、发送消息、上传或下载附件。
+
+## 部署资产
+
+Linux：
+
 - `deploy/linux/docker-compose.yml`
+- `deploy/linux/docker-compose.local.yml`
 - `deploy/linux/Caddyfile`
 - `deploy/linux/install.sh`
 - `deploy/linux/healthcheck.sh`
+- `deploy/linux/preflight.sh`
 - `deploy/linux/backup.sh`
 - `deploy/linux/restore.sh`
 - `deploy/linux/upgrade.sh`
-- `server-generic/scripts/migrate.mjs`
-- `deploy/windows-wizard/README.md`
-- `deploy/windows-wizard/package.json`
-- `deploy/windows-wizard/examples/deploy-plan.example.json`
-- `deploy/desktop-client/README.md`
-- `deploy/desktop-client/package.json`
-- `deploy/desktop-client/examples/client-config.example.json`
-- `deploy/android-shell/README.md`
-- `deploy/android-shell/app/src/test/README.md`
-- `deploy/android-shell/settings.gradle`
-- `deploy/android-shell/build.gradle`
-- `deploy/android-shell/app/build.gradle`
-- `deploy/android-shell/app/src/main/AndroidManifest.xml`
-- `deploy/android-shell/app/src/main/java/net/customerchat/app/MainActivity.kt`
-- `deploy/android-shell/app/src/main/java/net/customerchat/app/AppConfig.kt`
-- `deploy/android-shell/app/src/main/java/net/customerchat/app/WebViewSecurity.kt`
-- `server-generic/src/encryption.ts`
-- `server-generic/src/encryptionConfig.ts`
-- `server-generic/migrations/0004_encryption_foundation.sql`
+- `deploy/linux/VPS_ACCEPTANCE.md`
 
-## 推进原则
+自托管服务：
 
-- Cloudflare 线上版保持稳定。
-- 通用服务器版先做 MVP。
-- Windows / PWA / 客户端 EXE / Android APK 先做入口壳。
-- 服务端加密先覆盖新消息。
-- 高风险操作继续单独授权。
+- `server-generic/src/`
+- `server-generic/migrations/`
+- `server-generic/scripts/e2e-local-smoke.mjs`
 
-## Windows 部署向导状态
+客户端与包装层：
 
-Windows 部署向导已进入 MVP scaffold：当前是独立 CLI/Tauri-ready package，可生成脱敏部署计划并运行 smoke；已新增真实 SSH / SFTP adapter 第一包，尚未打包真实 EXE。
+- `deploy/windows-wizard/`
+- `deploy/desktop-client/`
+- `deploy/android-shell/`
+- PWA manifest、service worker 和 offline page
 
-Windows 部署向导真实 SSH adapter 已进入 MVP：当前保留 mock / dry-run，新增 real SSH / SFTP 上传 `deploy/linux`、远程 `install.sh --self-check`、`--dry-run` 和 opt-in `--migrate` 流程；真实连接必须显式 `--real` 且计划文件 `dryRun=false`。
+## 包装层当前边界
 
-## PWA 与桌面客户端状态
+- Windows 部署向导：CLI/Tauri-ready scaffold，有 mock、dry-run 和显式 real SSH adapter；未完成正式 GUI/EXE。
+- PWA：有安装与离线基础，不缓存 API、WebSocket 或敏感查询；未完成推送和完整浏览器矩阵。
+- 桌面客户端：启动壳和 package check；未完成正式安装包、托盘、通知和更新。
+- Android：Gradle/Kotlin/WebView scaffold；未完成签名、附件选择、下载和实机发布验收。
 
-PWA 已进入 MVP：包含 manifest、service worker、offline page、图标和生产注册入口；service worker 只缓存静态资源和离线页，不缓存 API、非 GET、WebSocket 或带敏感查询参数的 URL。桌面客户端 EXE 壳已进入可打包准备第一包：当前是独立 CLI/Tauri-ready package，可生成脱敏启动计划、运行 smoke、运行 package check，并通过示例配置说明后台地址配置方式；尚未打包真实 EXE，也未接入 Tauri/Electron GUI。
+## CI 验证
 
-## Android APK 壳状态
+`.github/workflows/productization-validation.yml` 当前覆盖：
 
-Android APK 壳已进入可构建准备第一包：当前是独立 Gradle / Kotlin / WebView 工程，默认使用占位 HTTPS URL，只声明 `INTERNET` 权限，包含 URL scheme 白名单、禁用 file/content access、不注入 JavaScript bridge、生产 cleartext 默认禁用和敏感 URL 脱敏等基础安全边界；README 已说明 Gradle / Android SDK 缺失时的报告口径和 release signing 占位。尚未做真实签名打包、应用商店分发、原生通知、文件选择器、下载管理和自动更新。
+- root 依赖、typecheck、doctor、build。
+- 管理端消息竞态、生命周期、高风险业务闭环和 obvious checks。
+- `server-generic` typecheck、build、smoke。
+- Linux shell 语法和 Docker Compose 静态配置。
+- Windows 向导 dry-run。
+- 桌面客户端 package check。
+- Android shell 静态检查。
+- 临时 PostgreSQL migration、本地 app 启动、healthz 和 self-host E2E。
 
-## 服务端加密存储状态
+这些检查不等同于真实 Cloudflare、真实 VPS、生产 migration、生产 purge、正式 EXE 或 APK 验收。
 
-服务端加密存储已进入 MVP 实现：`server-generic` 当前支持新消息正文 AES-256-GCM 加密、新附件展示文件名元数据加密、旧明文字段兼容读取、密钥版本标记和 smoke 自检。当前不迁移旧数据，不加密附件内容本体；`ENCRYPTION_KEY` 必须由服务器环境变量提供，备份恢复必须同时保护密钥管理记录。
+## 高风险操作边界
 
-## Linux 部署闭环状态
+普通审计和代码 PR 不执行：
 
-Linux 部署脚本已进入接近真实 VPS 可运行的最小闭环：`install.sh` 支持 self-check、dry-run 和显式 `--migrate`，`healthcheck.sh` 只读输出安全 setup 枚举，`backup.sh` 默认不备份 `.env`，`restore.sh` 强确认后才覆盖数据，`upgrade.sh` 默认不运行 migration。
+- Cloudflare deploy。
+- 远程 D1/PostgreSQL migration。
+- R2 或生产 storage 删除。
+- 生产 lifecycle、purge 或 restore。
+- Secret、Cookie、Token 或 encryption key 修改。
+- SSH/VPS 操作。
+- 真实 setup initialize。
+- 正式 EXE/APK 签名和发布。
 
-## GitHub Actions Linux CI 验证状态
-
-已新增 `.github/workflows/productization-validation.yml`，在 `ubuntu-latest` 上补足 Windows LTSC 本机缺少 bash、Docker 和 Android SDK 时的验证缺口。当前覆盖 root、lifecycle CI-safe validation、`server-generic`、`deploy/linux` bash 语法、Docker Compose config、Windows 部署向导 dry-run、桌面客户端 package-check 和 Android shell 静态文件检查。
-
-该 lifecycle CI-safe check 不访问 Cloudflare 或 D1，只验证安全边界和静态约束；普通 audit/CI 默认使用 `npm.cmd run lifecycle:ci-check`。本地或授权环境中的 `npm run lifecycle:dry-run` 仍用于真实 Wrangler read-only D1 dry-run，必须有明确 Cloudflare/D1 授权，普通 audit/CI 不应运行。该 CI 不是真实 VPS 或真实 Cloudflare/D1 验证，不执行 Cloudflare deploy，不跑 production migration，不真实 SSH，不生成 APK，也不验证真实 Caddy HTTPS；真实 VPS 端到端部署仍需后续单独授权执行。
-
-## 最终封板审计状态
-
-最终审计入口见 [产品化最终审计](./PRODUCTIZATION_FINAL_AUDIT.md)。合并 main 和创建 tag 前，必须在 GitHub Actions 页面确认最新 `productization-validation` workflow 为绿色；本机未安装 `gh`，且公开 GitHub API 无法读取该仓库 Actions 状态。
-
-## v0.8.2-chat-link-and-copy-enhancement
-
-本需求仅作为 v0.8.1-security-audit-fixes 封板后的后续聊天体验规划，不在本轮实现代码、不调整既有安全修复、不引入文件上传能力。
-
-核心需求只有两个：
-
-1. 访客端可以复制客服发来的文字。
-   - 被邀请进来的访客应能复制客服发送的聊天文字，包括普通文字、说明文字和链接文本。
-   - UI 不应阻止文本选择和复制。
-   - 如果后续增加消息气泡菜单，可以提供“复制”按钮。
-   - 复制内容必须是原始完整文本，不得使用截断后的展示文本。
-
-2. 客服端可以发送 HTTPS 链接，访客点击后跳转。
-   - 客服可以发送下载页链接、官网链接、说明页链接等通用 HTTPS URL。
-   - 访客端收到后，HTTPS 链接显示为可点击超链接。
-   - 访客点击后跳转到对应网页，由该网页提供下载或说明。
-   - 是否能下载、打开或安装，由访客设备、浏览器、操作系统和安全策略决定。
-   - 本系统不负责自动安装，也不绕过 iOS/iPadOS/Android/Windows/macOS 的安装限制。
-
-范围收缩：
-
-- 不做文件上传。
-- 不做服务器存文件。
-- 不做服务器直接发送安装包。
-- 不做 `.apk`、`.exe`、`.zip`、`.pdf` 等文件附件增强。
-- 不支持 `.ipa`。
-- 不让服务器下载、缓存、解析、执行、扫描或转存外部文件。
-- 下载文件应由外部下载页或客户自己的下载地址负责。
-- 本系统只负责聊天消息、链接展示、点击跳转和复制能力。
-
-HTTPS 与安全边界：
-
-- 只允许 `https://` 链接渲染为可点击链接。
-- `http://` 明文链接不应渲染为可点击链接；后续如做发送校验，应拒绝并提示改用 `https://`。
-- 不要盲目把任意 `http://` 自动改成 `https://` 后发送，因为无法保证目标网站支持 HTTPS。
-- 对本系统自己的 admin/chat 域名，应强制 HTTPS；HTTP 访问由 Caddy/部署层重定向到 HTTPS 或拒绝。
-- 禁止 `javascript:`、`data:`、`file:`、`vbscript:`、`chrome:`、`about:`、`blob:` 等非 HTTPS scheme。
-- 用户输入必须安全转义，不允许把聊天消息直接作为 HTML 注入。
-- 链接使用 `target="_blank"` 和 `rel="noopener noreferrer"`。
-- 长链接 UI 可以截断显示，但真实 `href` 和复制内容必须保留完整 URL。
-- 不做链接预览，避免 SSRF、隐私泄露和外部请求风险。
-- 日志不要记录完整敏感 URL query，避免 `token`、`code`、`session`、`key` 等参数泄露。
-
-建议分期：
-
-Phase 1:
-
-- 访客端文字可选择、可复制。
-- HTTPS URL 自动识别。
-- 可点击跳转。
-- 复制完整链接。
-- 禁止 HTTP 明文链接可点击。
-- 禁止危险 scheme。
-- XSS 安全转义。
-- 不做链接预览。
-- 不做文件上传。
-
-Phase 2:
-
-- 可选：消息气泡“复制文本”按钮。
-- 可选：链接旁边“复制链接”按钮。
-- 可选：客服发送链接时做 HTTPS 校验提示。
-- 可选：管理员配置是否允许发送外部链接。
-
-Phase 3:
-
-- 可选：外部下载链接风险提示。
-- 可选：可配置的允许域名 allowlist。
-- 可选：链接点击审计，但不得记录敏感 query。
-
-## 会话生命周期（Session Lifecycle）
-
-### 状态模型
-
-会话生命周期经过统一后，共有 4 个状态（bucket），其中第 4 个对用户不可见：
-
-| 业务语义 | Bucket | 数据库特征 | UI 显示 |
-|---------|--------|-----------|--------|
-| 进行中 | active | `deleted_at IS NULL`, `purged_at IS NULL`, `archived_at IS NULL`, status 为 PENDING/OPEN | 进行中列表 |
-| 已归档 | archived | `deleted_at IS NULL`, `purged_at IS NULL`, `archived_at IS NOT NULL`, 或 status 为 CLOSED/ARCHIVED | 已归档列表 |
-| 回收站 | trash | `deleted_at IS NOT NULL`, `purged_at IS NULL` | 回收站列表 |
-| 已清理 | purged | `purged_at IS NOT NULL` | 不显示 |
-
-### 核心规则
-
-1. **自动归档**：进行中会话超过 24 小时无新活动（fallback: `updated_at` → `created_at`），生命周期任务自动将其归档。
-2. **回收站自动清除**：回收站会话 `deleted_at` 超过 24 小时后，生命周期任务设置 `purged_at`，使其在所有列表中消失。
-3. **手动结束/归档同一逻辑**：手动点击"结束会话"、手动点击"归档"、自动 24h 生命周期，均调用同一核心函数 `archiveSession()`，设置 `status='ARCHIVED'`、`closed_at`、`archived_at`。
-4. **恢复语义**：从回收站恢复的会话回到"已归档"（不清除 `archived_at`），不回到"进行中"。
-5. **列表过滤**：所有会话列表 API 过滤 `purged_at IS NOT NULL` 的会话。
-
-### 生命周期任务
-
-每小时运行一次（`crons = ["0 * * * *"]`），执行：
-1. `autoArchiveActiveSessions()` — 归档 24 小时无活动的进行中会话
-2. `purgeTrashSessions()` — 清除 24 小时前的回收站会话
-
-日志只输出聚合计数（`archivedCount`, `purgedCount`, `errorCount`），不记录 message body、session ID、token、R2 key。
-
-### 测试
-
-```bash
-node scripts/check-session-lifecycle.mjs     # 静态代码检查
-npm run lifecycle:ci-check                   # 安全边界检查（不访问 Cloudflare/D1）
-```
-
-`lifecycle:dry-run` 需要明确授权，不应在普通 CI 中运行。
+以上操作必须有备份、维护窗口和单独授权。
