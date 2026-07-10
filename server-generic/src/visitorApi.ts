@@ -2,8 +2,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { GenericServerConfig } from './config.js';
 import { createVisitorAttachment, sendVisitorAttachment } from './attachments.js';
 import { createVisitorSession, requireVisitorSession } from './chat.js';
+import { hashVisitorToken } from './crypto.js';
 import type { PostgresAdapter } from './db/postgres.js';
-import { HttpError } from './http.js';
+import { HttpError, optionalString } from './http.js';
 import { createSessionMessage, listSessionMessages, normalizeMessageBody } from './messages.js';
 import { readJsonBody, sendJson } from './response.js';
 import { isSafeId } from './routes.js';
@@ -42,6 +43,7 @@ export async function handleCreateVisitorAttachment(
       messageType: 'attachment',
       readAt: null,
       createdAt: attachment.createdAt,
+      clientMessageId: null,
       attachments: [attachment],
     },
   });
@@ -71,7 +73,8 @@ export async function handleVisitorMessages(
   sessionId: string,
 ) {
   if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
-  await requireVisitorSession(db, sessionId, getVisitorToken(request.headers));
+  const visitorToken = getVisitorToken(request.headers);
+  await requireVisitorSession(db, sessionId, visitorToken);
 
   if (request.method === 'GET') {
     const messages = await listSessionMessages(db, sessionId, config.encryption);
@@ -87,9 +90,11 @@ export async function handleVisitorMessages(
       sessionId,
       'visitor',
       normalizeMessageBody(body.body),
+      visitorToken ? hashVisitorToken(visitorToken) : null,
+      optionalString(body.clientMessageId) || optionalString(body.client_message_id),
     );
-    hub.broadcastToSession(sessionId, { type: 'message_created', sessionId, message });
-    sendJson(response, 201, { ok: true, message });
+    if (!message.deduped) hub.broadcastToSession(sessionId, { type: 'message_created', sessionId, message });
+    sendJson(response, message.deduped ? 200 : 201, { ok: true, deduped: Boolean(message.deduped), message });
     return;
   }
 
