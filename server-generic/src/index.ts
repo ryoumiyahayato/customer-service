@@ -17,7 +17,7 @@ import {
   handleListAdminSessions,
 } from './adminApi.js';
 import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
-import { loadConfig } from './config.js';
+import { assertExperimentalPublicExposure, loadConfig } from './config.js';
 import { createPostgresAdapter } from './db/postgres.js';
 import { handleFrontendCompatRequest } from './frontendCompat.js';
 import { healthPayload } from './health.js';
@@ -43,9 +43,10 @@ import {
 import { createWebSocketHub } from './websocket.js';
 
 const config = loadConfig();
+assertExperimentalPublicExposure(config);
 const db = createPostgresAdapter(config);
 const storage = createLocalStorage(config.storagePath);
-const websocketHub = createWebSocketHub();
+const websocketHub = createWebSocketHub(db);
 const abuseGuard = createAbuseGuard(config);
 const staticRoot = path.resolve(config.staticDir || path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist'));
 
@@ -245,7 +246,9 @@ const server = createServer((request, response) => {
 });
 
 server.on('upgrade', (request, socket, head) => {
-  websocketHub.handleUpgrade(request, socket, head);
+  void websocketHub.handleUpgrade(request, socket, head).catch(() => {
+    if (!socket.destroyed) socket.destroy();
+  });
 });
 
 server.listen(config.appPort, () => {
