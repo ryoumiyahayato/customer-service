@@ -26,7 +26,7 @@ ALTER TABLE messages
   ADD COLUMN IF NOT EXISTS client_message_id TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS messages_sender_client_message_idx
-  ON messages(session_id, sender_type, sender_id, client_message_id)
+  ON messages(session_id, sender_type, COALESCE(sender_id, ''), client_message_id)
   WHERE client_message_id IS NOT NULL;
 
 ALTER TABLE chat_sessions
