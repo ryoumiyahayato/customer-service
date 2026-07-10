@@ -9,7 +9,8 @@ const indexSource = await readFile(new URL('../src/index.ts', import.meta.url), 
 const visitorSource = await readFile(new URL('../../src/visitor/GuestChat.tsx', import.meta.url), 'utf8');
 const adminSource = await readFile(new URL('../../src/admin/AdminDashboard.tsx', import.meta.url), 'utf8');
 
-assert.ok(websocketSource.includes("/^\\/api\\/ws\\/conversations\\/"));
+const escapedConversationRoute = "/^\\/api\\/ws\\/conversations\\/";
+assert.ok(websocketSource.includes(escapedConversationRoute));
 assert.match(websocketSource, /requireCurrentAdmin/);
 assert.match(websocketSource, /requireVisitorSession/);
 assert.match(websocketSource, /VISITOR_COOKIE_NAME = 'support_visitor'/);
@@ -33,6 +34,30 @@ const localConfig = loadConfig({
 });
 assert.doesNotThrow(() => assertExperimentalPublicExposure(localConfig, { NODE_ENV: 'production' }));
 
+const missingDomainConfig = loadConfig({
+  NODE_ENV: 'production',
+  APP_DOMAIN: '',
+  VISITOR_ROOT_DOMAIN: '',
+  DATABASE_URL: '',
+  ENCRYPTION_ENABLED: 'false',
+});
+assert.throws(
+  () => assertExperimentalPublicExposure(missingDomainConfig, { NODE_ENV: 'production' }),
+  /required production domains are missing/,
+);
+
+const partiallyConfiguredDomain = loadConfig({
+  NODE_ENV: 'production',
+  APP_DOMAIN: '127.0.0.1',
+  VISITOR_ROOT_DOMAIN: '',
+  DATABASE_URL: '',
+  ENCRYPTION_ENABLED: 'false',
+});
+assert.throws(
+  () => assertExperimentalPublicExposure(partiallyConfiguredDomain, { NODE_ENV: 'production' }),
+  /required production domains are missing/,
+);
+
 const blockedPublicConfig = loadConfig({
   NODE_ENV: 'production',
   APP_DOMAIN: 'admin.example.test',
@@ -54,5 +79,15 @@ const acknowledgedPublicConfig = loadConfig({
   SELF_HOST_EXPERIMENTAL_PUBLIC_ACK: 'I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL',
 });
 assert.doesNotThrow(() => assertExperimentalPublicExposure(acknowledgedPublicConfig, { NODE_ENV: 'production' }));
+
+const acknowledgedMissingDomains = loadConfig({
+  NODE_ENV: 'production',
+  APP_DOMAIN: '',
+  VISITOR_ROOT_DOMAIN: '',
+  DATABASE_URL: '',
+  ENCRYPTION_ENABLED: 'false',
+  SELF_HOST_EXPERIMENTAL_PUBLIC_ACK: 'I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL',
+});
+assert.doesNotThrow(() => assertExperimentalPublicExposure(acknowledgedMissingDomains, { NODE_ENV: 'production' }));
 
 console.log('server-generic websocket authentication and public exposure checks passed');
