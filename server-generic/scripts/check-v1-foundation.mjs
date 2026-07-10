@@ -5,12 +5,13 @@ import { readFile } from 'node:fs/promises';
 
 const read = async (relative) => readFile(new URL(`../${relative}`, import.meta.url), 'utf8');
 
-const [migration, invites, compat, messages, websocket, readme] = await Promise.all([
+const [migration, invites, compat, messages, websocket, adminApi, readme] = await Promise.all([
   read('migrations/0005_v1_architecture_foundation.sql'),
   read('src/invites.ts'),
   read('src/frontendCompat.ts'),
   read('src/messages.ts'),
   read('src/websocket.ts'),
+  read('src/adminApi.ts'),
   read('README.md'),
 ]);
 
@@ -64,6 +65,8 @@ assert.match(messages, /message\.deduped|deduped/);
 
 assert.match(websocket, /type: 'messages:read'/);
 assert.doesNotMatch(websocket, /type: 'messages_read'/);
+assert.match(adminApi, /type: 'messages:read'/);
+assert.doesNotMatch(adminApi, /type: 'messages_read'/);
 assert.match(readme, /persistent invite lifecycle/i);
 assert.match(readme, /not currently approved as a production backend/i);
 

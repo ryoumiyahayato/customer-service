@@ -38,7 +38,7 @@ export async function handleAdminMessages(
   if (request.method === 'GET') {
     const receipt = await markSessionMessagesRead(db, sessionId, 'admin');
     if (receipt.messageIds.length) {
-      hub.broadcastToSession(sessionId, { type: 'messages_read', sessionId, ...receipt });
+      hub.broadcastToSession(sessionId, { type: 'messages:read', sessionId, ...receipt });
     }
     const messages = await listSessionMessages(db, sessionId, config.encryption);
     sendJson(response, 200, { ok: true, messages, read: receipt });
