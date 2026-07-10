@@ -1,5 +1,7 @@
 import { loadEncryptionConfig, safeEncryptionSummary, type EncryptionConfig } from './encryptionConfig.js';
 
+const EXPERIMENTAL_PUBLIC_ACK = 'I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL';
+
 export type AbuseLimitConfig = {
   loginLimit: number;
   loginWindowSeconds: number;
@@ -30,6 +32,7 @@ export type GenericServerConfig = {
   staticDir: string;
   encryption: EncryptionConfig;
   abuse: AbuseLimitConfig;
+  experimentalPublicAcknowledged: boolean;
 };
 
 function readEnv(env: NodeJS.ProcessEnv, key: string, fallback = '') {
@@ -68,6 +71,41 @@ function loadAbuseConfig(env: NodeJS.ProcessEnv): AbuseLimitConfig {
   };
 }
 
+function normalizedHost(value: string): string {
+  const raw = value.trim().toLowerCase();
+  if (!raw) return '';
+  try {
+    return new URL(raw.includes('://') ? raw : `http://${raw}`).hostname.toLowerCase();
+  } catch {
+    return raw.split(':')[0];
+  }
+}
+
+export function isLocalSelfHostDomain(value: string): boolean {
+  const host = normalizedHost(value);
+  return host === 'localhost'
+    || host.endsWith('.localhost')
+    || host === '127.0.0.1'
+    || host === '0.0.0.0'
+    || host === '::1';
+}
+
+export function assertExperimentalPublicExposure(config: GenericServerConfig, env: NodeJS.ProcessEnv = process.env) {
+  if (env.NODE_ENV !== 'production' || config.experimentalPublicAcknowledged) return;
+
+  const requiredDomains = [config.appDomain, config.visitorRootDomain];
+  const domainsMissing = requiredDomains.some((domain) => !domain.trim());
+  const allDomainsLocal = !domainsMissing && requiredDomains.every((domain) => isLocalSelfHostDomain(domain));
+  if (allDomainsLocal) return;
+
+  const reason = domainsMissing
+    ? 'required production domains are missing'
+    : 'public domains are configured';
+  throw new Error(
+    `server-generic public exposure is blocked because ${reason} and the adapter remains experimental; set SELF_HOST_EXPERIMENTAL_PUBLIC_ACK=${EXPERIMENTAL_PUBLIC_ACK} only after reviewing the documented risks`,
+  );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GenericServerConfig {
   return {
     appDomain: readEnv(env, 'APP_DOMAIN'),
@@ -85,6 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GenericServerC
     staticDir: readEnv(env, 'STATIC_DIR', '/app/dist'),
     encryption: loadEncryptionConfig(env),
     abuse: loadAbuseConfig(env),
+    experimentalPublicAcknowledged: readEnv(env, 'SELF_HOST_EXPERIMENTAL_PUBLIC_ACK') === EXPERIMENTAL_PUBLIC_ACK,
   };
 }
 
@@ -97,6 +136,7 @@ export function safeConfigSummary(config: GenericServerConfig) {
     setupTokenConfigured: Boolean(config.setupToken),
     staticDir: config.staticDir,
     encryption: safeEncryptionSummary(config.encryption),
+    experimentalPublicAcknowledged: config.experimentalPublicAcknowledged,
     abuseGuard: {
       loginWindowSeconds: config.abuse.loginWindowSeconds,
       setupWindowSeconds: config.abuse.setupWindowSeconds,

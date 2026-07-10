@@ -1,6 +1,12 @@
 # Generic Server Adapter
 
-This directory is the first generic Linux server adapter for the customer chat system. It does not replace the Cloudflare Worker runtime and does not modify the existing Cloudflare production path.
+This directory is an experimental generic Linux server adapter for the customer chat system. It does not replace the Cloudflare Worker production runtime.
+
+## Production status
+
+`server-generic` is not currently approved as a production backend. The compatibility visitor bootstrap still does not provide a persistent invite lifecycle with hashed tokens, expiry, single-use consumption, and revocation. Production-mode startup with public domains is therefore blocked unless the operator explicitly sets `SELF_HOST_EXPERIMENTAL_PUBLIC_ACK=I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL` after reviewing the documented risks. That acknowledgement only unlocks testing; it is not a production-readiness statement.
+
+The supported production path remains the Cloudflare Worker entrypoint configured in `wrangler.toml`.
 
 ## Current scope
 
@@ -14,18 +20,18 @@ This directory is the first generic Linux server adapter for the customer chat s
 - Serves `POST /api/visitor/sessions`.
 - Serves visitor message list/send APIs guarded by visitor token hash.
 - Serves admin session list, admin message list/send, and close APIs guarded by admin session.
-- Provides a minimal WebSocket hub for session subscription and message/close broadcasts.
+- Authenticates WebSocket upgrades from `/api/ws/admin`, `/api/ws/staff`, and `/api/ws/conversations/:id` before binding a fixed room.
+- Rejects client-driven WebSocket subscribe or room-switch messages.
 - Serves built static assets from `STATIC_DIR`.
 - Provides PostgreSQL migration support for the generic server schema.
-- Provides local storage, lifecycle, and WebSocket adapter skeletons for later migration.
+- Provides local storage and lifecycle adapter skeletons for later migration.
 - Provides a basic in-memory HTTP abuse guard for selected high-risk write endpoints.
 
 ## Not implemented yet
 
-- Full invite management parity with the Cloudflare Worker version.
+- Persistent invite management parity with the Cloudflare Worker version.
 - Full customer chat API parity.
 - Current frontend image upload parity; `POST /api/upload` returns an explicit unsupported error in the generic compatibility layer.
-- Full WebSocket room protocol parity.
 - Read receipt migration.
 - Automatic lifecycle runner writes.
 - Server-generic audit log parity for high-risk admin mutations.
@@ -36,6 +42,10 @@ This directory is the first generic Linux server adapter for the customer chat s
 `src/frontendCompat.ts` maps the current Vite frontend API shape onto the generic server internals. The generic server can keep camelCase internal models, but compatibility responses return the snake_case fields used by the current frontend, including `session_id`, `sender_type`, `content`, `message_type`, `created_at`, `updated_at`, `unread_count`, `status`, and related nullable fields.
 
 The minimal self-hosted visitor bootstrap accepts `/g/:token` through the current frontend's `POST /api/guest/:token` call and creates or resumes a visitor session using an HttpOnly visitor cookie. It does not persist invite records and must not be described as complete invite management.
+
+## WebSocket security
+
+WebSocket clients no longer send a free-form `subscribe` message. The request URL determines the room, and the server authenticates the existing admin or visitor cookie before accepting the upgrade. Conversation connections are bound to one session for their lifetime. Invalid, unauthenticated, or unauthorized upgrades are rejected before a WebSocket is created. A heartbeat closes stale connections, and incoming client data is rejected because this channel is broadcast-only.
 
 ## Basic HTTP abuse guard
 
@@ -51,6 +61,7 @@ Default thresholds can be overridden with environment variables such as `ABUSE_L
 - `npm run build`
 - `npm run smoke`
 - `npm run check:abuse-guard`
+- `npm run check:websocket-auth`
 - `npm run migrate:status`
 - `npm run migrate`
 
@@ -60,4 +71,4 @@ Setup is fail-closed when `SETUP_TOKEN` is missing: `/api/setup/status` reports 
 
 ## Safety
 
-Do not put real secrets in this directory. Runtime values must come from the server `.env` file or future secret management.
+Do not put real secrets in this directory. Runtime values must come from the server `.env` file or future secret management. Do not describe the explicit experimental acknowledgement as a security control or commercial readiness approval.

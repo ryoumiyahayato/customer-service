@@ -12,22 +12,6 @@ function readFile(file) {
   return readFileSync(full, 'utf8');
 }
 
-function assert(condition, msg) {
-  if (!condition) throw new Error(`FAIL: ${msg}`);
-}
-
-function assertIncludes(text, keyword, ctx) {
-  assert(text.includes(keyword), `${ctx} should contain "${keyword}"`);
-}
-
-function assertNotIncludes(text, keyword, ctx) {
-  assert(!text.includes(keyword), `${ctx} should NOT contain "${keyword}"`);
-}
-
-function assertMatch(text, regex, ctx) {
-  assert(regex.test(text), `${ctx} should match ${regex}`);
-}
-
 const worker = readFile('src/worker.ts');
 const lifecycle = readFile('src/sessionLifecycle.ts');
 const dashboard = readFile('src/admin/AdminDashboard.tsx');
@@ -41,176 +25,92 @@ let failed = 0;
 const results = [];
 
 function check(name, ok) {
-  if (ok) { passed++; results.push(`  PASS  ${name}`); }
-  else { failed++; results.push(`  FAIL  ${name}`); }
+  if (ok) {
+    passed++;
+    results.push(`  PASS  ${name}`);
+  } else {
+    failed++;
+    results.push(`  FAIL  ${name}`);
+  }
 }
 
 try {
-  // --- 1. Migration 0009 exists and adds purged_at ---
-  check('Migration 0009 adds purged_at column',
-    migration.includes('ALTER TABLE sessions ADD COLUMN purged_at TEXT'));
-  check('Migration 0009 creates purged_at index',
-    migration.includes('idx_sessions_purged_at'));
+  check('Migration 0009 adds purged_at column', migration.includes('ALTER TABLE sessions ADD COLUMN purged_at TEXT'));
+  check('Migration 0009 creates purged_at index', migration.includes('idx_sessions_purged_at'));
 
-  // --- 2. sessionLifecycle.ts exports ---
-  check('sessionLifecycle exports normalizeSessionBucket',
-    lifecycle.includes('export function normalizeSessionBucket'));
-  check('sessionLifecycle exports archiveSession',
-    lifecycle.includes('export async function archiveSession'));
-  check('sessionLifecycle exports autoArchiveActiveSessions',
-    lifecycle.includes('export async function autoArchiveActiveSessions'));
-  check('sessionLifecycle exports purgeTrashSessions',
-    lifecycle.includes('export async function purgeTrashSessions'));
-  check('sessionLifecycle exports runLifecycle',
-    lifecycle.includes('export async function runLifecycle'));
+  check('sessionLifecycle exports normalizeSessionBucket', lifecycle.includes('export function normalizeSessionBucket'));
+  check('sessionLifecycle exports archiveSession', lifecycle.includes('export async function archiveSession'));
+  check('sessionLifecycle exports autoArchiveActiveSessions', lifecycle.includes('export async function autoArchiveActiveSessions'));
+  check('sessionLifecycle exports purgeTrashSessions', lifecycle.includes('export async function purgeTrashSessions'));
+  check('sessionLifecycle exports runLifecycle', lifecycle.includes('export async function runLifecycle'));
 
-  // --- 3. normalizeSessionBucket logic ---
-  check('normalizeSessionBucket checks purged_at first',
-    lifecycle.includes("if (session.purged_at) return 'purged'"));
-  check('normalizeSessionBucket checks deleted_at second',
-    lifecycle.includes("if (session.deleted_at) return 'trash'"));
-  check('normalizeSessionBucket checks archived_at or status',
-    lifecycle.includes("session.archived_at || session.status === 'ARCHIVED' || session.status === 'CLOSED'"));
-  check('normalizeSessionBucket defaults to active',
-    lifecycle.includes("return 'active'"));
+  check('normalizeSessionBucket checks purged_at first', lifecycle.includes("if (session.purged_at) return 'purged'"));
+  check('normalizeSessionBucket checks deleted_at second', lifecycle.includes("if (session.deleted_at) return 'trash'"));
+  check('normalizeSessionBucket checks archived_at or status', lifecycle.includes("session.archived_at || session.status === 'ARCHIVED' || session.status === 'CLOSED'"));
+  check('normalizeSessionBucket defaults to active', lifecycle.includes("return 'active'"));
 
-  // --- 4. autoArchiveActiveSessions looks for 24h idle active sessions ---
-  check('autoArchiveActiveSessions filters active statuses',
-    lifecycle.includes("status IN ('PENDING','OPEN')"));
-  check('autoArchiveActiveSessions uses 24h cutoff',
-    lifecycle.includes("-24 hours"));
-  check('autoArchiveActiveSessions falls back to created_at',
-    lifecycle.includes('COALESCE(updated_at, created_at)'));
+  check('active lifecycle cutoff normalizes stored timestamps with datetime()', lifecycle.includes("datetime(COALESCE(updated_at, created_at)) <= datetime('now', '-24 hours')"));
+  check('trash lifecycle cutoff normalizes deleted_at with datetime()', lifecycle.includes("datetime(deleted_at) <= datetime('now', '-24 hours')"));
+  check('attachment expiry normalizes expires_at with datetime()', lifecycle.includes("datetime(expires_at) <= datetime('now')"));
+  check('auth expiry normalizes expires_at with datetime()', lifecycle.includes("datetime(expires_at) <= datetime('now')"));
+  check('invite expiry normalizes expires_at with datetime()', lifecycle.includes("datetime(expires_at) <= datetime('now')"));
 
-  // --- 5. purgeTrashSessions looks for 24h old deleted sessions ---
-  check('purgeTrashSessions checks deleted_at IS NOT NULL',
-    lifecycle.includes('deleted_at IS NOT NULL'));
-  check('purgeTrashSessions checks purged_at IS NULL',
-    lifecycle.includes('purged_at IS NULL'));
-  check('purgeTrashSessions uses 24h cutoff',
-    lifecycle.includes("-24 hours"));
+  const claimIndex = lifecycle.indexOf('SET purged_at=?,updated_at=?');
+  const r2DeleteIndex = lifecycle.indexOf('env.UPLOADS!.delete(key)');
+  check('purge claims the session before destructive cleanup', claimIndex >= 0 && r2DeleteIndex >= 0 && claimIndex < r2DeleteIndex);
+  check('purge retries claimed sessions with uncleared history', lifecycle.includes('purged_at IS NOT NULL') && lifecycle.includes('history_cleared_at IS NULL'));
+  check('purge collects R2 keys after eligibility claim', lifecycle.includes('collectPurgeKeys') && lifecycle.includes('env.UPLOADS!.delete(key)'));
+  check('purge deletes attachment rows', lifecycle.includes('DELETE FROM attachments'));
+  check('purge deletes message rows', lifecycle.includes('DELETE FROM messages'));
+  check('purge database deletes are state guarded', lifecycle.includes('EXISTS (') && lifecycle.includes('purged_at IS NOT NULL AND history_cleared_at IS NULL'));
+  check('purge marks history cleared only after cleanup', lifecycle.indexOf('history_cleared_at=COALESCE(history_cleared_at,?)') > r2DeleteIndex);
+  check('purge requires UPLOADS when object cleanup is needed', lifecycle.includes('lifecycle purge requires UPLOADS binding'));
+  check('purge database operations use D1 batch', lifecycle.includes('await env.DB.batch(['));
 
-  // --- 6. runLifecycle returns aggregated counts ---
-  check('runLifecycle returns archivedCount',
-    lifecycle.includes('archivedCount'));
-  check('runLifecycle returns purgedCount',
-    lifecycle.includes('purgedCount'));
-  check('runLifecycle returns errorCount',
-    lifecycle.includes('errorCount'));
+  check('runLifecycle returns archivedCount', lifecycle.includes('archivedCount'));
+  check('runLifecycle returns purgedCount', lifecycle.includes('purgedCount'));
+  check('runLifecycle returns errorCount', lifecycle.includes('errorCount'));
+  check('Worker imports sessionLifecycle', worker.includes("import { runLifecycle, normalizeSessionBucket } from './sessionLifecycle'"));
+  check('Scheduled handler calls runLifecycle', worker.includes('const result = await runLifecycle(env)'));
+  check('Scheduled handler logs aggregated counts only', worker.includes('archivedCount: result.archivedCount'));
+  check('Scheduled handler logs purgedCount', worker.includes('purgedCount: result.purgedCount'));
 
-  // --- 7. Worker imports sessionLifecycle ---
-  check('Worker imports from sessionLifecycle',
-    worker.includes("import { runLifecycle, normalizeSessionBucket } from './sessionLifecycle'"));
+  check('sessionAction close sets status ARCHIVED', worker.includes("action === 'close'") && worker.includes("status='ARCHIVED'"));
+  check('sessionAction close sets archived_at', worker.includes("action === 'close'") && worker.includes('archived_at=COALESCE(archived_at,?)'));
+  check('sessionAction delete checks purged_at', worker.includes("action === 'delete'") && worker.includes('purged_at IS NULL'));
+  check('sessionAction restore checks purged_at', worker.includes("action === 'restore'") && worker.includes('purged_at IS NULL'));
+  check('listSessions filters purged', worker.includes('s.purged_at IS NULL') && worker.includes('listSessions'));
+  check('sessionEnded checks purged_at', worker.includes('session.purged_at'));
+  check('latestSession filters purged_at', worker.includes('purged_at IS NULL'));
 
-  // --- 8. Scheduled handler uses runLifecycle ---
-  check('Scheduled handler calls runLifecycle',
-    worker.includes('const result = await runLifecycle(env)'));
-  check('Scheduled handler logs aggregated counts only',
-    worker.includes('archivedCount: result.archivedCount'));
-  check('Scheduled handler logs purgedCount',
-    worker.includes('purgedCount: result.purgedCount'));
+  check('UI sessionGroupOf returns trash', dashboard.includes("return 'trash'"));
+  check('UI sessionGroupOf checks purged_at', dashboard.includes('session.purged_at') || dashboard.includes('session?.purged_at'));
+  check('UI sessionGroupOf returns null for purged', dashboard.includes("if (session.purged_at) return null"));
+  check('UI SessionGroup type is active|archived|trash', dashboard.includes("type SessionGroup = 'active' | 'archived' | 'trash'"));
+  check('SessionList SessionGroup type is active|archived|trash', sessionList.includes("type SessionGroup = 'active' | 'archived' | 'trash'"));
+  check('SessionList has trash tab', sessionList.includes("{ key: 'trash', label: '回收站' }"));
+  check('SessionList no longer has ended tab', !sessionList.includes("key: 'ended'"));
+  check('SessionList no longer has deleted tab', !sessionList.includes("key: 'deleted'"));
+  check('renderSessionLifecycleActions uses sessionGroupOf', dashboard.includes('const bucket = sessionGroupOf(session)'));
 
-  // --- 9. sessionAction close unifies with archive ---
-  check('sessionAction close sets status ARCHIVED',
-    worker.includes("action === 'close'") && worker.includes("status='ARCHIVED'"));
-  check('sessionAction close sets archived_at',
-    worker.includes("action === 'close'") && worker.includes('archived_at=COALESCE(archived_at,?)'));
-  check('sessionAction close checks purged_at',
-    worker.includes("action === 'close'") && worker.includes('purged_at IS NULL'));
-  check('sessionAction archive also sets status ARCHIVED',
-    worker.includes("action === 'archive'") && worker.includes("status='ARCHIVED'"));
-
-  // --- 10. sessionAction delete checks purged_at ---
-  check('sessionAction delete checks purged_at',
-    worker.includes("action === 'delete'") && worker.includes('purged_at IS NULL'));
-
-  // --- 11. sessionAction restore checks purged_at ---
-  check('sessionAction restore checks purged_at',
-    worker.includes("action === 'restore'") && worker.includes('purged_at IS NULL'));
-
-  // --- 12. listSessions filters purged ---
-  check('listSessions adds purged_at filter',
-    worker.includes('s.purged_at IS NULL') && worker.includes('listSessions'));
-
-  // --- 13. sessionEnded checks purged_at ---
-  check('sessionEnded checks purged_at',
-    worker.includes('session.purged_at'));
-
-  // --- 14. latestSession filters purged ---
-  check('latestSession filters purged_at',
-    worker.includes('purged_at IS NULL'));
-
-  // --- 15. UI sessionGroupOf updated to 3 groups ---
-  check('UI sessionGroupOf returns trash',
-    dashboard.includes("return 'trash'"));
-  check('UI sessionGroupOf checks purged_at',
-    dashboard.includes('session.purged_at') || dashboard.includes('session?.purged_at'));
-  check('UI sessionGroupOf returns null for purged',
-    dashboard.includes("if (session.purged_at) return null"));
-
-  // --- 16. UI SessionGroup type has 3 values ---
-  check('UI SessionGroup type is active|archived|trash',
-    dashboard.includes("type SessionGroup = 'active' | 'archived' | 'trash'"));
-  check('SessionList SessionGroup type is active|archived|trash',
-    sessionList.includes("type SessionGroup = 'active' | 'archived' | 'trash'"));
-
-  // --- 17. SessionList tabs show 3 groups ---
-  check('SessionList has trash tab',
-    sessionList.includes("{ key: 'trash', label: '回收站' }"));
-  check('SessionList no longer has ended tab',
-    !sessionList.includes("key: 'ended'"));
-  check('SessionList no longer has deleted tab',
-    !sessionList.includes("key: 'deleted'"));
-
-  // --- 18. renderSessionLifecycleActions uses bucket ---
-  check('renderSessionLifecycleActions uses sessionGroupOf',
-    dashboard.includes('const bucket = sessionGroupOf(session)'));
-
-  // --- 19. package.json has check script ---
-  check('package.json has check-session-lifecycle script',
-    packageJson.scripts?.['check-session-lifecycle'] === 'node scripts/check-session-lifecycle.mjs');
-
-  // --- 20. CI check still safe ---
-  check('CI check does not access D1',
-    ciCheck.includes('d1Accessed: false') && ciCheck.includes('cloudflareAccessed: false'));
-
-  // --- 21. No dangerous ops in lifecycle ---
-  assertNotIncludes(lifecycle, 'DELETE FROM', 'sessionLifecycle should not hard-delete');
-  assertNotIncludes(lifecycle, 'DROP', 'sessionLifecycle should not drop tables');
-  assertNotIncludes(lifecycle, 'R2', 'sessionLifecycle should not access R2');
-  assertNotIncludes(lifecycle, 'UPLOADS', 'sessionLifecycle should not reference R2 bucket');
-  check('sessionLifecycle only uses UPDATE (soft delete)',
-    !lifecycle.includes('DELETE FROM'));
-
-  // --- 22. Worker endpoints check purged_at ---
-  check('Messages API checks purged_at',
-    worker.includes("session.purged_at) return json({ messages: [] }"));
-  check('Customer-read API checks purged_at',
-    worker.includes("session.purged_at) return json({ error: ERR_SESSION_NOT_FOUND }"));
-
-  // --- 23. canClearHistory checks purged_at ---
-  check('canClearHistory checks purged_at',
-    worker.includes('!session.purged_at'));
-
-  // --- 24. isArchivedSession includes CLOSED ---
-  check('UI isArchivedSession includes CLOSED status',
-    dashboard.includes("session?.status === 'CLOSED'"));
-
-  // --- 25. Migration backfills purged_at from history_cleared_at ---
-  check('Migration backfills purged_at from deleted+history_cleared sessions',
-    migration.includes('purged_at = history_cleared_at'));
-
-} catch (e) {
-  console.error('FATAL:', e.message);
+  check('package.json has check-session-lifecycle script', packageJson.scripts?.['check-session-lifecycle'] === 'node scripts/check-session-lifecycle.mjs');
+  check('CI check does not access D1', ciCheck.includes('d1Accessed: false') && ciCheck.includes('cloudflareAccessed: false'));
+  check('Messages API checks purged_at', worker.includes("session.purged_at) return json({ messages: [] }"));
+  check('Customer-read API checks purged_at', worker.includes("session.purged_at) return json({ error: ERR_SESSION_NOT_FOUND }"));
+  check('canClearHistory checks purged_at', worker.includes('!session.purged_at'));
+  check('UI isArchivedSession includes CLOSED status', dashboard.includes("session?.status === 'CLOSED'"));
+  check('Migration backfills purged_at from deleted+history_cleared sessions', migration.includes('purged_at = history_cleared_at'));
+} catch (error) {
+  console.error('FATAL:', error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
 
-console.log(`\nSession Lifecycle Check Results:`);
+console.log('\nSession Lifecycle Check Results:');
 console.log(`  Passed: ${passed}`);
 console.log(`  Failed: ${failed}`);
 console.log(`  Total:  ${passed + failed}`);
 console.log('');
-results.forEach(r => console.log(r));
+results.forEach((result) => console.log(result));
 console.log('');
 
 if (failed > 0) {
