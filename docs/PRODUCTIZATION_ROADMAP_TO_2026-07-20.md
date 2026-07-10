@@ -1,137 +1,143 @@
-# 产品化路线图：2026-07-20 前首版闭环
+# 产品化路线图：v1.0 首版闭环
 
 ## 目标
 
-在 2026-07-20 前完成客服系统全模块首版闭环。后续不砍模块，但每个模块先按 MVP / 首版可运行 / 首版可演示推进，避免在单一模块上反复打磨导致整体产品化路线失衡。
+在保持 Cloudflare 生产基准稳定的前提下，完成统一状态机、自托管核心业务一致性、部署恢复验证和客户端能力边界说明。
+
+本路线不再以“目录或 scaffold 已存在”作为完成标准。模块必须具备明确安全边界、自动化验证和可重复验收，才能标记完成。
+
+状态机唯一决策见：
+
+- `docs/ADR-001-session-lifecycle-and-backend-parity.md`
+- `docs/V1_REMEDIATION_STATUS.md`
 
 ## 模块范围
 
 1. Cloudflare 线上版
-2. 通用 Linux 云服务器版
-3. Linux 一键部署脚本
-4. Windows 部署向导 EXE
+2. 通用 Linux 自托管版
+3. Linux 部署、健康检查、备份、恢复和升级
+4. Windows 部署向导
 5. PWA
-6. 客户端 EXE
-7. Android APK
+6. 桌面客户端
+7. Android 壳
 8. 服务端加密存储
-9. 备份 / 恢复 / 升级
+9. 自动化测试和发布验收
 10. 最终封板文档
 
-## 压缩排期
+## 当前优先级
 
-- 7/4：通用部署架构 + Linux 骨架
-- 7/5-7/6：Docker Compose + Caddy + PostgreSQL + 本地文件存储
-- 7/7-7/8：通用服务器后端适配层
-- 7/9：install.sh 最小可运行版
-- 7/10：healthcheck / backup / restore
-- 7/11-7/12：Windows 部署向导 EXE MVP
-- 7/13：PWA + 客户端 EXE 壳
-- 7/14-7/15：Android APK 壳
-- 7/16：服务端加密存储 MVP
-- 7/17：升级 / 回滚 / 备份恢复联调
-- 7/18：全链路测试
-- 7/19：修 bug
-- 7/20：封板
+### P0：业务与数据一致性
+
+- 保持 Cloudflare 生命周期、客服禁用和附件绑定修复稳定。
+- 统一 `active -> archived -> trash -> purged` 状态机。
+- 自托管邀请必须持久化、哈希保存、过期、可撤销、单次消费。
+- 文本消息必须支持发送者维度 `clientMessageId` 幂等。
+- WebSocket 必须在升级阶段鉴权并绑定固定房间。
+- 已读更新和广播必须使用相同消息 ID 集合。
+
+### P1：自托管生产缺口
+
+- 完成 multipart 图片上传、显示、下载和权限验证。
+- 完成自托管归档、回收、恢复、purge 和自动 lifecycle runner。
+- 增加高风险管理写操作审计日志。
+- 完成客服分配和私有会话权限模型。
+- 完成 PostgreSQL、storage 和 encryption key 联合备份恢复测试。
+
+### P2：包装层与发布
+
+- Windows 部署向导 GUI/EXE。
+- 桌面客户端安装包、托盘和更新策略。
+- Android 签名、文件选择、下载和实机验证。
+- PWA 浏览器矩阵和更新缓存验收。
+
+## 当前状态
+
+### Cloudflare 生产基准
+
+已具备核心聊天、D1、R2、Durable Objects WebSocket、管理员、邀请和 Scheduled Trigger。已修复：
+
+- 生命周期时间格式比较。
+- 回收站清理资格认领和真实数据清理。
+- 客服禁用导致会话误删问题。
+- 图片附件按上传者原子认领。
+- 图片消息幂等重试。
+
+Cloudflare 远程 migration、deploy、生产 purge 和 R2 操作仍必须单独授权。
+
+### server-generic 预览后端
+
+已具备：
+
+- Node + PostgreSQL。
+- setup、管理员认证和 visitor token hash。
+- 持久邀请表、token hash、过期、撤销和单次消费。
+- PostgreSQL 行锁保护并发邀请消费。
+- 访客文本、管理员回复和 `clientMessageId` 幂等。
+- `(created_at, id)` 稳定消息排序。
+- 基础 read receipt。
+- WebSocket 升级鉴权、固定房间、心跳和载荷上限。
+- 本地 Docker Compose E2E。
+
+仍缺少图片前端闭环、完整 lifecycle write runner、审计日志、完整客服权限和备份恢复故障注入，因此继续标记为测试/预览，不是生产替代方案。
+
+### Linux 部署
+
+已有 Docker Compose、Caddy、PostgreSQL、安装、健康检查、备份、恢复、升级和只读 preflight。CI 会在临时环境执行本地 PostgreSQL migration 和 E2E。
+
+尚未执行真实 VPS、真实 Caddy HTTPS、资源限制和生产恢复演练。
+
+### Windows / PWA / 桌面 / Android
+
+- Windows 部署向导：CLI/Tauri-ready scaffold，有 mock、dry-run 和显式 real SSH adapter；未完成正式 GUI/EXE。
+- PWA：有 manifest、service worker、offline page 和敏感请求排除；未完成推送和完整浏览器验收。
+- 桌面客户端：CLI/Tauri-ready 启动壳；未完成正式安装包、托盘、通知和自动更新。
+- Android：Gradle/Kotlin/WebView scaffold；未完成签名、附件选择、下载和实机发布验收。
+
+### 加密存储
+
+`server-generic` 支持新消息正文和附件展示文件名 AES-256-GCM 加密。旧数据迁移、附件本体加密和密钥轮换尚未完成。备份必须同时保护数据库、storage 和密钥恢复说明。
+
+## 完成标准
+
+### Cloudflare
+
+- 生产路径 CI 全绿。
+- 状态机行为测试覆盖边界、幂等和部分失败。
+- 远程 migration/deploy 在备份和维护窗口中单独授权。
+
+### server-generic
+
+只有以下条件全部满足后，才允许评估生产级别：
+
+- 邀请、WebSocket、消息、附件、read receipt、状态机和权限与 Cloudflare 核心语义一致。
+- 自动 lifecycle runner 可重试且只输出聚合日志。
+- Docker E2E 覆盖并发邀请、幂等消息、越权、关闭后写入失败和真实 purge。
+- 备份恢复同时覆盖 PostgreSQL、storage 和 encryption key。
+- 真实 Ubuntu VPS 和 HTTPS 验收通过。
+
+### 客户端
+
+只有生成正式安装包、完成签名、更新策略和目标设备验收后，才可称为正式客户端。scaffold 或 CLI 不等于已发布产品。
 
 ## 推进方式
 
-后续不再做低价值反复审计；每轮采用大包推进：先完成一个可运行骨架，再统一做自检、审计、提交。高风险操作仍必须单独授权，包括真实部署、数据库写入、迁移、R2 删除、secret 变更、生产数据修改和初始化操作。
+每轮只围绕一个可验证闭环推进，但跨文件架构调整可以使用独立大 PR。所有 PR 必须说明：
 
-## 阶段完成标准
+- 修改的业务不变量。
+- 新增迁移和回滚边界。
+- 自动化与人工验收结果。
+- 未完成能力。
+- 是否执行过远程或生产操作。
 
-- Cloudflare 线上版：保持现有线上能力稳定，作为产品化基准实现。
-- 通用 Linux 云服务器版：具备明确架构、部署目录、环境变量和服务编排草案。
-- Linux 一键部署脚本：能执行环境检查、目录准备、容器启动和健康检查。
-- Windows 部署向导 EXE：能连接服务器、上传部署包、执行脚本并展示日志。
-- PWA / 客户端 EXE / Android APK：能作为已部署系统入口壳使用。
-- 服务端加密存储：新消息加密链路具备 MVP 设计，旧数据迁移单独处理。
-- 备份 / 恢复 / 升级：具备可演示的安全流程和回滚预案。
-- 最终封板文档：记录部署形态、能力边界、未完成项和后续路线。
+## 高风险操作
 
-## v0.5 第一包状态
+以下操作必须单独授权，不与普通代码审计同时执行：
 
-- Linux 部署骨架已推进到可执行最小闭环：compose 配置、镜像构建、服务启动、健康检查、备份、恢复和升级脚本均有首版实现。
-- 新增 `server-generic` 隔离适配层，先提供健康检查、setup status 占位、静态文件服务和后续迁移接口骨架。
-- Cloudflare 线上逻辑保持不变，通用服务器版后续继续补齐 PostgreSQL 数据访问、WebSocket 适配和业务 API。
-
-## server-generic 业务迁移第一包状态
-
-- 通用服务器版已从占位骨架推进到最小 setup + admin auth + session + PostgreSQL migration 闭环。
-- PostgreSQL 首版 schema 覆盖 admin、admin session、setup 状态、会话、消息、附件和客户备注基础表。
-- `server-generic` 已具备 setup status、setup initialize、admin login、admin logout、auth/me 和 healthz 基础 API。
-- 密码使用 Node 标准库 crypto 的 scrypt + random salt；admin session 使用随机 token，并只在数据库保存 token hash。
-- Linux install 默认不执行 migration，必须由部署人员显式设置 opt-in 开关后运行。
-- 当前仍未迁移完整访客聊天 API、WebSocket 房间协议、read receipt、归档/回收站/清空历史写入、附件清理和生产数据迁移。
-
-## server-generic 客服会话第一包状态
-
-- 通用服务器版已具备基础客服业务闭环：访客创建会话、访客发送文本消息、管理员查看会话、管理员回复消息、管理员关闭会话。
-- 访客 token 使用随机值，数据库仅保存 hash；admin chat API 复用 admin session 鉴权。
-- WebSocket 当前提供按 session id 订阅和基础广播，不在消息中携带 token、cookie 或密码字段。
-- healthcheck 仍保持只读健康检查，不创建真实会话。
-- 后续继续补齐附件上传、read receipt、归档/回收站/清空历史、WebSocket 鉴权增强和数据迁移工具。
-
-## server-generic 附件与 lifecycle 第一包状态
-
-- 通用服务器版已具备本地文件 storage helper、附件上传/下载 MVP、附件元数据记录和安全文件名处理。
-- lifecycle 已具备手动 archive、recycle、clear-history API，以及只读 dry-run runner。
-- clear-history 先通过统一 helper 删除本地附件文件，失败时不写 history_cleared_at。
-- Linux 部署脚本已强化 storage 备份、恢复前人工确认、附件配置说明和只读 healthcheck 边界。
-- 后续仍需补齐 multipart 上传、更完整附件预览、自动 runner 调度接线、read receipt 和生产数据迁移工具。
-
-## Windows 部署向导 EXE MVP scaffold 状态
-
-- `deploy/windows-wizard` 已新增独立 CLI/Tauri-ready scaffold。
-- 当前支持配置校验、脱敏部署计划生成、远程命令生成、日志脱敏、SSH/transfer mock 接口和 smoke。
-- CLI 支持 `--smoke` 与 `--plan <config.json>`。
-- 当前不包含真实 GUI、EXE 打包、真实 SSH 上传执行和云厂商 API。
-
-## PWA 与桌面客户端 EXE 壳 MVP 状态
-
-- PWA 已具备 manifest、service worker、offline page、SVG 图标、生产环境注册入口和清缓存验证说明。
-- service worker 只缓存基础静态资源和 offline page，明确不缓存 `/api/*`、非 GET 请求、WebSocket 或带 token / session / cookie / password / secret / key 查询参数的 URL。
-- `deploy/desktop-client` 已新增独立 CLI/Tauri-ready scaffold。
-- 桌面客户端支持配置校验、启动计划生成、package check、敏感 URL 参数脱敏、mock launcher 和 smoke。
-- 桌面客户端示例配置只使用 `example.com` 占位，当前不保存真实 secret，不记录 token/cookie，不内置服务端。
-- 当前不包含真正 EXE 打包、Tauri/Electron GUI、系统托盘、原生通知、自动更新和漂亮 GUI。
-
-## Android APK 壳 MVP 状态
-
-- `deploy/android-shell` 已新增独立 Gradle / Kotlin / WebView scaffold。
-- Android package / App ID 为 `net.customerchat.app`，不包含个人姓名、邮箱、handle、项目成员标识或生产域名。
-- 当前只声明 `INTERNET` 权限，不申请通讯录、定位、相机、录音、短信或存储权限。
-- WebView 首版只作为已部署系统入口，默认使用占位 HTTPS URL，发布前由部署人员替换为实际后台地址。
-- 当前安全边界包括 URL scheme 白名单、禁用 file/content access、不注入 JavaScript bridge、敏感查询参数日志脱敏和生产 cleartext 默认禁用。
-- README 和测试清单已补充 Gradle / Android SDK 环境缺失时的报告口径、release signing 占位说明和 WebView 加载失败低信息量提示。
-- 当前不包含真实 APK 签名、应用商店分发、原生通知、文件选择器、下载管理和自动更新；真实 APK 构建留给 Android Studio、CI 或实机环境验证。
-
-## 服务端加密存储 MVP 状态
-
-- `server-generic` 已新增 AES-256-GCM 加密基础能力，使用 Node 标准库 crypto。
-- `ENCRYPTION_ENABLED=1` 时，新消息正文写入密文字段，新附件展示文件名写入加密元数据字段。
-- 读取路径优先解密密文字段，旧明文字段仍兼容读取；本轮不迁移旧数据。
-- 当前不加密附件内容本体，附件内容加密、旧数据迁移和密钥轮换属于后续增强。
-- `ENCRYPTION_KEY` 从服务器环境变量读取，不能写入 git、文档、日志、前端代码或构建产物；丢失 key 会影响已加密数据解密。
-- 备份恢复必须同时保护数据库、storage 目录和密钥管理记录；数据库全文搜索能力会受加密影响。
-
-## Linux 实机部署闭环强化状态
-
-- `deploy/linux` 已从骨架可执行推进到接近真实 VPS 可运行的最小闭环：compose healthcheck、Caddy 反代、install self-check、显式 migration、只读 healthcheck、backup/restore/upgrade 安全边界均已强化。
-- 当前验收口径是脚本逻辑强化、静态审计、Node 检查和 server-generic smoke；真实 Linux VPS 部署验证留到后续远程服务器环境执行。
-- Windows 部署向导后续应复用这套脚本，不直接在向导内复制部署逻辑。
-
-## Windows 部署向导真实 SSH MVP 状态
-
-- `deploy/windows-wizard` 已新增真实 SSH / SFTP adapter MVP，同时保留 mock / dry-run 模式。
-- 默认不真实部署；必须显式 `--real` 且计划文件 `mode=real`、`dryRun=false` 才允许连接服务器。
-- 当前支持上传 `deploy/linux`、远程执行 `install.sh --self-check`、`install.sh --dry-run`、`install.sh` 和 opt-in `install.sh --migrate`。
-- 当前不自动写远程真实 `.env`，不保存真实密码/私钥/secret，不自动 setup initialize。
-- 真实 VPS 验证仍需后续单独执行。
-
-## GitHub Actions Linux CI 验证状态
-
-- 已新增 `.github/workflows/productization-validation.yml`，使用 GitHub Actions `ubuntu-latest` 补足 Windows LTSC 本机缺少 bash、Docker 和 Android SDK 时的验证缺口。
-- 当前 CI 覆盖 root typecheck/build/doctor/lifecycle CI-safe validation、`server-generic` typecheck/build/smoke、`deploy/linux` bash 语法、Docker Compose config、`deploy/windows-wizard` smoke/plan/deploy dry-run、`deploy/desktop-client` smoke/plan/package-check，以及 Android shell 文件存在性静态检查。
-- lifecycle CI-safe validation 只做本地静态安全边界检查，不访问 Cloudflare 或 D1；本地或授权环境中的 `npm run lifecycle:dry-run` 仍用于真实 Wrangler read-only D1 dry-run。
-- CI 只证明安全边界和静态检查通过，不等于真实 VPS 或真实 Cloudflare/D1 验证；不执行 Cloudflare deploy，不跑 production migration，不真实 SSH，不写入 D1，不读取真实 D1，不删除 R2，不修改 secret，不生成 APK，也不验证真实 Caddy HTTPS。
-- 后续仍需要在单独授权的真实 VPS 环境中做端到端部署验收。
+- Cloudflare deploy。
+- 远程 D1/PostgreSQL migration。
+- R2 或生产 storage 删除。
+- 生产 lifecycle/purge/restore。
+- Secret 或 encryption key 修改。
+- SSH/VPS 变更。
+- 真实 setup initialize。
+- 正式 EXE/APK 签名和发布。

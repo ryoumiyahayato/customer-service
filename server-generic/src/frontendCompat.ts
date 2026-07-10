@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   abuseSessionPart,
@@ -7,12 +6,13 @@ import {
   type AbuseGuard,
 } from './abuseGuard.js';
 import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
-import { createVisitorSession, listAdminChatSessions, mapChatSession, requireAdminSessionExists, requireVisitorSession, type ChatSessionSummary } from './chat.js';
+import { listAdminChatSessions, requireAdminSessionExists, requireVisitorSession, type ChatSessionSummary } from './chat.js';
 import type { GenericServerConfig } from './config.js';
 import { hashVisitorToken } from './crypto.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError, optionalString, requireString } from './http.js';
-import { createSessionMessage, listSessionMessages, type ChatMessage } from './messages.js';
+import { consumeInvite, createInvite, listInvites, revokeInvite, type PublicInvite } from './invites.js';
+import { createSessionMessage, listSessionMessages, markSessionMessagesRead, type ChatMessage } from './messages.js';
 import { readJsonBody, sendJson, sendNoContent } from './response.js';
 import { isSafeId } from './routes.js';
 import { getAdminSessionToken, parseCookies, serializeAdminSessionCookie, serializeClearAdminSessionCookie } from './security.js';
@@ -20,6 +20,7 @@ import type { WebSocketHub } from './websocket.js';
 
 const VISITOR_COOKIE_NAME = 'support_visitor';
 const VISITOR_COOKIE_TTL = 60 * 60 * 24 * 30;
+const MAX_READ_RECEIPT_MESSAGE_IDS = 500;
 
 export const FRONTEND_COMPAT_ROUTES = [
   'POST /api/auth/login',
@@ -27,9 +28,12 @@ export const FRONTEND_COMPAT_ROUTES = [
   'GET /api/auth/me',
   'GET /api/sessions',
   'GET /api/sessions/:id/messages',
+  'POST /api/sessions/:id/customer-read',
   'POST /api/messages',
   'POST /api/guest/:token',
+  'GET /api/invites',
   'POST /api/invites',
+  'POST /api/invites/:id/revoke',
   'POST /api/upload',
 ] as const;
 
@@ -38,18 +42,6 @@ type FrontendCompatContext = {
   db: PostgresAdapter;
   hub: WebSocketHub;
   abuseGuard: AbuseGuard;
-};
-
-type ChatSessionRow = {
-  id: string;
-  status: string;
-  customer_name: string | null;
-  created_at: Date;
-  updated_at: Date;
-  closed_at: Date | null;
-  archived_at: Date | null;
-  deleted_at: Date | null;
-  history_cleared_at: Date | null;
 };
 
 type FrontendAdminSource = {
@@ -110,7 +102,7 @@ export function mapFrontendSession(session: ChatSessionSummary) {
   };
 }
 
-export function mapFrontendMessage(message: ChatMessage, clientMessageId?: string | null) {
+export function mapFrontendMessage(message: ChatMessage, clientMessageIdOverride?: string | null | number) {
   const senderType = message.senderType === 'admin' ? 'OPERATOR' : 'VISITOR';
   const attachment = message.attachments[0] || null;
   return {
@@ -130,7 +122,10 @@ export function mapFrontendMessage(message: ChatMessage, clientMessageId?: strin
     read_at: message.readAt,
     created_at: message.createdAt,
     quote_message_id: null,
-    client_message_id: clientMessageId || null,
+    client_message_id: typeof clientMessageIdOverride === 'string'
+      ? clientMessageIdOverride
+      : message.clientMessageId ?? null,
+    deduped: Boolean(message.deduped),
     attachments: message.attachments,
   };
 }
@@ -149,8 +144,29 @@ export function mapFrontendAdmin(admin: FrontendAdminSource) {
   };
 }
 
+function mapFrontendInvite(invite: PublicInvite) {
+  return {
+    id: invite.id,
+    created_by_admin_id: invite.createdByAdminId,
+    source_admin_id: invite.sourceAdminId,
+    source_operator_id: invite.sourceAdminId,
+    sourceOperatorId: invite.sourceAdminId,
+    session_id: invite.sessionId,
+    expires_at: invite.expiresAt,
+    consumed_at: invite.consumedAt,
+    revoked_at: invite.revokedAt,
+    created_at: invite.createdAt,
+    mode: 'persistent_single_use',
+  };
+}
+
 function matchCompatSessionMessages(pathname: string): string | null {
   const match = /^\/api\/sessions\/([^/]+)\/messages$/.exec(pathname);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function matchCustomerRead(pathname: string): string | null {
+  const match = /^\/api\/sessions\/([^/]+)\/customer-read$/.exec(pathname);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -159,21 +175,33 @@ function matchGuestBootstrap(pathname: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function matchInviteRevoke(pathname: string): string | null {
+  const match = /^\/api\/invites\/([^/]+)\/revoke$/.exec(pathname);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function normalizeRequestedMessageIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new HttpError(400, 'message_ids_required');
+  if (value.length > MAX_READ_RECEIPT_MESSAGE_IDS) throw new HttpError(400, 'invalid_message_ids');
+
+  const messageIds: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new HttpError(400, 'invalid_message_ids');
+    const id = raw.trim();
+    if (!id || !isSafeId(id)) throw new HttpError(400, 'invalid_message_ids');
+    if (!seen.has(id)) {
+      seen.add(id);
+      messageIds.push(id);
+    }
+  }
+  return messageIds;
+}
+
 function enforceAbuseLimit(response: ServerResponse, decision: ReturnType<AbuseGuard['check']>) {
   if (decision.allowed) return false;
   sendRateLimitResponse(response, decision);
   return true;
-}
-
-async function findSessionByVisitorToken(db: PostgresAdapter, visitorToken: string): Promise<ChatSessionSummary | null> {
-  const rows = await db.query<ChatSessionRow>(
-    `SELECT id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at
-       FROM chat_sessions
-      WHERE visitor_token_hash = $1
-      LIMIT 1`,
-    [hashVisitorToken(visitorToken)],
-  );
-  return rows[0] ? mapChatSession(rows[0]) : null;
 }
 
 async function currentAdminOrNull(db: PostgresAdapter, request: IncomingMessage) {
@@ -190,9 +218,25 @@ async function requireAdmin(db: PostgresAdapter, request: IncomingMessage) {
   return requireCurrentAdmin(db, getAdminSessionToken(request.headers.cookie));
 }
 
-async function requireVisitorForSession(db: PostgresAdapter, sessionId: string, request: IncomingMessage, body?: Record<string, unknown>) {
+async function requireVisitorIdentity(
+  db: PostgresAdapter,
+  sessionId: string,
+  request: IncomingMessage,
+  body?: Record<string, unknown>,
+) {
   const visitorToken = visitorTokenFromRequest(request, body);
-  return requireVisitorSession(db, sessionId, visitorToken);
+  const session = await requireVisitorSession(db, sessionId, visitorToken);
+  return { session, visitorToken: requireString(visitorToken, 'visitorToken') };
+}
+
+function broadcastReadReceipt(context: FrontendCompatContext, sessionId: string, messageIds: string[], readAt: string | null) {
+  if (!messageIds.length) return;
+  context.hub.broadcastToSession(sessionId, {
+    type: 'messages:read',
+    sessionId,
+    messageIds,
+    readAt,
+  });
 }
 
 async function handleFrontendLogin(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
@@ -226,14 +270,41 @@ async function handleFrontendSessions(request: IncomingMessage, response: Server
   sendJson(response, 200, { ok: true, sessions: sessions.map(mapFrontendSession) });
 }
 
-async function handleFrontendSessionMessages(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext, sessionId: string) {
+async function handleFrontendSessionMessages(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: FrontendCompatContext,
+  sessionId: string,
+) {
   if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
   const admin = await currentAdminOrNull(context.db, request);
-  if (!admin) await requireVisitorForSession(context.db, sessionId, request);
+  const readerType = admin ? 'admin' : 'visitor';
+  if (!admin) await requireVisitorIdentity(context.db, sessionId, request);
   else await requireAdminSessionExists(context.db, sessionId);
 
+  const receipt = await markSessionMessagesRead(context.db, sessionId, readerType);
+  broadcastReadReceipt(context, sessionId, receipt.messageIds, receipt.readAt);
   const messages = await listSessionMessages(context.db, sessionId, context.config.encryption);
-  sendJson(response, 200, { ok: true, messages: messages.map((message) => mapFrontendMessage(message)) });
+  sendJson(response, 200, {
+    ok: true,
+    messages: messages.map((message) => mapFrontendMessage(message)),
+    read: receipt,
+  });
+}
+
+async function handleFrontendCustomerRead(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: FrontendCompatContext,
+  sessionId: string,
+) {
+  if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
+  const body = await readJsonBody<Record<string, unknown>>(request);
+  await requireVisitorIdentity(context.db, sessionId, request, body);
+  const requestedMessageIds = normalizeRequestedMessageIds(body.messageIds ?? body.message_ids);
+  const receipt = await markSessionMessagesRead(context.db, sessionId, 'visitor', requestedMessageIds);
+  broadcastReadReceipt(context, sessionId, receipt.messageIds, receipt.readAt);
+  sendJson(response, 200, { ok: true, ...receipt });
 }
 
 async function handleFrontendMessageCreate(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
@@ -243,7 +314,7 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
   if (enforceAbuseLimit(response, context.abuseGuard.check(request, 'message_ip'))) return;
   if (enforceAbuseLimit(response, context.abuseGuard.check(request, 'message_session', [abuseSessionPart(sessionId)]))) return;
 
-  const content = (optionalString(body.content) ?? optionalString(body.body) ?? '').trim();
+  const content = optionalString(body.content) ?? optionalString(body.body) ?? '';
   const messageType = (optionalString(body.messageType) || optionalString(body.message_type) || 'text').trim().toLowerCase();
   if (messageType !== 'text') throw new HttpError(501, 'server_generic_upload_unsupported');
 
@@ -253,60 +324,115 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
 
   if (senderType === 'OPERATOR' || senderType === 'ADMIN') {
     const admin = await requireAdmin(context.db, request);
-    message = await createSessionMessage(context.db, context.config.encryption, sessionId, 'admin', content, admin.id);
+    message = await createSessionMessage(
+      context.db,
+      context.config.encryption,
+      sessionId,
+      'admin',
+      content,
+      admin.id,
+      clientMessageId,
+    );
   } else if (senderType === 'VISITOR' || senderType === 'CUSTOMER') {
-    await requireVisitorForSession(context.db, sessionId, request, body);
-    message = await createSessionMessage(context.db, context.config.encryption, sessionId, 'visitor', content);
+    const visitor = await requireVisitorIdentity(context.db, sessionId, request, body);
+    message = await createSessionMessage(
+      context.db,
+      context.config.encryption,
+      sessionId,
+      'visitor',
+      content,
+      hashVisitorToken(visitor.visitorToken),
+      clientMessageId,
+    );
   } else {
     throw new HttpError(400, 'sender_type_required');
   }
 
   const session = await requireAdminSessionExists(context.db, sessionId);
-  const frontendMessage = mapFrontendMessage(message, clientMessageId);
-  context.hub.broadcastToSession(sessionId, { type: 'message_created', sessionId, message: frontendMessage as unknown as ChatMessage });
-  sendJson(response, 201, { ok: true, message: frontendMessage, session: mapFrontendSession(session) });
+  const frontendMessage = mapFrontendMessage(message);
+  if (!message.deduped) {
+    context.hub.broadcastToSession(sessionId, {
+      type: 'message_created',
+      sessionId,
+      message: frontendMessage as unknown as ChatMessage,
+    });
+  }
+  sendJson(response, message.deduped ? 200 : 201, {
+    ok: true,
+    deduped: Boolean(message.deduped),
+    message: frontendMessage,
+    session: mapFrontendSession(session),
+  });
 }
 
-async function handleFrontendGuestBootstrap(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext, token: string) {
-  if (!token || token.length > 128) throw new HttpError(404, 'invite_not_found');
+async function handleFrontendGuestBootstrap(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: FrontendCompatContext,
+  token: string,
+) {
   if (enforceAbuseLimit(response, context.abuseGuard.check(request, 'guest_bootstrap', [token]))) return;
   const body = await readJsonBody<Record<string, unknown>>(request);
-  let visitorToken = visitorTokenFromRequest(request, body);
-  let session = visitorToken ? await findSessionByVisitorToken(context.db, visitorToken) : null;
-
-  if (!session) {
-    const created = await createVisitorSession(context.db, { customerName: '访客' });
-    visitorToken = created.visitorToken;
-    session = created.session;
-  }
-
-  const messages = await listSessionMessages(context.db, session.id, context.config.encryption);
+  const existingVisitorToken = visitorTokenFromRequest(request, body);
+  const customerName = optionalString(body.customerName)?.trim() || '访客';
+  const consumed = await consumeInvite(context.db, token, existingVisitorToken, customerName);
+  const messages = await listSessionMessages(context.db, consumed.session.id, context.config.encryption);
   sendJson(
     response,
     200,
     {
       ok: true,
       selfHostedInvite: true,
-      invite: { token, mode: 'self_host_minimal_bootstrap' },
-      visitorId: visitorToken,
-      session: mapFrontendSession(session),
+      resumed: consumed.resumed,
+      invite: mapFrontendInvite(consumed.invite),
+      visitorId: consumed.visitorToken,
+      session: mapFrontendSession(consumed.session),
       messages: messages.map((message) => mapFrontendMessage(message)),
     },
-    { 'set-cookie': serializeVisitorCookie(requireString(visitorToken, 'visitorToken')) },
+    { 'set-cookie': serializeVisitorCookie(consumed.visitorToken) },
   );
 }
 
 async function handleFrontendInviteCreate(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
-  await requireAdmin(context.db, request);
-  const token = `selfhost-${randomUUID()}`;
+  const admin = await requireAdmin(context.db, request);
+  const body = await readJsonBody<Record<string, unknown>>(request);
+  const requestedSourceAdminId = (
+    optionalString(body.sourceOperatorId) ||
+    optionalString(body.source_operator_id) ||
+    optionalString(body.sourceAdminId) ||
+    optionalString(body.source_admin_id)
+  )?.trim() || null;
+  const sourceAdminId = requestedSourceAdminId || (admin.role === 'OPERATOR' ? admin.id : null);
+  const result = await createInvite(context.db, admin.id, {
+    sourceAdminId,
+    expiresInSeconds: body.expiresInSeconds ?? body.expires_in_seconds,
+  });
   sendJson(response, 201, {
     ok: true,
     invite: {
-      token,
-      url: `/g/${encodeURIComponent(token)}`,
-      mode: 'self_host_minimal_bootstrap',
+      ...mapFrontendInvite(result.invite),
+      token: result.token,
+      url: `/g/${encodeURIComponent(result.token)}`,
     },
   });
+}
+
+async function handleFrontendInviteList(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
+  await requireAdmin(context.db, request);
+  const invites = await listInvites(context.db, 100);
+  sendJson(response, 200, { ok: true, invites: invites.map(mapFrontendInvite) });
+}
+
+async function handleFrontendInviteRevoke(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: FrontendCompatContext,
+  inviteId: string,
+) {
+  await requireAdmin(context.db, request);
+  if (!isSafeId(inviteId)) throw new HttpError(404, 'invite_not_found');
+  const invite = await revokeInvite(context.db, inviteId);
+  sendJson(response, 200, { ok: true, invite: mapFrontendInvite(invite) });
 }
 
 async function handleFrontendUploadUnsupported(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
@@ -346,6 +472,12 @@ export async function handleFrontendCompatRequest(
     return true;
   }
 
+  const customerReadSessionId = matchCustomerRead(url.pathname);
+  if (request.method === 'POST' && customerReadSessionId) {
+    await handleFrontendCustomerRead(request, response, context, customerReadSessionId);
+    return true;
+  }
+
   if (request.method === 'POST' && url.pathname === '/api/messages') {
     await handleFrontendMessageCreate(request, response, context);
     return true;
@@ -357,8 +489,19 @@ export async function handleFrontendCompatRequest(
     return true;
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/invites') {
+    await handleFrontendInviteList(request, response, context);
+    return true;
+  }
+
   if (request.method === 'POST' && url.pathname === '/api/invites') {
     await handleFrontendInviteCreate(request, response, context);
+    return true;
+  }
+
+  const inviteId = matchInviteRevoke(url.pathname);
+  if (request.method === 'POST' && inviteId) {
+    await handleFrontendInviteRevoke(request, response, context, inviteId);
     return true;
   }
 

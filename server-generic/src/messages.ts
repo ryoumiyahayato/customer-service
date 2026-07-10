@@ -13,6 +13,8 @@ export type ChatMessage = {
   messageType: string;
   readAt: string | null;
   createdAt: string;
+  clientMessageId: string | null;
+  deduped?: boolean;
   attachments: AttachmentMetadata[];
 };
 
@@ -30,13 +32,27 @@ type MessageRow = {
   message_type: string;
   read_at: Date | null;
   created_at: Date;
+  client_message_id: string | null;
 };
+
+const MESSAGE_COLUMNS = `id, session_id, sender_type, sender_id, body, body_ciphertext, body_iv, body_tag,
+  body_algorithm, body_key_version, message_type, read_at, created_at, client_message_id`;
 
 export function normalizeMessageBody(value: unknown): string {
   const body = requireString(value, 'body').trim();
   if (!body) throw new HttpError(400, 'message_body_required');
   if (body.length > 4000) throw new HttpError(400, 'message_body_too_long');
   return body;
+}
+
+export function normalizeClientMessageId(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new HttpError(400, 'invalid_client_message_id');
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 128 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new HttpError(400, 'invalid_client_message_id');
+  }
+  return normalized;
 }
 
 function toIso(value: Date | null): string | null {
@@ -79,6 +95,7 @@ export function mapMessage(row: MessageRow, encryption: EncryptionConfig): ChatM
     messageType: row.message_type,
     readAt: toIso(row.read_at),
     createdAt: row.created_at.toISOString(),
+    clientMessageId: row.client_message_id,
     attachments: [],
   };
 }
@@ -89,11 +106,10 @@ export async function listSessionMessages(
   encryption: EncryptionConfig,
 ): Promise<ChatMessage[]> {
   const rows = await db.query<MessageRow>(
-    `SELECT id, session_id, sender_type, sender_id, body, body_ciphertext, body_iv, body_tag,
-            body_algorithm, body_key_version, message_type, read_at, created_at
+    `SELECT ${MESSAGE_COLUMNS}
        FROM messages
       WHERE session_id = $1
-      ORDER BY created_at ASC`,
+      ORDER BY created_at ASC, id ASC`,
     [sessionId],
   );
   const messages = rows.map((row) => mapMessage(row, encryption));
@@ -108,43 +124,138 @@ export async function listSessionMessages(
   }));
 }
 
+async function findExistingMessage(
+  client: import('pg').PoolClient,
+  encryption: EncryptionConfig,
+  sessionId: string,
+  senderType: 'visitor' | 'admin',
+  senderId: string | null,
+  clientMessageId: string,
+): Promise<ChatMessage | null> {
+  const existing = await client.query<MessageRow>(
+    `SELECT ${MESSAGE_COLUMNS}
+       FROM messages
+      WHERE session_id = $1
+        AND sender_type = $2
+        AND sender_id IS NOT DISTINCT FROM $3
+        AND client_message_id = $4
+      LIMIT 1`,
+    [sessionId, senderType, senderId, clientMessageId],
+  );
+  return existing.rows[0] ? mapMessage(existing.rows[0], encryption) : null;
+}
+
 export async function createSessionMessage(
   db: PostgresAdapter,
   encryption: EncryptionConfig,
   sessionId: string,
   senderType: 'visitor' | 'admin',
   body: string,
-  adminId: string | null = null,
+  senderId: string | null = null,
+  clientMessageIdValue: string | null = null,
 ): Promise<ChatMessage> {
-  return db.withTransaction(async (client) => {
-    const session = await client.query<{ status: string }>('SELECT status FROM chat_sessions WHERE id = $1', [sessionId]);
-    if (!session.rows[0]) throw new HttpError(404, 'session_not_found');
-    if (session.rows[0].status === 'closed') throw new HttpError(409, 'session_closed');
+  const normalizedBody = normalizeMessageBody(body);
+  const clientMessageId = normalizeClientMessageId(clientMessageIdValue);
 
-    const storedBody = prepareMessageBodyForStorage(body, encryption);
+  return db.withTransaction(async (client) => {
+    const session = await client.query<{
+      status: string;
+      archived_at: Date | null;
+      deleted_at: Date | null;
+      purged_at: Date | null;
+      history_cleared_at: Date | null;
+    }>(
+      `SELECT status, archived_at, deleted_at, purged_at, history_cleared_at
+         FROM chat_sessions
+        WHERE id = $1
+        FOR SHARE`,
+      [sessionId],
+    );
+    const current = session.rows[0];
+    if (!current) throw new HttpError(404, 'session_not_found');
+    const normalizedStatus = current.status.toLowerCase();
+    if (
+      normalizedStatus === 'closed' ||
+      normalizedStatus === 'archived' ||
+      current.archived_at ||
+      current.deleted_at ||
+      current.purged_at ||
+      current.history_cleared_at
+    ) {
+      throw new HttpError(409, 'session_ended');
+    }
+
+    if (clientMessageId) {
+      const existing = await findExistingMessage(client, encryption, sessionId, senderType, senderId, clientMessageId);
+      if (existing) {
+        if (existing.body !== normalizedBody) throw new HttpError(409, 'client_message_id_conflict');
+        return { ...existing, deduped: true };
+      }
+    }
+
+    const storedBody = prepareMessageBodyForStorage(normalizedBody, encryption);
     const result = await client.query<MessageRow>(
       `INSERT INTO messages (
          session_id, sender_type, sender_id, admin_id, body, body_ciphertext, body_iv,
-         body_tag, body_algorithm, body_key_version, message_type
+         body_tag, body_algorithm, body_key_version, message_type, client_message_id
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'text')
-       RETURNING id, session_id, sender_type, sender_id, body, body_ciphertext, body_iv, body_tag,
-                 body_algorithm, body_key_version, message_type, read_at, created_at`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'text', $11)
+       ON CONFLICT DO NOTHING
+       RETURNING ${MESSAGE_COLUMNS}`,
       [
         sessionId,
         senderType,
-        adminId,
-        adminId,
+        senderId,
+        senderType === 'admin' ? senderId : null,
         storedBody.body,
         storedBody.bodyCiphertext,
         storedBody.bodyIv,
         storedBody.bodyTag,
         storedBody.bodyAlgorithm,
         storedBody.bodyKeyVersion,
+        clientMessageId,
       ],
     );
 
+    if (!result.rows[0] && clientMessageId) {
+      const existing = await findExistingMessage(client, encryption, sessionId, senderType, senderId, clientMessageId);
+      if (!existing) throw new HttpError(409, 'message_idempotency_conflict');
+      if (existing.body !== normalizedBody) throw new HttpError(409, 'client_message_id_conflict');
+      return { ...existing, deduped: true };
+    }
+    if (!result.rows[0]) throw new HttpError(409, 'message_create_conflict');
+
     await client.query('UPDATE chat_sessions SET updated_at = now() WHERE id = $1', [sessionId]);
-    return mapMessage(result.rows[0], encryption);
+    return { ...mapMessage(result.rows[0], encryption), deduped: false };
   });
+}
+
+export async function markSessionMessagesRead(
+  db: PostgresAdapter,
+  sessionId: string,
+  readerType: 'visitor' | 'admin',
+  requestedMessageIds?: string[],
+): Promise<{ messageIds: string[]; readAt: string | null }> {
+  const senderType = readerType === 'admin' ? 'visitor' : 'admin';
+  const messageIds = requestedMessageIds === undefined
+    ? null
+    : [...new Set(requestedMessageIds.map((id) => id.trim()).filter(Boolean))];
+  if (messageIds && messageIds.length === 0) return { messageIds: [], readAt: null };
+
+  const requestedFilter = messageIds ? 'AND id::text = ANY($3::text[])' : '';
+  const params: unknown[] = messageIds ? [sessionId, senderType, messageIds] : [sessionId, senderType];
+  const rows = await db.query<{ id: string; read_at: Date }>(
+    `UPDATE messages
+        SET read_at = COALESCE(read_at, now()), updated_at = now()
+      WHERE session_id = $1
+        AND sender_type = $2
+        AND read_at IS NULL
+        ${requestedFilter}
+      RETURNING id, read_at`,
+    params,
+  );
+  return {
+    messageIds: rows.map((row) => row.id),
+    readAt: rows[0]?.read_at?.toISOString() || null,
+  };
 }

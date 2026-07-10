@@ -19,6 +19,12 @@ export type WebSocketBroadcast =
       message: ChatMessage;
     }
   | {
+      type: 'messages:read';
+      sessionId: string;
+      messageIds: string[];
+      readAt: string | null;
+    }
+  | {
       type: 'session_closed';
       sessionId: string;
       session: ChatSessionSummary;
@@ -111,8 +117,6 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
     });
 
     socket.on('message', () => {
-      // The URL and authenticated cookie bind the connection to exactly one room.
-      // Client-driven subscribe/switch messages are intentionally unsupported.
       socket.close(1008, 'client_messages_not_supported');
     });
 
