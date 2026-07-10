@@ -10,8 +10,9 @@
     "migrate": "node scripts/migrate.mjs up",
     "migrate:status": "node scripts/migrate.mjs status",
     "lifecycle:dry-run": "node scripts/lifecycle-dry-run.mjs",
-    "smoke": "node scripts/smoke.mjs && node scripts/check-abuse-guard.mjs",
+    "smoke": "node scripts/smoke.mjs && node scripts/check-abuse-guard.mjs && node scripts/check-websocket-auth.mjs",
     "check:abuse-guard": "node scripts/check-abuse-guard.mjs",
+    "check:websocket-auth": "node scripts/check-websocket-auth.mjs",
     "e2e:local-smoke": "node scripts/e2e-local-smoke.mjs"
   },
   "dependencies": {
