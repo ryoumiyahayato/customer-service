@@ -33,13 +33,22 @@ assert.match(wrapper, /Number\(claimed\?\.meta\?\.changes \|\| 0\) !== 1/);
 assert.match(wrapper, /attachment_binding_failed/);
 assert.match(wrapper, /DELETE FROM messages WHERE id=\? AND session_id=\? AND sender_type=\? AND sender_id=\?/);
 assert.match(wrapper, /UPDATE attachments SET claim_token=NULL/);
+assert.match(wrapper, /async function existingImageRetry/);
+assert.match(wrapper, /client_message_id=\?/);
+assert.match(wrapper, /attachment\.message_id === existing\.id/);
+assert.match(wrapper, /retry === 'deduped'/);
+assert.match(wrapper, /client_message_id_conflict/);
 
 assert.match(lifecycle, /datetime\(COALESCE\(updated_at, created_at\)\) <= datetime\('now', '-24 hours'\)/);
 assert.match(lifecycle, /datetime\(deleted_at\) <= datetime\('now', '-24 hours'\)/);
+assert.match(lifecycle, /claimTrashSessionForPurge/);
+assert.match(lifecycle, /SET purged_at=\?,updated_at=\?/);
 assert.match(lifecycle, /env\.UPLOADS!\.delete\(key\)/);
-assert.match(lifecycle, /DELETE FROM attachments WHERE conversation_id=\?/);
-assert.match(lifecycle, /DELETE FROM messages WHERE session_id=\?/);
-assert.ok(lifecycle.indexOf('env.UPLOADS!.delete(key)') < lifecycle.indexOf('SET purged_at=?'));
+assert.match(lifecycle, /DELETE FROM attachments/);
+assert.match(lifecycle, /DELETE FROM messages/);
+assert.match(lifecycle, /EXISTS \([\s\S]*?purged_at IS NOT NULL AND history_cleared_at IS NULL/);
+assert.match(lifecycle, /purged_at IS NOT NULL[\s\S]*?history_cleared_at IS NULL/);
+assert.ok(lifecycle.indexOf('SET purged_at=?,updated_at=?') < lifecycle.indexOf('env.UPLOADS!.delete(key)'));
 
 assert.match(websocket, /requireCurrentAdmin/);
 assert.match(websocket, /requireVisitorSession/);
@@ -49,6 +58,8 @@ assert.match(websocket, /client_messages_not_supported/);
 assert.match(genericIndex, /createWebSocketHub\(db\)/);
 assert.match(genericConfig, /server-generic public exposure is blocked/);
 assert.match(genericConfig, /SELF_HOST_EXPERIMENTAL_PUBLIC_ACK/);
+assert.match(genericConfig, /required production domains are missing/);
+assert.match(genericConfig, /requiredDomains\.some\(\(domain\) => !domain\.trim\(\)\)/);
 assert.match(preflight, /server-generic remains experimental/);
 
 assert.equal(existsSync('lib/types.ts'), false, 'unused lib/types.ts must remain deleted');
