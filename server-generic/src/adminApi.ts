@@ -4,9 +4,9 @@ import { requireCurrentAdmin } from './auth.js';
 import { closeChatSession, listAdminChatSessions, requireAdminSessionExists } from './chat.js';
 import type { GenericServerConfig } from './config.js';
 import type { PostgresAdapter } from './db/postgres.js';
-import { HttpError } from './http.js';
+import { HttpError, optionalString } from './http.js';
 import { archiveSession, clearSessionHistory, recycleSession } from './lifecycle.js';
-import { createSessionMessage, listSessionMessages, normalizeMessageBody } from './messages.js';
+import { createSessionMessage, listSessionMessages, markSessionMessagesRead, normalizeMessageBody } from './messages.js';
 import { readJsonBody, sendJson } from './response.js';
 import { isSafeId } from './routes.js';
 import { getAdminSessionToken } from './security.js';
@@ -36,8 +36,12 @@ export async function handleAdminMessages(
   await requireAdminSessionExists(db, sessionId);
 
   if (request.method === 'GET') {
+    const receipt = await markSessionMessagesRead(db, sessionId, 'admin');
+    if (receipt.messageIds.length) {
+      hub.broadcastToSession(sessionId, { type: 'messages_read', sessionId, ...receipt });
+    }
     const messages = await listSessionMessages(db, sessionId, config.encryption);
-    sendJson(response, 200, { ok: true, messages });
+    sendJson(response, 200, { ok: true, messages, read: receipt });
     return;
   }
 
@@ -50,9 +54,10 @@ export async function handleAdminMessages(
       'admin',
       normalizeMessageBody(body.body),
       admin.id,
+      optionalString(body.clientMessageId) || optionalString(body.client_message_id),
     );
-    hub.broadcastToSession(sessionId, { type: 'message_created', sessionId, message });
-    sendJson(response, 201, { ok: true, message });
+    if (!message.deduped) hub.broadcastToSession(sessionId, { type: 'message_created', sessionId, message });
+    sendJson(response, message.deduped ? 200 : 201, { ok: true, deduped: Boolean(message.deduped), message });
     return;
   }
 
