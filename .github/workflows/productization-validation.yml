@@ -78,6 +78,15 @@ jobs:
       - name: Root admin message race guard
         run: npm run check:admin-race
 
+      - name: Root session lifecycle state check
+        run: npm run check-session-lifecycle
+
+      - name: Root high-risk business closure check
+        run: npm run check:business-closures
+
+      - name: Root obvious code issues
+        run: npm run check:obvious
+
       - name: Root typecheck
         run: npm run typecheck
 
@@ -101,6 +110,7 @@ jobs:
           bash -n deploy/linux/backup.sh
           bash -n deploy/linux/restore.sh
           bash -n deploy/linux/upgrade.sh
+          bash -n deploy/linux/preflight.sh
 
       - name: Docker compose static config
         shell: bash
