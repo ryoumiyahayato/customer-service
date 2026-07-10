@@ -27,6 +27,24 @@ type MessageSender = {
   sessionId: string;
 };
 
+type ExistingMessage = {
+  id: string;
+  session_id: string;
+  sender_type: 'OPERATOR' | 'VISITOR';
+  sender_id: string;
+  message_type: string;
+  image_path: string | null;
+  client_message_id: string;
+};
+
+type AttachmentBinding = {
+  message_id: string | null;
+  conversation_id: string;
+  created_by_type: string;
+  created_by_id: string;
+  deleted_at: string | null;
+};
+
 const inner = secureWorker as WorkerModule;
 const ADMIN_COOKIE = 'support_admin';
 const GUEST_COOKIE = 'guest_session';
@@ -289,6 +307,43 @@ async function resolveMessageSender(env: Env, req: Request, body: any): Promise<
   return { senderType: 'VISITOR', senderId: guest.visitor_key, sessionId };
 }
 
+async function existingImageRetry(
+  env: Env,
+  sender: MessageSender,
+  body: any,
+  attachmentKey: string,
+): Promise<'none' | 'deduped' | 'conflict'> {
+  const rawClientMessageId = typeof body.clientMessageId === 'string' ? body.clientMessageId.trim() : '';
+  if (!rawClientMessageId) return 'none';
+  const clientMessageId = rawClientMessageId.slice(0, 120);
+
+  const existing = await env.DB.prepare(
+    `SELECT id,session_id,sender_type,sender_id,message_type,image_path,client_message_id
+       FROM messages
+      WHERE session_id=? AND sender_type=? AND sender_id=? AND client_message_id=?
+      LIMIT 1`,
+  ).bind(sender.sessionId, sender.senderType, sender.senderId, clientMessageId).first<ExistingMessage>();
+  if (!existing?.id) return 'none';
+
+  const attachment = await env.DB.prepare(
+    `SELECT message_id,conversation_id,created_by_type,created_by_id,deleted_at
+       FROM attachments
+      WHERE object_key=?
+      LIMIT 1`,
+  ).bind(attachmentKey).first<AttachmentBinding>();
+
+  const sameMessage = existing.message_type === 'image' && existing.image_path === body.imagePath;
+  const sameAttachment = Boolean(
+    attachment
+      && !attachment.deleted_at
+      && attachment.message_id === existing.id
+      && attachment.conversation_id === sender.sessionId
+      && attachment.created_by_type === sender.senderType
+      && attachment.created_by_id === sender.senderId,
+  );
+  return sameMessage && sameAttachment ? 'deduped' : 'conflict';
+}
+
 async function releaseAttachmentClaim(env: Env, attachmentKey: string, claimToken: string) {
   await env.DB.prepare(
     'UPDATE attachments SET claim_token=NULL WHERE object_key=? AND claim_token=? AND message_id IS NULL',
@@ -304,6 +359,10 @@ async function handleImageMessage(req: Request, env: Env, ctx: ExecutionContext)
 
   const sender = await resolveMessageSender(env, req, body);
   if (sender instanceof Response) return sender;
+
+  const retry = await existingImageRetry(env, sender, body, attachmentKey);
+  if (retry === 'deduped') return inner.fetch(req, env, ctx);
+  if (retry === 'conflict') return json({ error: 'client_message_id_conflict' }, 409);
 
   const claimToken = crypto.randomUUID();
   const claimed: any = await env.DB.prepare(
