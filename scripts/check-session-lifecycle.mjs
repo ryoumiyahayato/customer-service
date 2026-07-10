@@ -55,11 +55,15 @@ try {
   check('auth expiry normalizes expires_at with datetime()', lifecycle.includes("datetime(expires_at) <= datetime('now')"));
   check('invite expiry normalizes expires_at with datetime()', lifecycle.includes("datetime(expires_at) <= datetime('now')"));
 
-  check('purge collects R2 keys before database cleanup', lifecycle.includes('collectPurgeKeys') && lifecycle.includes('env.UPLOADS!.delete(key)'));
-  check('purge deletes attachment rows', lifecycle.includes('DELETE FROM attachments WHERE conversation_id=?'));
-  check('purge deletes message rows', lifecycle.includes('DELETE FROM messages WHERE session_id=?'));
-  check('purge marks purged only after cleanup batch', lifecycle.indexOf('env.UPLOADS!.delete(key)') < lifecycle.indexOf('SET purged_at=?'));
-  check('purge also marks history cleared', lifecycle.includes('history_cleared_at=COALESCE(history_cleared_at,?)'));
+  const claimIndex = lifecycle.indexOf('SET purged_at=?,updated_at=?');
+  const r2DeleteIndex = lifecycle.indexOf('env.UPLOADS!.delete(key)');
+  check('purge claims the session before destructive cleanup', claimIndex >= 0 && r2DeleteIndex >= 0 && claimIndex < r2DeleteIndex);
+  check('purge retries claimed sessions with uncleared history', lifecycle.includes('purged_at IS NOT NULL') && lifecycle.includes('history_cleared_at IS NULL'));
+  check('purge collects R2 keys after eligibility claim', lifecycle.includes('collectPurgeKeys') && lifecycle.includes('env.UPLOADS!.delete(key)'));
+  check('purge deletes attachment rows', lifecycle.includes('DELETE FROM attachments'));
+  check('purge deletes message rows', lifecycle.includes('DELETE FROM messages'));
+  check('purge database deletes are state guarded', lifecycle.includes('EXISTS (') && lifecycle.includes('purged_at IS NOT NULL AND history_cleared_at IS NULL'));
+  check('purge marks history cleared only after cleanup', lifecycle.indexOf('history_cleared_at=COALESCE(history_cleared_at,?)') > r2DeleteIndex);
   check('purge requires UPLOADS when object cleanup is needed', lifecycle.includes('lifecycle purge requires UPLOADS binding'));
   check('purge database operations use D1 batch', lifecycle.includes('await env.DB.batch(['));
 
