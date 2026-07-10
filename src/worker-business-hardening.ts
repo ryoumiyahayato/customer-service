@@ -14,6 +14,13 @@ type AdminIdentity = {
   is_disabled?: number;
 };
 
+type AdminSessionRow = {
+  admin_id: string;
+  created_at: string;
+  last_seen_at: string | null;
+  expires_at: string;
+};
+
 type MessageSender = {
   senderType: 'OPERATOR' | 'VISITOR';
   senderId: string;
@@ -25,6 +32,8 @@ const ADMIN_COOKIE = 'support_admin';
 const GUEST_COOKIE = 'guest_session';
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 const JSON_REQUEST_MAX_BYTES = 64 * 1024;
+const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const ADMIN_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const enc = new TextEncoder();
 
 function json(body: unknown, status = 200) {
@@ -33,8 +42,11 @@ function json(body: unknown, status = 200) {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
+      'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     },
   });
 }
@@ -92,18 +104,41 @@ function requestBodyTooLarge(req: Request) {
   return Number.isFinite(length) && length > JSON_REQUEST_MAX_BYTES;
 }
 
+function adminSessionExpired(session: AdminSessionRow, at = Date.now()) {
+  const createdAt = Date.parse(session.created_at || '');
+  const lastSeenAt = Date.parse(session.last_seen_at || session.created_at || '');
+  const expiresAt = Date.parse(session.expires_at || '');
+  return !Number.isFinite(createdAt)
+    || !Number.isFinite(lastSeenAt)
+    || !Number.isFinite(expiresAt)
+    || expiresAt <= at
+    || at - createdAt > ADMIN_SESSION_MAX_AGE_MS
+    || at - lastSeenAt > ADMIN_SESSION_IDLE_TIMEOUT_MS;
+}
+
 async function currentAdmin(env: Env, req: Request): Promise<AdminIdentity | null> {
   const sessionId = await verifySignedId(env, getCookie(req, ADMIN_COOKIE));
   if (!sessionId) return null;
   const session = await env.DB.prepare(
-    `SELECT admin_id FROM admin_sessions
-      WHERE id=? AND token_hash=? AND revoked_at IS NULL AND datetime(expires_at)>datetime('now')
+    `SELECT admin_id,created_at,last_seen_at,expires_at FROM admin_sessions
+      WHERE id=? AND token_hash=? AND revoked_at IS NULL
       LIMIT 1`,
-  ).bind(sessionId, await tokenHash(env, sessionId)).first<{ admin_id: string }>();
+  ).bind(sessionId, await tokenHash(env, sessionId)).first<AdminSessionRow>();
   if (!session?.admin_id) return null;
-  return await env.DB.prepare(
+  if (adminSessionExpired(session)) {
+    await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=?').bind(new Date().toISOString(), sessionId).run();
+    return null;
+  }
+  const admin = await env.DB.prepare(
     `SELECT id,username,role,is_disabled FROM admins WHERE id=? AND is_disabled=0 LIMIT 1`,
-  ).bind(session.admin_id).first<AdminIdentity>() || null;
+  ).bind(session.admin_id).first<AdminIdentity>();
+  if (!admin) return null;
+  const timestamp = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL').bind(timestamp, sessionId),
+    env.DB.prepare('UPDATE admins SET last_seen_at=? WHERE id=? AND is_disabled=0').bind(timestamp, admin.id),
+  ]);
+  return admin;
 }
 
 async function requireSuperAdmin(env: Env, req: Request): Promise<AdminIdentity | Response> {
