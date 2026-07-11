@@ -1,5 +1,6 @@
 {
   "scripts": {
+<<<<<<< ours
     "dev": "wrangler dev",
     "dev:spa": "vite --host 127.0.0.1",
     "doctor": "node scripts/doctor.mjs",
@@ -38,5 +39,29 @@
     "terser": "^5.48.0",
     "typescript": "^5.8.3",
     "wrangler": "4.104.0"
+=======
+    "dev": "next dev",
+    "build": "next build",
+    "start": "node server.js",
+    "start:linux": "bash scripts/start-linux.sh",
+    "make-release": "node scripts/make-release.js",
+    "init-db": "node scripts/init-db.js",
+    "create-admin": "node scripts/create-admin.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "better-sqlite3": "^11.10.0",
+    "next": "^15.3.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/react": "^19.0.12",
+    "@types/react-dom": "^19.0.4",
+    "typescript": "^5.8.3"
+>>>>>>> theirs
   }
 }
