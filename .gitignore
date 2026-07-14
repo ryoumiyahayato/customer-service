@@ -3,7 +3,6 @@ node_modules/
 out/
 data/
 .env
-<<<<<<< ours
 .dev.vars
 .env.local
 .env.*.local
@@ -47,10 +46,3 @@ public/uploads/*
 deploy.bat
 deploy.local.bat
 *.local.bat
-=======
-.env.local
-release/
-npm-debug.log*
-public/uploads/*
-!public/uploads/.gitkeep
->>>>>>> theirs
