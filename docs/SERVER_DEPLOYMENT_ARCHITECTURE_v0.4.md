@@ -72,8 +72,8 @@
 - `install.sh` 已执行 compose config、build、up 和 healthcheck。
 - `healthcheck.sh` 已检查 compose 状态、app 容器、根路径和 setup status。
 - `backup.sh` 已具备 PostgreSQL dump 和 storage 归档骨架。
-- `restore.sh` 默认拒绝覆盖数据，要求显式确认参数。
-- `upgrade.sh` 已包含 pull/build/up/healthcheck 和 rollback TODO。
+- `restore.sh` 默认拒绝覆盖数据，要求显式确认参数；恢复前验证 HMAC/校验和/归档并创建数据库快照，失败时回滚数据库和 storage，回滚失败则保持 app 停止。
+- `upgrade.sh` 已包含 pull/build/up/healthcheck 和应用镜像失败回滚；PostgreSQL migration 与其他服务镜像仍需人工回滚方案。
 - `server-generic` 目前只提供普通服务器最小 HTTP 入口，不替代 Cloudflare Worker。
 
 ## Linux 实机部署闭环强化第一包状态

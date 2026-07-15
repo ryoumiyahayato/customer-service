@@ -4,6 +4,7 @@ import type { DeploymentConfig } from './config.js';
 import { Client, type SFTPWrapper } from 'ssh2';
 import { redactText } from './redact.js';
 import { readFile } from 'node:fs/promises';
+import { createHostKeyVerifier } from './sshHostKey.js';
 
 export type TransferResult = {
   ok: true;
@@ -57,6 +58,7 @@ function connectionConfig(config: DeploymentConfig) {
     port: config.port,
     username: config.username,
     readyTimeout: 20_000,
+    hostVerifier: createHostKeyVerifier(config.hostKeySha256),
   };
 
   if (config.authMethod === 'privateKey') {

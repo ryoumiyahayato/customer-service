@@ -8,6 +8,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebSettings
 import android.widget.Toast
 
 class MainActivity : Activity() {
@@ -23,6 +24,10 @@ class MainActivity : Activity() {
             settings.domStorageEnabled = true
             settings.allowFileAccess = false
             settings.allowContentAccess = false
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.javaScriptCanOpenWindowsAutomatically = false
+            settings.setSupportMultipleWindows(false)
+            settings.safeBrowsingEnabled = true
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val url = request.url.toString()
@@ -43,8 +48,10 @@ class MainActivity : Activity() {
         }
 
         setContentView(webView)
-        if (WebViewSecurity.isAllowedUrl(AppConfig.adminUrl)) {
-            webView.loadUrl(AppConfig.adminUrl)
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        val startUrl = if (intent.getStringExtra("startMode") == "visitor") AppConfig.visitorRootUrl else AppConfig.adminUrl
+        if (WebViewSecurity.isAllowedUrl(startUrl)) {
+            webView.loadUrl(startUrl)
         } else {
             Toast.makeText(this, R.string.invalid_start_url, Toast.LENGTH_LONG).show()
         }

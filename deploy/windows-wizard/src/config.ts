@@ -14,6 +14,7 @@ export type DeploymentConfig = {
   authMethod: AuthMethod;
   passwordEnv?: string;
   privateKeyPath?: string;
+  hostKeySha256?: string;
   appDomain: string;
   visitorRootDomain: string;
   remoteBaseDir: string;

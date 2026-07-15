@@ -11,6 +11,6 @@ export default defineConfig({
       renderLegacyChunks: true,
     }),
   ],
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2017', cssTarget: 'chrome61' },
+  build: { outDir: 'dist', emptyOutDir: true, cssTarget: 'chrome61' },
   server: { proxy: { '/api': 'http://127.0.0.1:8787' } },
 });

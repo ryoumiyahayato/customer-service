@@ -59,6 +59,7 @@ assert.deepEqual(classifyAbuseRoute('POST', '/api/auth/login'), ['admin_login'])
 assert.deepEqual(classifyAbuseRoute('POST', '/api/admin/login'), ['admin_login']);
 assert.deepEqual(classifyAbuseRoute('POST', '/api/setup/initialize'), ['setup_initialize']);
 assert.deepEqual(classifyAbuseRoute('POST', '/api/guest/smoke-token'), ['guest_bootstrap']);
+assert.deepEqual(classifyAbuseRoute('POST', '/api/visitor/sessions'), ['guest_bootstrap']);
 assert.deepEqual(classifyAbuseRoute('POST', '/api/messages'), ['message_ip', 'message_session']);
 assert.deepEqual(classifyAbuseRoute('POST', '/api/upload'), ['upload']);
 
@@ -118,10 +119,12 @@ assert.equal(guard.check(uploadRequest, 'upload', [abuseSessionPart(secretSessio
 requireLimited(guard.check(uploadRequest, 'upload', [abuseSessionPart(secretSession)]));
 
 const source = await readFile(new URL('../src/abuseGuard.ts', import.meta.url), 'utf8');
+const indexSource = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
 assert.match(source, /remoteAddress/);
 assert.doesNotMatch(source, /headers\[["']x-forwarded-for["']\]|headers\.x-forwarded-for/i);
 assert.doesNotMatch(source, /body\.content|messageBody|password_hash/);
 assert.match(source, /Retry-After|retry-after/);
 assert.match(source, /rate_limited/);
+assert.match(indexSource, /url\.pathname === '\/api\/visitor\/sessions'[\s\S]*abuseGuard\.check\(request, 'guest_bootstrap'\)/);
 
 console.log('server-generic abuse guard checks passed');

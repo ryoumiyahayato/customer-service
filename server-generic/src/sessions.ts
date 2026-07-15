@@ -11,6 +11,10 @@ export type AdminIdentity = {
   createdAt: string;
 };
 
+export function isSuperAdmin(admin: Pick<AdminIdentity, 'role'>): boolean {
+  return admin.role === 'SUPER_ADMIN' || admin.role === 'admin';
+}
+
 type AdminRow = {
   id: string;
   username: string;
@@ -26,7 +30,7 @@ function mapAdmin(row: AdminRow): AdminIdentity {
     username: row.username,
     email: row.email,
     displayName: row.display_name,
-    role: row.role,
+    role: row.role === 'admin' ? 'SUPER_ADMIN' : row.role,
     createdAt: row.created_at.toISOString(),
   };
 }

@@ -233,6 +233,7 @@ if [ -f ".env" ]; then
     "STORAGE_PATH"
     "MAX_UPLOAD_SIZE"
     "BACKUP_DIR"
+    "BACKUP_SIGNING_KEY"
     "LOG_LEVEL"
   )
 
@@ -240,7 +241,7 @@ if [ -f ".env" ]; then
     check_required_env "$key"
   done
 
-  for key in APP_DOMAIN VISITOR_ROOT_DOMAIN POSTGRES_PASSWORD DATABASE_URL SESSION_SECRET SETUP_TOKEN; do
+  for key in APP_DOMAIN VISITOR_ROOT_DOMAIN POSTGRES_PASSWORD DATABASE_URL SESSION_SECRET SETUP_TOKEN BACKUP_SIGNING_KEY; do
     if env_key_nonempty "$key" && env_value_matches "$key" 'change-me|example\.com|localhost|127\.0\.0\.1'; then
       fail ".env key appears to contain a placeholder or localhost value: ${key}"
     fi

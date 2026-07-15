@@ -2,11 +2,11 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import { requireCurrentAdmin } from './auth.js';
-import { requireAdminSessionExists, requireVisitorSession, type ChatSessionSummary } from './chat.js';
+import { requireAdminSessionAccess, requireVisitorSession, type ChatSessionSummary } from './chat.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import type { ChatMessage } from './messages.js';
 import { isSafeId } from './routes.js';
-import { getAdminSessionToken, parseCookies } from './security.js';
+import { getAdminSessionToken, isSameOriginWebSocket, parseCookies } from './security.js';
 
 const VISITOR_COOKIE_NAME = 'support_visitor';
 const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024;
@@ -63,6 +63,7 @@ function visitorCookieToken(request: IncomingMessage): string | null {
 }
 
 async function authenticateUpgrade(db: PostgresAdapter, request: IncomingMessage): Promise<UpgradeBinding | null> {
+  if (!isSameOriginWebSocket(request)) throw Object.assign(new Error('forbidden'), { status: 403 });
   const host = request.headers.host || 'localhost';
   const url = new URL(request.url || '/', `http://${host}`);
 
@@ -79,8 +80,8 @@ async function authenticateUpgrade(db: PostgresAdapter, request: IncomingMessage
 
   const adminToken = getAdminSessionToken(request.headers.cookie);
   if (adminToken) {
-    await requireCurrentAdmin(db, adminToken);
-    await requireAdminSessionExists(db, sessionId);
+    const admin = await requireCurrentAdmin(db, adminToken);
+    await requireAdminSessionAccess(db, admin, sessionId);
     return { room: sessionId };
   }
 

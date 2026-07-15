@@ -675,9 +675,9 @@ export default function AdminDashboard() {
     setCreateOpLoading(false);
   };
 
-  const disableOp = async (op: any, hard?: boolean) => {
-    setDisableOpLoading(hard ? '删除中...' : '禁用中...');
-    try { await apiFetch('/api/admins/operators', { method: 'DELETE', body: JSON.stringify({ id: op.id, hard }) }); fetchOps(); }
+  const disableOp = async (op: any) => {
+    setDisableOpLoading('禁用中...');
+    try { await apiFetch('/api/admins/operators', { method: 'DELETE', body: JSON.stringify({ id: op.id }) }); await fetchOps(); }
     catch (e: any) { showToast(e?.message || '操作失败'); }
     setDisableOpLoading(null);
   };
@@ -874,7 +874,7 @@ export default function AdminDashboard() {
                     {operators.length ? operators.map(op => (
                       <div className="operator-row" key={op.id}>
                         <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
-                        {op.is_disabled ? <button type="button" className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
+                        {op.is_disabled ? <span className="muted">已禁用</span> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
                     )) : <StatusBlock>暂无客服账号，可先创建一个客服账号。</StatusBlock>}
                   </div>
@@ -948,7 +948,7 @@ export default function AdminDashboard() {
                     {operators.length ? operators.map(op => (
                       <div className="operator-row" key={op.id}>
                         <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
-                        {op.is_disabled ? <button type="button" className="btn danger" onClick={() => disableOp(op, true)} disabled={!!disableOpLoading}>{disableOpLoading === '删除中...' ? '删除中...' : '删除'}</button> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
+                        {op.is_disabled ? <span className="muted">已禁用</span> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
                     )) : <StatusBlock>暂无客服账号，可先创建一个客服账号。</StatusBlock>}
                   </div>

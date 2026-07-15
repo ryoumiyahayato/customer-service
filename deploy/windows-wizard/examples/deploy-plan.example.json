@@ -7,6 +7,7 @@
   "username": "deploy",
   "authMethod": "privateKey",
   "privateKeyPath": "C:\\Users\\YourUser\\.ssh\\id_ed25519",
+  "hostKeySha256": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   "appDomain": "admin.example.com",
   "visitorRootDomain": "visitor.example.com",
   "remoteBaseDir": "/opt"

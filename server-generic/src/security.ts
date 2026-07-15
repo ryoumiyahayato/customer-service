@@ -1,6 +1,51 @@
+import type { IncomingMessage } from 'node:http';
 import type { GenericServerConfig } from './config.js';
 
 export const ADMIN_COOKIE_NAME = 'support_admin';
+const AMBIENT_COOKIE_NAMES = [ADMIN_COOKIE_NAME, 'support_visitor'];
+
+function localHost(host: string) {
+  let normalized = host.toLowerCase();
+  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
+  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) {
+    normalized = normalized.slice(0, normalized.lastIndexOf(':'));
+  }
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function expectedOrigin(request: IncomingMessage) {
+  const host = request.headers.host || 'localhost';
+  const forwarded = request.headers['x-forwarded-proto'];
+  const rawProtocol = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const protocol = rawProtocol?.split(',')[0]?.trim() || (localHost(host) ? 'http' : 'https');
+  return `${protocol}://${host}`;
+}
+
+function sameOrigin(value: string, expected: string) {
+  try {
+    return new URL(value).origin === expected;
+  } catch {
+    return false;
+  }
+}
+
+export function isSameOriginWrite(request: IncomingMessage): boolean {
+  const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
+  const expected = expectedOrigin(request);
+  if (origin) return sameOrigin(origin, expected);
+  const referer = Array.isArray(request.headers.referer) ? request.headers.referer[0] : request.headers.referer;
+  if (referer) return sameOrigin(referer, expected);
+
+  const cookies = parseCookies(request.headers.cookie);
+  const hasAmbientCredentials = AMBIENT_COOKIE_NAMES.some((name) => cookies.has(name));
+  return !hasAmbientCredentials || localHost(request.headers.host || 'localhost');
+}
+
+export function isSameOriginWebSocket(request: IncomingMessage): boolean {
+  const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
+  if (origin) return sameOrigin(origin, expectedOrigin(request));
+  return localHost(request.headers.host || 'localhost');
+}
 
 export function parseCookies(header: string | string[] | undefined): Map<string, string> {
   const raw = Array.isArray(header) ? header.join(';') : header;

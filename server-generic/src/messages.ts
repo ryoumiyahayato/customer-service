@@ -3,6 +3,8 @@ import { maybeDecryptText, maybeEncryptText, type EncryptedText } from './encryp
 import type { EncryptionConfig } from './encryptionConfig.js';
 import { HttpError, requireString } from './http.js';
 import { listAttachmentsForMessages, type AttachmentMetadata } from './attachments.js';
+import { canAdminAccessSession } from './chat.js';
+import type { AdminIdentity } from './sessions.js';
 
 export type ChatMessage = {
   id: string;
@@ -153,6 +155,7 @@ export async function createSessionMessage(
   body: string,
   senderId: string | null = null,
   clientMessageIdValue: string | null = null,
+  adminActor?: AdminIdentity,
 ): Promise<ChatMessage> {
   const normalizedBody = normalizeMessageBody(body);
   const clientMessageId = normalizeClientMessageId(clientMessageIdValue);
@@ -164,8 +167,9 @@ export async function createSessionMessage(
       deleted_at: Date | null;
       purged_at: Date | null;
       history_cleared_at: Date | null;
+      assigned_operator_id: string | null;
     }>(
-      `SELECT status, archived_at, deleted_at, purged_at, history_cleared_at
+      `SELECT status, archived_at, deleted_at, purged_at, history_cleared_at, assigned_operator_id
          FROM chat_sessions
         WHERE id = $1
         FOR SHARE`,
@@ -173,6 +177,12 @@ export async function createSessionMessage(
     );
     const current = session.rows[0];
     if (!current) throw new HttpError(404, 'session_not_found');
+    if (
+      senderType === 'admin' &&
+      (!adminActor || senderId !== adminActor.id || !canAdminAccessSession(adminActor, current.assigned_operator_id))
+    ) {
+      throw new HttpError(404, 'session_not_found');
+    }
     const normalizedStatus = current.status.toLowerCase();
     if (
       normalizedStatus === 'closed' ||

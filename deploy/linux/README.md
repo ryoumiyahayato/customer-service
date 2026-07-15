@@ -59,7 +59,7 @@ Productization validation 已覆盖 local Docker self-host smoke：CI 会在 Git
 9. 已完成 schema 初始化时，执行 `./install.sh`。
 10. 健康检查通过后打开 `https://你的后台域名/setup`。
 
-当前通用服务器适配层已经具备 setup、admin auth、admin session、访客会话、文本消息、附件上传、基础 WebSocket 广播、lifecycle 骨架、服务端加密存储和 PostgreSQL migration 基础闭环。完整 read receipt、自动 runner 调度接线和生产数据迁移工具仍会在后续包继续推进。
+当前通用服务器适配层已经具备 setup、admin auth、admin session、访客会话、文本消息、附件上传、基础 WebSocket 广播、基础 read receipt、lifecycle 骨架、服务端加密存储和 PostgreSQL migration 基础闭环。消息分页、delivery acknowledgement、自动 runner 调度接线和生产数据迁移工具仍会在后续包继续推进。
 
 ## 本地 Docker self-host smoke
 
@@ -68,7 +68,7 @@ Productization validation 已覆盖 local Docker self-host smoke：CI 会在 Git
 在仓库根目录先生成前端产物：
 
 ```bash
-npm install --package-lock=false --no-audit --no-fund
+npm ci --no-audit --no-fund
 npm run build
 ```
 
@@ -141,8 +141,8 @@ Caddy 使用 `.env` 中的 `APP_DOMAIN` 和 `VISITOR_ROOT_DOMAIN` 自动申请 H
 
 ## 备份、恢复和升级
 
-- `./backup.sh`：生成时间戳备份目录，备份 PostgreSQL dump 和 storage；默认不复制 `.env`，只提示部署人员单独保护 secret。
-- `./restore.sh --i-understand-this-overwrites-data <backup-directory>`：强确认后才恢复数据库和 storage，执行前会停止 app 写入。
+- `./backup.sh`：生成时间戳备份目录，备份 PostgreSQL dump 和 storage；使用 `BACKUP_SIGNING_KEY` 为校验清单计算 HMAC，默认不复制 `.env`。
+- `./restore.sh --i-understand-this-overwrites-data <backup-directory>`：强确认后才恢复数据库和 storage；停止 app 前会验证 HMAC、校验和、归档路径及文件类型，并创建恢复前数据库快照；后续步骤失败时自动回滚数据库和 storage，回滚失败则保持 app 停止。
 - `./upgrade.sh`：构建 app 镜像、启动服务并运行 healthcheck。
 - `./upgrade.sh --migrate`：仅在明确迁移窗口内运行 server-generic PostgreSQL migration。
 

@@ -178,6 +178,7 @@ export function classifyAbuseRoute(method: string, pathname: string): AbusePolic
   if (pathname === '/api/auth/login' || pathname === '/api/admin/login') return ['admin_login'];
   if (pathname === '/api/setup/initialize') return ['setup_initialize'];
   if (/^\/api\/guest\/[^/]+$/.test(pathname)) return ['guest_bootstrap'];
+  if (pathname === '/api/visitor/sessions') return ['guest_bootstrap'];
   if (pathname === '/api/messages') return ['message_ip', 'message_session'];
   if (pathname === '/api/upload') return ['upload'];
   if (/^\/api\/(visitor|admin)\/sessions\/[^/]+\/messages$/.test(pathname)) return ['message_ip', 'message_session'];

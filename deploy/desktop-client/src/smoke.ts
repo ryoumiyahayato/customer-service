@@ -27,11 +27,22 @@ export async function runSmoke(): Promise<void> {
   assert(!validateDesktopClientConfig({ ...cleanConfig, adminUrl: 'javascript:alert(1)' }).ok, 'javascript URL should fail');
   assert(!validateDesktopClientConfig({ ...cleanConfig, adminUrl: 'data:text/html,hi' }).ok, 'data URL should fail');
   assert(!validateDesktopClientConfig(validConfig).ok, 'sensitive query should fail validation');
+  assert(!validateDesktopClientConfig({ ...cleanConfig, adminUrl: 'http://admin.example.com/' }).ok, 'remote HTTP should fail');
+  assert(validateDesktopClientConfig({ ...cleanConfig, adminUrl: 'http://127.0.0.1:8788/' }).ok, 'local HTTP should pass');
+  assert(!validateDesktopClientConfig({ ...cleanConfig, adminUrl: 'https://alice:secret@admin.example.com/' }).ok, 'URL credentials should fail');
+  assert(!validateDesktopClientConfig({ ...cleanConfig, adminUrl: 'https://admin.example.com/#token=secret' }).ok, 'URL fragments should fail');
 
   const redactedUrl = redactUrl(validConfig.adminUrl);
   assert(!redactedUrl.includes('abc'), 'token query should be redacted');
   assert(redactText('cookie=session-value').includes('[REDACTED]'), 'cookie log should be redacted');
   assert(redactText('ENCRYPTION_KEY=sample').includes('[REDACTED]'), 'encryption key log should be redacted');
+  assert(redactText('BACKUP_SIGNING_KEY=sample').includes('[REDACTED]'), 'backup signing key log should be redacted');
+  const credentialUrl = 'https://alice:supersecret@example.com/path#token=leak';
+  const redactedCredentialUrl = redactUrl(credentialUrl);
+  assert(!redactedCredentialUrl.includes('alice'), 'URL username should be redacted');
+  assert(!redactedCredentialUrl.includes('supersecret'), 'URL password should be redacted');
+  assert(!redactedCredentialUrl.includes('token=leak'), 'URL fragment should be redacted');
+  assert(!redactText(`open ${credentialUrl}`).includes('supersecret'), 'embedded URL credentials should be redacted');
 
   const plan = generateClientPlan(cleanConfig);
   assert(plan.steps.some((step) => step.id === 'open-target'), 'client plan should include target opening');

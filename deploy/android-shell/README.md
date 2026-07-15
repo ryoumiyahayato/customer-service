@@ -59,7 +59,7 @@ gradle assembleDebug
 - 只申请 `INTERNET` 权限。
 - 不申请通讯录、定位、短信、相机或录音权限。
 - WebView 不启用 JS bridge。
-- WebView URL 只允许 http / https。
+- WebView 顶层导航仅允许配置的 HTTPS 业务域名；HTTP 仅限 localhost、127.0.0.1 和模拟器 10.0.2.2 开发地址。
 - 生产环境应使用 HTTPS。
 - `network_security_config` 默认禁止明文流量，只为 localhost 和 `10.0.2.2` 开发占位保留例外。
 - 不保存 secret，不把 token / cookie 写入日志或持久化存储。

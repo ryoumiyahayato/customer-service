@@ -3,6 +3,7 @@ import { generateVisitorToken, hashSessionToken, hashVisitorToken } from './cryp
 import { mapChatSession, type ChatSessionSummary } from './chat.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError } from './http.js';
+import { isSuperAdmin, type AdminIdentity } from './sessions.js';
 
 const DEFAULT_INVITE_TTL_SECONDS = 15 * 60;
 const MIN_INVITE_TTL_SECONDS = 60;
@@ -33,6 +34,7 @@ type ChatSessionRow = {
   archived_at: Date | null;
   deleted_at: Date | null;
   history_cleared_at: Date | null;
+  assigned_operator_id: string | null;
 };
 
 export type PublicInvite = {
@@ -87,14 +89,14 @@ function normalizeToken(value: string): string {
   return token;
 }
 
-async function requireActiveSourceAdmin(db: PostgresAdapter, sourceAdminId: string | null) {
+async function requireActiveSourceOperator(db: PostgresAdapter, sourceAdminId: string | null) {
   if (!sourceAdminId) return;
   const rows = await db.query<{ id: string }>(
     `SELECT id
        FROM admins
       WHERE id = $1
         AND is_disabled = FALSE
-        AND role IN ('SUPER_ADMIN', 'OPERATOR', 'admin')
+        AND role = 'OPERATOR'
       LIMIT 1`,
     [sourceAdminId],
   );
@@ -103,11 +105,15 @@ async function requireActiveSourceAdmin(db: PostgresAdapter, sourceAdminId: stri
 
 export async function createInvite(
   db: PostgresAdapter,
-  createdByAdminId: string,
+  admin: AdminIdentity,
   input: { sourceAdminId?: string | null; expiresInSeconds?: unknown } = {},
 ): Promise<InviteCreationResult> {
-  const sourceAdminId = input.sourceAdminId?.trim() || null;
-  await requireActiveSourceAdmin(db, sourceAdminId);
+  const requestedSourceAdminId = input.sourceAdminId?.trim() || null;
+  const sourceAdminId = isSuperAdmin(admin) ? requestedSourceAdminId : admin.id;
+  if (!isSuperAdmin(admin) && requestedSourceAdminId && requestedSourceAdminId !== admin.id) {
+    throw new HttpError(403, 'forbidden');
+  }
+  await requireActiveSourceOperator(db, sourceAdminId);
 
   const ttlSeconds = normalizeTtlSeconds(input.expiresInSeconds);
   const token = generateInviteToken();
@@ -119,34 +125,36 @@ export async function createInvite(
      VALUES ($1, $2, $3, now() + ($4::text || ' seconds')::interval)
      RETURNING id, token_hash, created_by_admin_id, source_admin_id, session_id,
                expires_at, consumed_at, revoked_at, created_at, updated_at`,
-    [tokenHash, createdByAdminId, sourceAdminId, ttlSeconds],
+    [tokenHash, admin.id, sourceAdminId, ttlSeconds],
   );
 
   return { token, invite: mapInvite(rows[0]) };
 }
 
-export async function listInvites(db: PostgresAdapter, limit = 100): Promise<PublicInvite[]> {
+export async function listInvites(db: PostgresAdapter, admin: AdminIdentity, limit = 100): Promise<PublicInvite[]> {
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
   const rows = await db.query<InviteRow>(
     `SELECT id, token_hash, created_by_admin_id, source_admin_id, session_id,
             expires_at, consumed_at, revoked_at, created_at, updated_at
        FROM invite_links
+      WHERE ($1::boolean OR created_by_admin_id = $2 OR source_admin_id = $2)
       ORDER BY created_at DESC
-      LIMIT $1`,
-    [safeLimit],
+      LIMIT $3`,
+    [isSuperAdmin(admin), admin.id, safeLimit],
   );
   return rows.map(mapInvite);
 }
 
-export async function revokeInvite(db: PostgresAdapter, inviteId: string): Promise<PublicInvite> {
+export async function revokeInvite(db: PostgresAdapter, admin: AdminIdentity, inviteId: string): Promise<PublicInvite> {
   return db.withTransaction(async (client) => {
     const existing = await client.query<InviteRow>(
       `SELECT id, token_hash, created_by_admin_id, source_admin_id, session_id,
               expires_at, consumed_at, revoked_at, created_at, updated_at
          FROM invite_links
         WHERE id = $1
+          AND ($2::boolean OR created_by_admin_id = $3 OR source_admin_id = $3)
         FOR UPDATE`,
-      [inviteId],
+      [inviteId, isSuperAdmin(admin), admin.id],
     );
     const invite = existing.rows[0];
     if (!invite) throw new HttpError(404, 'invite_not_found');
@@ -191,7 +199,7 @@ export async function consumeInvite(
       if (!invite.session_id || !existingVisitorToken) throw new HttpError(410, 'invite_already_consumed');
       const resumed = await client.query<ChatSessionRow>(
         `SELECT id, status, customer_name, created_at, updated_at, closed_at,
-                archived_at, deleted_at, history_cleared_at
+                archived_at, deleted_at, history_cleared_at, assigned_operator_id
            FROM chat_sessions
           WHERE id = $1
             AND visitor_token_hash = $2
@@ -215,7 +223,7 @@ export async function consumeInvite(
       `INSERT INTO chat_sessions (visitor_token_hash, status, customer_name, assigned_operator_id)
        VALUES ($1, 'open', $2, $3)
        RETURNING id, status, customer_name, created_at, updated_at, closed_at,
-                 archived_at, deleted_at, history_cleared_at`,
+                 archived_at, deleted_at, history_cleared_at, assigned_operator_id`,
       [visitorTokenHash, customerName.trim().slice(0, 80) || '访客', invite.source_admin_id],
     );
     const session = sessionResult.rows[0];

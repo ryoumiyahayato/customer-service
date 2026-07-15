@@ -17,7 +17,7 @@ This project is a customer support chat system using a Cloudflare-native product
 - Visitor chat entry: guest, registered visitor login, and visitor registration are preserved.
 - Admin login: username/password login uses HttpOnly signed cookies and D1 session lookup.
 - Super admin: first super admin can be bootstrapped from Wrangler secrets when no super admin exists.
-- Customer service/admin accounts: super admin can create, disable, and hard-delete operators.
+- Customer service/admin accounts: super admin can create and disable operators. Physical deletion is intentionally rejected to preserve historical references.
 - Conversation list: admin view groups PENDING, OPEN, CLOSED, ARCHIVED, and deleted conversations.
 - Message history: D1-backed messages are fetched per conversation and persist across refresh.
 - Realtime sending/receiving: WebSocket rooms are keyed by `conversation:<sessionId>`; no global message array is shared between conversations.

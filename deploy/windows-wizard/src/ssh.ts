@@ -2,6 +2,7 @@ import type { DeploymentConfig } from './config.js';
 import { readFile } from 'node:fs/promises';
 import { Client } from 'ssh2';
 import { redactText } from './redact.js';
+import { createHostKeyVerifier } from './sshHostKey.js';
 
 export type SshExecResult = {
   code: number;
@@ -39,6 +40,7 @@ function connectionConfig(config: DeploymentConfig) {
     port: config.port,
     username: config.username,
     readyTimeout: 20_000,
+    hostVerifier: createHostKeyVerifier(config.hostKeySha256),
   };
 
   if (config.authMethod === 'privateKey') {
@@ -84,25 +86,25 @@ export function createRealSshClient(config: DeploymentConfig): SshClient {
             return;
           }
 
-          let stdout = '';
-          let stderr = '';
+          const stdoutChunks: Buffer[] = [];
+          const stderrChunks: Buffer[] = [];
           stream
             .on('close', (code: number | null) => {
+              const stdout = redactText(Buffer.concat(stdoutChunks).toString('utf8'), config);
+              const stderr = redactText(Buffer.concat(stderrChunks).toString('utf8'), config);
+              if (stdout) onOutput?.(stdout);
+              if (stderr) onOutput?.(stderr);
               resolve({
                 code: code ?? 0,
-                stdout: redactText(stdout, config),
-                stderr: redactText(stderr, config),
+                stdout,
+                stderr,
               });
             })
             .on('data', (chunk: Buffer) => {
-              const text = redactText(chunk.toString('utf8'), config);
-              stdout += text;
-              onOutput?.(text);
+              stdoutChunks.push(Buffer.from(chunk));
             });
           stream.stderr.on('data', (chunk: Buffer) => {
-            const text = redactText(chunk.toString('utf8'), config);
-            stderr += text;
-            onOutput?.(text);
+            stderrChunks.push(Buffer.from(chunk));
           });
         });
       });

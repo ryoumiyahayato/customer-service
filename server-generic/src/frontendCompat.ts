@@ -6,7 +6,13 @@ import {
   type AbuseGuard,
 } from './abuseGuard.js';
 import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
-import { listAdminChatSessions, requireAdminSessionExists, requireVisitorSession, type ChatSessionSummary } from './chat.js';
+import {
+  listAdminChatSessions,
+  requireAdminSessionAccess,
+  requireAdminSessionExists,
+  requireVisitorSession,
+  type ChatSessionSummary,
+} from './chat.js';
 import type { GenericServerConfig } from './config.js';
 import { hashVisitorToken } from './crypto.js';
 import type { PostgresAdapter } from './db/postgres.js';
@@ -90,7 +96,7 @@ export function mapFrontendSession(session: ChatSessionSummary) {
     customer_remark_name: null,
     visitor_key: session.id,
     user_id: null,
-    assigned_operator_id: null,
+    assigned_operator_id: session.assignedOperatorId,
     unread_count: 0,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
@@ -265,8 +271,8 @@ async function handleFrontendLogout(request: IncomingMessage, response: ServerRe
 }
 
 async function handleFrontendSessions(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
-  await requireAdmin(context.db, request);
-  const sessions = await listAdminChatSessions(context.db, 100);
+  const admin = await requireAdmin(context.db, request);
+  const sessions = await listAdminChatSessions(context.db, admin, 100);
   sendJson(response, 200, { ok: true, sessions: sessions.map(mapFrontendSession) });
 }
 
@@ -280,7 +286,7 @@ async function handleFrontendSessionMessages(
   const admin = await currentAdminOrNull(context.db, request);
   const readerType = admin ? 'admin' : 'visitor';
   if (!admin) await requireVisitorIdentity(context.db, sessionId, request);
-  else await requireAdminSessionExists(context.db, sessionId);
+  else await requireAdminSessionAccess(context.db, admin, sessionId);
 
   const receipt = await markSessionMessagesRead(context.db, sessionId, readerType);
   broadcastReadReceipt(context, sessionId, receipt.messageIds, receipt.readAt);
@@ -321,6 +327,7 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
   const senderType = (optionalString(body.senderType) || optionalString(body.sender_type) || '').trim().toUpperCase();
   const clientMessageId = optionalString(body.clientMessageId) || optionalString(body.client_message_id);
   let message: ChatMessage;
+  let session: ChatSessionSummary;
 
   if (senderType === 'OPERATOR' || senderType === 'ADMIN') {
     const admin = await requireAdmin(context.db, request);
@@ -332,7 +339,9 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
       content,
       admin.id,
       clientMessageId,
+      admin,
     );
+    session = await requireAdminSessionAccess(context.db, admin, sessionId);
   } else if (senderType === 'VISITOR' || senderType === 'CUSTOMER') {
     const visitor = await requireVisitorIdentity(context.db, sessionId, request, body);
     message = await createSessionMessage(
@@ -344,11 +353,11 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
       hashVisitorToken(visitor.visitorToken),
       clientMessageId,
     );
+    session = await requireAdminSessionExists(context.db, sessionId);
   } else {
     throw new HttpError(400, 'sender_type_required');
   }
 
-  const session = await requireAdminSessionExists(context.db, sessionId);
   const frontendMessage = mapFrontendMessage(message);
   if (!message.deduped) {
     context.hub.broadcastToSession(sessionId, {
@@ -402,9 +411,8 @@ async function handleFrontendInviteCreate(request: IncomingMessage, response: Se
     optionalString(body.sourceAdminId) ||
     optionalString(body.source_admin_id)
   )?.trim() || null;
-  const sourceAdminId = requestedSourceAdminId || (admin.role === 'OPERATOR' ? admin.id : null);
-  const result = await createInvite(context.db, admin.id, {
-    sourceAdminId,
+  const result = await createInvite(context.db, admin, {
+    sourceAdminId: requestedSourceAdminId,
     expiresInSeconds: body.expiresInSeconds ?? body.expires_in_seconds,
   });
   sendJson(response, 201, {
@@ -418,8 +426,8 @@ async function handleFrontendInviteCreate(request: IncomingMessage, response: Se
 }
 
 async function handleFrontendInviteList(request: IncomingMessage, response: ServerResponse, context: FrontendCompatContext) {
-  await requireAdmin(context.db, request);
-  const invites = await listInvites(context.db, 100);
+  const admin = await requireAdmin(context.db, request);
+  const invites = await listInvites(context.db, admin, 100);
   sendJson(response, 200, { ok: true, invites: invites.map(mapFrontendInvite) });
 }
 
@@ -429,9 +437,9 @@ async function handleFrontendInviteRevoke(
   context: FrontendCompatContext,
   inviteId: string,
 ) {
-  await requireAdmin(context.db, request);
+  const admin = await requireAdmin(context.db, request);
   if (!isSafeId(inviteId)) throw new HttpError(404, 'invite_not_found');
-  const invite = await revokeInvite(context.db, inviteId);
+  const invite = await revokeInvite(context.db, admin, inviteId);
   sendJson(response, 200, { ok: true, invite: mapFrontendInvite(invite) });
 }
 

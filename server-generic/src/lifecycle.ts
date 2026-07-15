@@ -1,8 +1,9 @@
 import { deleteAttachmentFilesForSession } from './attachments.js';
-import { mapChatSession, type ChatSessionSummary } from './chat.js';
+import { mapChatSession, requireAdminSessionAccess, type ChatSessionSummary } from './chat.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError } from './http.js';
 import type { LocalStorageAdapter } from './storage/localStorage.js';
+import { isSuperAdmin, type AdminIdentity } from './sessions.js';
 
 export type LifecycleSchedulerPlan = {
   mode: 'cron' | 'systemd-timer' | 'app-scheduler';
@@ -42,6 +43,7 @@ type SessionRow = {
   archived_at: Date | null;
   deleted_at: Date | null;
   history_cleared_at: Date | null;
+  assigned_operator_id: string | null;
 };
 
 export function describeLifecycleMigration(): LifecycleSchedulerPlan {
@@ -65,28 +67,40 @@ export function normalizeLifecycleOptions(input: Partial<LifecycleDryRunOptions>
   };
 }
 
-export async function archiveSession(db: PostgresAdapter, sessionId: string): Promise<ChatSessionSummary> {
+export async function archiveSession(
+  db: PostgresAdapter,
+  admin: AdminIdentity,
+  sessionId: string,
+): Promise<ChatSessionSummary> {
   const rows = await db.query<SessionRow>(
     `UPDATE chat_sessions
         SET archived_at = COALESCE(archived_at, now()),
             updated_at = now()
       WHERE id = $1
         AND deleted_at IS NULL
-      RETURNING id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at`,
-    [sessionId],
+        AND ($2::boolean OR assigned_operator_id = $3)
+      RETURNING id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at,
+                history_cleared_at, assigned_operator_id`,
+    [sessionId, isSuperAdmin(admin), admin.id],
   );
   if (!rows[0]) throw new HttpError(404, 'session_not_found');
   return mapChatSession(rows[0]);
 }
 
-export async function recycleSession(db: PostgresAdapter, sessionId: string): Promise<ChatSessionSummary> {
+export async function recycleSession(
+  db: PostgresAdapter,
+  admin: AdminIdentity,
+  sessionId: string,
+): Promise<ChatSessionSummary> {
   const rows = await db.query<SessionRow>(
     `UPDATE chat_sessions
         SET deleted_at = COALESCE(deleted_at, now()),
             updated_at = now()
       WHERE id = $1
-      RETURNING id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at, history_cleared_at`,
-    [sessionId],
+        AND ($2::boolean OR assigned_operator_id = $3)
+      RETURNING id, status, customer_name, created_at, updated_at, closed_at, archived_at, deleted_at,
+                history_cleared_at, assigned_operator_id`,
+    [sessionId, isSuperAdmin(admin), admin.id],
   );
   if (!rows[0]) throw new HttpError(404, 'session_not_found');
   return mapChatSession(rows[0]);
@@ -96,8 +110,9 @@ export async function clearSessionHistory(
   db: PostgresAdapter,
   storage: LocalStorageAdapter,
   sessionId: string,
-  clearedBy: string,
+  admin: AdminIdentity,
 ): Promise<{ historyCleared: true; attachmentsDeleted: number }> {
+  await requireAdminSessionAccess(db, admin, sessionId);
   const attachmentsDeleted = await deleteAttachmentFilesForSession(db, storage, sessionId);
 
   await db.withTransaction(async (client) => {
@@ -108,7 +123,7 @@ export async function clearSessionHistory(
               history_cleared_by = $2,
               updated_at = now()
         WHERE id = $1`,
-      [sessionId, clearedBy],
+      [sessionId, admin.id],
     );
     if (updated.rowCount === 0) throw new HttpError(404, 'session_not_found');
   });

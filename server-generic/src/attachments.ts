@@ -8,6 +8,7 @@ import { sendText } from './response.js';
 import type { LocalStorageAdapter } from './storage/localStorage.js';
 import { normalizeContentType } from './storage/contentType.js';
 import { generateAttachmentStorageKey, sanitizeDisplayFilename } from './storage/storageKeys.js';
+import { isSuperAdmin, type AdminIdentity } from './sessions.js';
 
 export type AttachmentMetadata = {
   id: string;
@@ -192,15 +193,20 @@ async function findVisitorAttachment(db: PostgresAdapter, sessionId: string, att
   return rows[0];
 }
 
-async function findAdminAttachment(db: PostgresAdapter, attachmentId: string) {
+async function findAdminAttachment(db: PostgresAdapter, attachmentId: string, admin: AdminIdentity) {
   const rows = await db.query<AttachmentRow>(
-    `SELECT id, message_id, storage_key, filename, filename_ciphertext, filename_iv,
-            filename_tag, filename_algorithm, filename_key_version, mime_type, size_bytes, created_at
+    `SELECT attachments.id, attachments.message_id, attachments.storage_key, attachments.filename,
+            attachments.filename_ciphertext, attachments.filename_iv, attachments.filename_tag,
+            attachments.filename_algorithm, attachments.filename_key_version,
+            attachments.mime_type, attachments.size_bytes, attachments.created_at
        FROM attachments
-      WHERE id = $1
-        AND deleted_at IS NULL
+       JOIN messages ON messages.id = attachments.message_id
+       JOIN chat_sessions ON chat_sessions.id = messages.session_id
+      WHERE attachments.id = $1
+        AND attachments.deleted_at IS NULL
+        AND ($2::boolean OR chat_sessions.assigned_operator_id = $3)
       LIMIT 1`,
-    [attachmentId],
+    [attachmentId, isSuperAdmin(admin), admin.id],
   );
   if (!rows[0]) throw new HttpError(404, 'attachment_not_found');
   return rows[0];
@@ -250,8 +256,9 @@ export async function sendAdminAttachment(
   storage: LocalStorageAdapter,
   encryption: EncryptionConfig,
   attachmentId: string,
+  admin: AdminIdentity,
 ) {
-  const attachment = await findAdminAttachment(db, attachmentId);
+  const attachment = await findAdminAttachment(db, attachmentId, admin);
   await sendAttachment(response, storage, attachment, encryption);
 }
 

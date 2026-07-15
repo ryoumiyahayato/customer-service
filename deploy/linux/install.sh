@@ -65,9 +65,12 @@ for name in \
   SESSION_SECRET \
   SETUP_TOKEN \
   STORAGE_PATH \
-  BACKUP_DIR; do
+  BACKUP_DIR \
+  BACKUP_SIGNING_KEY; do
   require_env "$name"
 done
+
+[[ "${#BACKUP_SIGNING_KEY}" -ge 32 ]] || fail "BACKUP_SIGNING_KEY must be at least 32 characters."
 
 if ! command -v docker >/dev/null 2>&1; then
   fail "Docker is required. Install Docker first."
@@ -81,7 +84,7 @@ mkdir -p storage logs "${BACKUP_DIR:-./backup}"
 
 echo "Linux deployment preflight passed."
 echo "Validating Docker Compose configuration..."
-run docker compose config
+run docker compose config --quiet
 
 if [[ "$SELF_CHECK" == "1" ]]; then
   echo "Self-check completed without starting services."

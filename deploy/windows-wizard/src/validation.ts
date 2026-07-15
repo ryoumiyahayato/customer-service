@@ -19,6 +19,12 @@ export function validateDeploymentConfig(config: DeploymentConfig): ValidationRe
   if (config.mode && config.mode !== 'mock' && config.mode !== 'real') {
     errors.push('mode must be mock or real');
   }
+  if (config.dryRun !== undefined && typeof config.dryRun !== 'boolean') {
+    errors.push('dryRun must be a boolean');
+  }
+  if (config.runMigrations !== undefined && typeof config.runMigrations !== 'boolean') {
+    errors.push('runMigrations must be a boolean');
+  }
   if (!isNonEmpty(config.host)) errors.push('host is required');
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
     errors.push('port must be between 1 and 65535');
@@ -40,6 +46,12 @@ export function validateDeploymentConfig(config: DeploymentConfig): ValidationRe
   }
   if (isNonEmpty(config.passwordEnv) && isNonEmpty(config.privateKeyPath)) {
     errors.push('passwordEnv and privateKeyPath are mutually exclusive');
+  }
+  if (config.hostKeySha256 !== undefined && !/^SHA256:[A-Za-z0-9+/]{43}$/.test(config.hostKeySha256.trim())) {
+    errors.push('hostKeySha256 must be an OpenSSH SHA256 fingerprint');
+  }
+  if (config.mode === 'real' && !isNonEmpty(config.hostKeySha256)) {
+    errors.push('real mode requires hostKeySha256');
   }
 
   return {

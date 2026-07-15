@@ -10,8 +10,10 @@
     "migrate": "node scripts/migrate.mjs up",
     "migrate:status": "node scripts/migrate.mjs status",
     "lifecycle:dry-run": "node scripts/lifecycle-dry-run.mjs",
-    "smoke": "node scripts/smoke.mjs && node scripts/check-abuse-guard.mjs && node scripts/check-websocket-auth.mjs && node scripts/check-v1-foundation.mjs",
+    "smoke": "node scripts/smoke.mjs && node scripts/check-abuse-guard.mjs && node scripts/check-admin-authorization.mjs && node scripts/check-http-security.mjs && node scripts/check-websocket-auth.mjs && node scripts/check-v1-foundation.mjs",
     "check:abuse-guard": "node scripts/check-abuse-guard.mjs",
+    "check:admin-authorization": "node scripts/check-admin-authorization.mjs",
+    "check:http-security": "node scripts/check-http-security.mjs",
     "check:websocket-auth": "node scripts/check-websocket-auth.mjs",
     "check:v1-foundation": "node scripts/check-v1-foundation.mjs",
     "e2e:local-smoke": "node scripts/e2e-local-smoke.mjs"

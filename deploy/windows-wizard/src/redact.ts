@@ -10,6 +10,7 @@ const GENERIC_SECRET_PATTERNS: RegExp[] = [
   /(sessionSecret\s*[:=]\s*)[^\s,;]+/gi,
   /(SESSION_SECRET\s*[:=]\s*)[^\s,;]+/g,
   /(ENCRYPTION_KEY\s*[:=]\s*)[^\s,;]+/g,
+  /(BACKUP_SIGNING_KEY\s*[:=]\s*)[^\s,;]+/g,
   /(token\s*[:=]\s*)[^\s,;]+/gi,
   /(secret\s*[:=]\s*)[^\s,;]+/gi,
   /(cookie\s*[:=]\s*)[^\s,;]+/gi,

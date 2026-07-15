@@ -11,6 +11,7 @@ const SENSITIVE_QUERY_KEYS = new Set([
   'setupToken',
   'SETUP_TOKEN',
   'ENCRYPTION_KEY',
+  'BACKUP_SIGNING_KEY',
   'key',
 ]);
 
@@ -30,6 +31,16 @@ function validateHttpUrl(value: string, field: string, errors: string[]): void {
 
   if (FORBIDDEN_PROTOCOLS.has(url.protocol) || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
     errors.push(`${field} must use http or https`);
+  }
+  const localHost = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.protocol === 'http:' && !localHost) {
+    errors.push(`${field} must use https outside local development`);
+  }
+  if (url.username || url.password) {
+    errors.push(`${field} must not include URL credentials`);
+  }
+  if (url.hash) {
+    errors.push(`${field} must not include a fragment`);
   }
 
   for (const key of url.searchParams.keys()) {

@@ -8,6 +8,7 @@ import { commandChmodScripts, commandCreateRemoteDir, commandRunInstall, command
 import { createWizardLogger, type WizardLogger } from './logs.js';
 import { redactText } from './redact.js';
 import { assertValidDeploymentConfig } from './validation.js';
+import { fileURLToPath } from 'node:url';
 
 export type DeployOptions = {
   real: boolean;
@@ -15,7 +16,7 @@ export type DeployOptions = {
 };
 
 function repoRoot(): string {
-  return path.resolve(process.cwd(), '../..');
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 }
 
 function localLinuxDeployDir(): string {

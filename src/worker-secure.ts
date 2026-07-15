@@ -34,7 +34,9 @@ const VISITOR_COOKIE = 'visitor_account';
 const GUEST_COOKIE = 'guest_session';
 const enc = new TextEncoder();
 const SECURITY_HEADERS = {
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
   'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
   'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https: ws: wss:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
@@ -75,8 +77,6 @@ function sameOriginUrl(value: string, expectedOrigin: string) {
 }
 
 function isSameOriginWrite(req: Request) {
-  if (SAFE_METHODS.has(req.method.toUpperCase())) return true;
-
   const url = new URL(req.url);
   const origin = req.headers.get('origin');
   if (origin) return sameOriginUrl(origin, url.origin);
@@ -89,13 +89,42 @@ function isSameOriginWrite(req: Request) {
 }
 
 function shouldProtectAgainstCsrf(req: Request) {
-  if (SAFE_METHODS.has(req.method.toUpperCase())) return false;
   const path = new URL(req.url).pathname;
-  return path.startsWith('/api/') && !path.startsWith('/api/ws');
+  if (!path.startsWith('/api/') || path.startsWith('/api/ws')) return false;
+  if (!SAFE_METHODS.has(req.method.toUpperCase())) return true;
+  return req.method.toUpperCase() === 'GET' && /^\/api\/sessions\/[^/]+\/messages$/.test(path);
 }
 
 async function readJsonClone(req: Request) {
   return await req.clone().json().catch(() => ({} as any));
+}
+
+function isSameOriginWebSocket(req: Request) {
+  const url = new URL(req.url);
+  const origin = req.headers.get('origin');
+  if (origin) return sameOriginUrl(origin, url.origin);
+  const requestHost = req.headers.get('host') || url.host;
+  return isLocalDevHost(url.hostname) || isLocalDevHost(requestHost);
+}
+
+async function requestStreamExceeds(req: Request, maxBytes: number) {
+  if (contentLengthExceeds(req, maxBytes)) return true;
+  const reader = req.clone().body?.getReader();
+  if (!reader) return false;
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return false;
+      total += value?.byteLength || 0;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
 }
 
 function contentLengthExceeds(req: Request, maxBytes: number) {
@@ -170,17 +199,20 @@ function rateLimitKey(value: string) {
 
 async function consumeLimit(env: Env, key: string, limit: number, windowMs: number) {
   const nowMs = Date.now();
-  const row = await env.DB.prepare('SELECT count,reset_at FROM rate_limits WHERE key=?').bind(key).first<{ count: number; reset_at: number }>();
-  if (!row || row.reset_at < nowMs) {
-    await env.DB.prepare('INSERT OR REPLACE INTO rate_limits(key,count,reset_at) VALUES(?,?,?)').bind(key, 1, nowMs + windowMs).run();
-    return null;
-  }
-  if (Number(row.count || 0) >= limit) {
-    const retryAfter = Math.max(1, Math.ceil((Number(row.reset_at || nowMs) - nowMs) / 1000));
-    return json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
-  }
-  await env.DB.prepare('UPDATE rate_limits SET count=count+1 WHERE key=?').bind(key).run();
-  return null;
+  const resetAt = nowMs + windowMs;
+  await env.DB.prepare('INSERT INTO rate_limits(key,count,reset_at) VALUES(?,0,?) ON CONFLICT(key) DO NOTHING')
+    .bind(key, resetAt).run();
+  const consumed: any = await env.DB.prepare(
+    `UPDATE rate_limits
+        SET count=CASE WHEN reset_at <= ? THEN 1 ELSE count+1 END,
+            reset_at=CASE WHEN reset_at <= ? THEN ? ELSE reset_at END
+      WHERE key=? AND (reset_at <= ? OR count < ?)`,
+  ).bind(nowMs, nowMs, resetAt, key, nowMs, limit).run();
+  if (Number(consumed?.meta?.changes || 0) > 0) return null;
+
+  const row = await env.DB.prepare('SELECT reset_at FROM rate_limits WHERE key=?').bind(key).first<{ reset_at: number }>();
+  const retryAfter = Math.max(1, Math.ceil((Number(row?.reset_at || resetAt) - nowMs) / 1000));
+  return json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
 }
 
 async function protectBootstrapConfig(env: Env) {
@@ -383,8 +415,7 @@ async function protectUpload(req: Request) {
   const path = new URL(req.url).pathname;
   if (path !== '/api/upload' || req.method !== 'POST') return null;
 
-  const contentLength = Number(req.headers.get('content-length') || '0');
-  if (contentLength > UPLOAD_REQUEST_MAX_BYTES) return invalidInput('上传请求过大', 413);
+  if (await requestStreamExceeds(req, UPLOAD_REQUEST_MAX_BYTES)) return invalidInput('上传请求过大', 413);
 
   const form = await req.clone().formData().catch(() => null);
   const file = form?.get('file');
@@ -530,8 +561,19 @@ async function auditAfterSuccess(env: Env, response: Response, eventPromise: Pro
 }
 
 async function preflightSecurity(req: Request, env: Env) {
+  const requestUrl = new URL(req.url);
+  if (requestUrl.pathname.startsWith('/api/ws') && !isSameOriginWebSocket(req)) {
+    return json({ error: 'Forbidden' }, { status: 403 });
+  }
   if (shouldProtectAgainstCsrf(req) && !isSameOriginWrite(req)) {
     return json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  const requestPath = new URL(req.url).pathname;
+  const shouldCapApiBody = !SAFE_METHODS.has(req.method.toUpperCase()) &&
+    requestPath.startsWith('/api/') && requestPath !== '/api/upload';
+  if (shouldCapApiBody) {
+    if (await requestStreamExceeds(req, JSON_REQUEST_MAX_BYTES)) return invalidInput('request body too large', 413);
   }
 
   const bootstrapRejected = await protectBootstrapConfig(env);
@@ -576,11 +618,11 @@ export default {
     const shouldAudit = isAuditedAdminMutation(req);
     const auditReq = shouldAudit ? (req.clone() as unknown as Request) : null;
     const adminCookie = shouldAudit ? getCookie(req, ADMIN_COOKIE) : undefined;
-    const eventPromise = auditReq ? classifyAdminMutation(auditReq).catch(() => null) : null;
 
     const blocked = await preflightSecurity(req, env);
     if (blocked) return withSecurityHeaders(blocked);
 
+    const eventPromise = auditReq ? classifyAdminMutation(auditReq).catch(() => null) : null;
     const response = withSecurityHeaders(await inner.fetch(req, env, ctx));
     if (eventPromise) {
       ctx.waitUntil(auditAfterSuccess(env, response, eventPromise, adminCookie).catch((error) => {

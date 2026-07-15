@@ -75,16 +75,22 @@ export async function initializeSetup(config: GenericServerConfig, db: PostgresA
   if (password !== confirmPassword) throw new HttpError(400, 'password_mismatch');
 
   const passwordHash = await hashPassword(password);
-  const rows = await db.query<NewAdminRow>(
-    `INSERT INTO admins (username, email, display_name, password_hash, role)
-     VALUES ($1, $2, $3, $4, 'SUPER_ADMIN')
-     RETURNING id, username, email, display_name, role, created_at`,
-    [username, email, displayName, passwordHash],
-  );
+  return db.withTransaction(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(1937007472)');
+    const existing = await client.query<{ id: string }>('SELECT id FROM admins LIMIT 1');
+    if (existing.rows[0]) throw new HttpError(409, 'already_configured');
 
-  return {
-    ok: true,
-    initialized: true,
-    admin: mapAdmin(rows[0]),
-  };
+    const result = await client.query<NewAdminRow>(
+      `INSERT INTO admins (username, email, display_name, password_hash, role)
+       VALUES ($1, $2, $3, $4, 'SUPER_ADMIN')
+       RETURNING id, username, email, display_name, role, created_at`,
+      [username, email, displayName, passwordHash],
+    );
+
+    return {
+      ok: true,
+      initialized: true,
+      admin: mapAdmin(result.rows[0]),
+    };
+  });
 }

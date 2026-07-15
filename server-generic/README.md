@@ -25,7 +25,7 @@ The supported production path remains the Cloudflare Worker entrypoint configure
 - Marks visitor messages read when an administrator opens a session and marks administrator messages read when the visitor loads or explicitly acknowledges the conversation.
 - Serves `POST /api/visitor/sessions` for the lower-level generic API, though the frontend-compatible path should use persistent invites.
 - Serves visitor message list/send APIs guarded by visitor token hash.
-- Serves admin session list, admin message list/send, and close APIs guarded by admin session.
+- Serves admin session list, admin message list/send, attachment download, close, and lifecycle APIs with per-session operator authorization; super admins retain global access.
 - Authenticates WebSocket upgrades from `/api/ws/admin`, `/api/ws/staff`, and `/api/ws/conversations/:id` before binding a fixed room.
 - Rejects client-driven WebSocket subscribe or room-switch messages.
 - Broadcasts `message_created`, `messages_read`, and `session_closed` events.
@@ -33,6 +33,7 @@ The supported production path remains the Cloudflare Worker entrypoint configure
 - Provides PostgreSQL migration support for the generic server schema.
 - Provides local storage and lifecycle adapter skeletons for later migration.
 - Provides a basic in-memory HTTP abuse guard for selected high-risk write endpoints.
+- Applies same-origin checks to cookie-authenticated API reads/writes and WebSocket upgrades, plus application and Caddy security headers.
 
 ## Frontend compatibility routes
 
@@ -88,6 +89,8 @@ The guard is intentionally not a DDoS solution. It cannot replace VPS provider p
 - `npm run build`
 - `npm run smoke`
 - `npm run check:abuse-guard`
+- `npm run check:admin-authorization`
+- `npm run check:http-security`
 - `npm run check:websocket-auth`
 - `npm run check:v1-foundation`
 - `npm run migrate:status`

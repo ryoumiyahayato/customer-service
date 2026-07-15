@@ -56,5 +56,6 @@
 - `appDomain`
 - `visitorRootDomain`
 - `remoteBaseDir`
+- `hostKeySha256` (real mode requires the server's verified OpenSSH SHA256 fingerprint)
 
 示例配置见 `examples/deploy-plan.example.json`。示例只使用占位主机名和占位私钥路径，不包含真实密码、私钥、token 或 secret。

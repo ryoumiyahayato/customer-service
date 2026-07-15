@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendAdminAttachment } from './attachments.js';
 import { requireCurrentAdmin } from './auth.js';
-import { closeChatSession, listAdminChatSessions, requireAdminSessionExists } from './chat.js';
+import { closeChatSession, listAdminChatSessions, requireAdminSessionAccess } from './chat.js';
 import type { GenericServerConfig } from './config.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError, optionalString } from './http.js';
@@ -18,8 +18,8 @@ async function authenticatedAdmin(request: IncomingMessage, db: PostgresAdapter)
 }
 
 export async function handleListAdminSessions(request: IncomingMessage, response: ServerResponse, db: PostgresAdapter) {
-  await authenticatedAdmin(request, db);
-  const sessions = await listAdminChatSessions(db);
+  const admin = await authenticatedAdmin(request, db);
+  const sessions = await listAdminChatSessions(db, admin);
   sendJson(response, 200, { ok: true, sessions });
 }
 
@@ -33,7 +33,7 @@ export async function handleAdminMessages(
 ) {
   if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
   const admin = await authenticatedAdmin(request, db);
-  await requireAdminSessionExists(db, sessionId);
+  await requireAdminSessionAccess(db, admin, sessionId);
 
   if (request.method === 'GET') {
     const receipt = await markSessionMessagesRead(db, sessionId, 'admin');
@@ -55,6 +55,7 @@ export async function handleAdminMessages(
       normalizeMessageBody(body.body),
       admin.id,
       optionalString(body.clientMessageId) || optionalString(body.client_message_id),
+      admin,
     );
     if (!message.deduped) hub.broadcastToSession(sessionId, { type: 'message_created', sessionId, message });
     sendJson(response, message.deduped ? 200 : 201, { ok: true, deduped: Boolean(message.deduped), message });
@@ -72,8 +73,8 @@ export async function handleCloseAdminSession(
   sessionId: string,
 ) {
   if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
-  await authenticatedAdmin(request, db);
-  const session = await closeChatSession(db, sessionId);
+  const admin = await authenticatedAdmin(request, db);
+  const session = await closeChatSession(db, admin, sessionId);
   hub.broadcastToSession(sessionId, { type: 'session_closed', sessionId, session });
   sendJson(response, 200, { ok: true, session });
 }
@@ -90,19 +91,19 @@ export async function handleAdminSessionLifecycleAction(
   const admin = await authenticatedAdmin(request, db);
 
   if (action === 'archive') {
-    const session = await archiveSession(db, sessionId);
+    const session = await archiveSession(db, admin, sessionId);
     sendJson(response, 200, { ok: true, session });
     return;
   }
 
   if (action === 'recycle') {
-    const session = await recycleSession(db, sessionId);
+    const session = await recycleSession(db, admin, sessionId);
     sendJson(response, 200, { ok: true, session });
     return;
   }
 
   if (action === 'clear-history') {
-    const result = await clearSessionHistory(db, storage, sessionId, admin.id);
+    const result = await clearSessionHistory(db, storage, sessionId, admin);
     sendJson(response, 200, { ok: true, result });
     return;
   }
@@ -119,6 +120,6 @@ export async function handleAdminAttachmentDownload(
   attachmentId: string,
 ) {
   if (!isSafeId(attachmentId)) throw new HttpError(404, 'attachment_not_found');
-  await authenticatedAdmin(request, db);
-  await sendAdminAttachment(response, db, storage, config.encryption, attachmentId);
+  const admin = await authenticatedAdmin(request, db);
+  await sendAdminAttachment(response, db, storage, config.encryption, attachmentId, admin);
 }

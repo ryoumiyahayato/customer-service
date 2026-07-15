@@ -48,7 +48,7 @@ function b64(bytes: Uint8Array) { let s = ''; for (const b of bytes) s += String
 function unb64(value: string) { const bin = atob(value); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
 async function hmac(secret: string, value: string) { const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); const sig = await crypto.subtle.sign('HMAC', key, enc.encode(value)); return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join(''); }
 async function makeToken(env: Env, value: string) { return `${value}.${await hmac(env.SESSION_SECRET, value)}`; }
-async function verifyToken(env: Env, token?: string) { if (!token) return null; const [value, sig] = token.split('.'); return value && sig === await hmac(env.SESSION_SECRET, value) ? value : null; }
+async function verifyToken(env: Env, token?: string) { if (!token) return null; const parts = token.split('.'); if (parts.length !== 2) return null; const [value, sig] = parts; return value && sig && constantTimeEqual(sig, await hmac(env.SESSION_SECRET, value)) ? value : null; }
 async function tokenHash(env: Env, value: string) { return await hmac(env.SESSION_SECRET, 'session:' + value); }
 function expiresAt(days = 1) { return new Date(Date.now() + days * 86400000).toISOString(); }
 async function createAdminSession(env: Env, adminId: string) { const id = rid('asess'); const t = now(); await env.DB.prepare('INSERT INTO admin_sessions(id,admin_id,token_hash,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?)').bind(id, adminId, await tokenHash(env, id), t, t, expiresAt()).run(); return await makeToken(env, id); }
@@ -56,7 +56,7 @@ async function createVisitorSession(env: Env, accountId: string, visitorKey?: st
 async function hashPassword(password: string) { const salt = crypto.getRandomValues(new Uint8Array(16)); const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, key, 256); return `pbkdf2:100000:${b64(salt)}:${b64(new Uint8Array(bits))}`; }
 async function verifyPassword(password: string, stored: string) { if (!stored?.startsWith('pbkdf2:')) return false; const [, iterRaw, saltRaw, hashRaw] = stored.split(':'); const salt = unb64(saltRaw); const expected = unb64(hashRaw); const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: Number(iterRaw), hash: 'SHA-256' }, key, expected.length * 8); const actual = new Uint8Array(bits); let diff = actual.length ^ expected.length; for (let i = 0; i < Math.min(actual.length, expected.length); i++) diff |= actual[i] ^ expected[i]; return diff === 0; }
 function constantTimeEqual(a: string, b: string) { const left = enc.encode(a); const right = enc.encode(b); let diff = left.length ^ right.length; const len = Math.max(left.length, right.length); for (let i = 0; i < len; i++) diff |= (left[i] || 0) ^ (right[i] || 0); return diff === 0; }
-async function ensureBootstrap(env: Env) { const row = await env.DB.prepare("SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1").first(); if (row) return; const username = env.SUPER_ADMIN_USERNAME?.trim(); const password = env.SUPER_ADMIN_PASSWORD; if (!username || !password) return; const t = now(); await env.DB.prepare('INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(rid('admin'), username, username, await hashPassword(password), 'SUPER_ADMIN', 0, 0, t, t, t).run(); }
+async function ensureBootstrap(env: Env) { const row = await env.DB.prepare("SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1").first(); if (row) return; const username = env.SUPER_ADMIN_USERNAME?.trim(); const password = env.SUPER_ADMIN_PASSWORD; if (!username || !password) return; const t = now(); await env.DB.prepare('INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind('admin_primary', username, username, await hashPassword(password), 'SUPER_ADMIN', 0, 0, t, t, t).run(); }
 function isAdminSessionExpired(session: any, at = Date.now()) {
   const createdAt = Date.parse(session?.created_at || '');
   const lastSeenAt = Date.parse(session?.last_seen_at || session?.created_at || '');
@@ -142,7 +142,24 @@ async function consumeInvite(req: Request, env: Env, token: string) {
     return json({ error: ERR_INVITE_CREATE_FAILED }, { status: 500 });
   }
 }
-async function rateLimit(env: Env, req: Request) { const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || 'unknown'; const key = `${ip}:${new URL(req.url).pathname}`.slice(0, 240); const reset = Math.floor(Date.now() / 60000) * 60000 + 60000; const row = await env.DB.prepare('SELECT count,reset_at FROM rate_limits WHERE key=?').bind(key).first<{ count: number; reset_at: number }>(); if (!row || row.reset_at < Date.now()) { await env.DB.prepare('INSERT OR REPLACE INTO rate_limits(key,count,reset_at) VALUES(?,?,?)').bind(key, 1, reset).run(); return null; } if (row.count > 120) return json({ error: 'rate_limited' }, { status: 429 }); await env.DB.prepare('UPDATE rate_limits SET count=count+1 WHERE key=?').bind(key).run(); return null; }
+async function rateLimit(env: Env, req: Request) {
+  const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || 'unknown';
+  const key = `${ip}:${new URL(req.url).pathname}`.slice(0, 240);
+  const nowMs = Date.now();
+  const resetAt = Math.floor(nowMs / 60000) * 60000 + 60000;
+  await env.DB.prepare('INSERT INTO rate_limits(key,count,reset_at) VALUES(?,0,?) ON CONFLICT(key) DO NOTHING')
+    .bind(key, resetAt).run();
+  const consumed: any = await env.DB.prepare(
+    `UPDATE rate_limits
+        SET count=CASE WHEN reset_at <= ? THEN 1 ELSE count+1 END,
+            reset_at=CASE WHEN reset_at <= ? THEN ? ELSE reset_at END
+      WHERE key=? AND (reset_at <= ? OR count < 120)`,
+  ).bind(nowMs, nowMs, resetAt, key, nowMs).run();
+  if (Number(consumed?.meta?.changes || 0) > 0) return null;
+  const row = await env.DB.prepare('SELECT reset_at FROM rate_limits WHERE key=?').bind(key).first<{ reset_at: number }>();
+  const retryAfter = Math.max(1, Math.ceil((Number(row?.reset_at || resetAt) - nowMs) / 1000));
+  return json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
+}
 async function upsertVisitor(env: Env, visitorId?: string, account?: VisitorAccount | null) { const key = account ? `acct_${account.id}` : (visitorId?.startsWith('visitor_') ? visitorId : rid('visitor')); const displayName = account?.display_name || `璁垮 ${key.slice(-6)}`; const t = now(); let user = await env.DB.prepare('SELECT * FROM users WHERE visitor_key=?').bind(key).first<any>(); if (!user) { const uid = rid('user'); await env.DB.prepare('INSERT INTO users(id,visitor_key,account_id,display_name,last_seen_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(uid, key, account?.id || null, displayName, t, t, t).run(); user = await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(uid).first<any>(); } else await env.DB.prepare('UPDATE users SET account_id=COALESCE(?,account_id),display_name=?,last_seen_at=?,updated_at=? WHERE id=?').bind(account?.id || null, displayName, t, t, user.id).run(); return { key, user }; }
 async function latestSession(env: Env, userId: string) { return await env.DB.prepare("SELECT * FROM sessions WHERE user_id=? AND status!='ARCHIVED' AND deleted_at IS NULL AND purged_at IS NULL ORDER BY updated_at DESC LIMIT 1").bind(userId).first<any>(); }
 async function getOrCreateSession(env: Env, userId: string) { let session = await latestSession(env, userId); if (!session || session.status === 'CLOSED') { const t = now(); const sid = rid('sess'); await env.DB.prepare('INSERT INTO sessions(id,user_id,status,created_at,updated_at,last_operator_id) VALUES(?,?,?,?,?,NULL)').bind(sid, userId, 'PENDING', t, t).run(); session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sid).first<any>(); } return session; }
@@ -463,7 +480,7 @@ async function initializeSetup(req: Request, env: Env) {
   if (password.length < 12 || password !== confirmPassword) return setupError('invalid_input');
   if (await hasAnyAdmin(env)) return setupError('already_configured', 409);
 
-  const adminId = rid('admin');
+  const adminId = 'admin_primary';
   const t = now();
   try {
     await env.DB.prepare('INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,NULL)').bind(adminId, username, displayName, await hashPassword(password), 'SUPER_ADMIN', 0, 0, t, t).run();

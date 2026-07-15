@@ -12,6 +12,8 @@ const adminSource = await readFile(new URL('../../src/admin/AdminDashboard.tsx',
 const escapedConversationRoute = "/^\\/api\\/ws\\/conversations\\/";
 assert.ok(websocketSource.includes(escapedConversationRoute));
 assert.match(websocketSource, /requireCurrentAdmin/);
+assert.match(websocketSource, /requireAdminSessionAccess/);
+assert.match(websocketSource, /isSameOriginWebSocket/);
 assert.match(websocketSource, /requireVisitorSession/);
 assert.match(websocketSource, /VISITOR_COOKIE_NAME = 'support_visitor'/);
 assert.match(websocketSource, /maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES/);

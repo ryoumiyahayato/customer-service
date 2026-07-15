@@ -79,6 +79,7 @@ cp .env.example .env
 | `STORAGE_PATH` | app 容器内附件目录 | 需与 compose volume 保持一致 |
 | `MAX_UPLOAD_SIZE` | 附件大小上限 | 以字节为单位 |
 | `BACKUP_DIR` | 备份目录 | 确保可写并有足够空间 |
+| `BACKUP_SIGNING_KEY` | 备份清单 HMAC 密钥 | 至少 32 字符，必须单独安全备份并限制访问 |
 | `LOG_LEVEL` | 日志级别 | 生产建议 `info` |
 
 加密相关：
@@ -171,7 +172,7 @@ docker compose logs --tail=120 caddy
 
 处理原则：
 
-- 不要把 `.env`、数据库密码、`SESSION_SECRET`、`SETUP_TOKEN`、`ENCRYPTION_KEY`、cookie、session id、附件 key 或真实消息正文贴到日志、PR、issue 或聊天记录中。
+- 不要把 `.env`、数据库密码、`SESSION_SECRET`、`SETUP_TOKEN`、`ENCRYPTION_KEY`、`BACKUP_SIGNING_KEY`、cookie、session id、附件 key 或真实消息正文贴到日志、PR、issue 或聊天记录中。
 - 不要为了排错直接关闭 setup fail-closed 逻辑。
 - 不要绕过 HTTPS 或把后台临时暴露到不受控公网路径。
 - 不要在不明确数据状态时运行 restore。

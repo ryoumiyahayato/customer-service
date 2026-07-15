@@ -190,17 +190,27 @@ const setupWriteDb = {
   async query(sql, params) {
     setupWriteQueries.push({ sql, params });
     if (sql.includes('COUNT(*)::text AS count FROM admins')) return [{ count: '0' }];
-    if (sql.includes('INSERT INTO admins')) {
-      return [{
-        id: '00000000-0000-0000-0000-000000000001',
-        username: params[0],
-        email: params[1],
-        display_name: params[2],
-        role: 'SUPER_ADMIN',
-        created_at: new Date('2026-01-01T00:00:00Z'),
-      }];
-    }
     throw new Error(`unexpected setup write sql: ${sql}`);
+  },
+  async withTransaction(handler) {
+    return handler({
+      async query(sql, params = []) {
+        setupWriteQueries.push({ sql, params });
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+        if (sql === 'SELECT id FROM admins LIMIT 1') return { rows: [] };
+        if (sql.includes('INSERT INTO admins')) {
+          return { rows: [{
+            id: '00000000-0000-0000-0000-000000000001',
+            username: params[0],
+            email: params[1],
+            display_name: params[2],
+            role: 'SUPER_ADMIN',
+            created_at: new Date('2026-01-01T00:00:00Z'),
+          }] };
+        }
+        throw new Error(`unexpected setup transaction sql: ${sql}`);
+      },
+    });
   },
 };
 const setupResult = await initializeSetup({ ...config, setupToken: 'setup-token' }, setupWriteDb, {
@@ -211,6 +221,39 @@ const setupResult = await initializeSetup({ ...config, setupToken: 'setup-token'
 });
 if (setupResult.admin.role !== 'SUPER_ADMIN' || !setupWriteQueries.some(({ sql }) => sql.includes("'SUPER_ADMIN'"))) {
   throw new Error('setup first admin SUPER_ADMIN smoke failed');
+}
+if (!setupWriteQueries.some(({ sql }) => sql.includes('pg_advisory_xact_lock'))) {
+  throw new Error('setup serialization lock smoke failed');
+}
+
+const racedSetupDb = {
+  async query(sql) {
+    if (sql.includes('COUNT(*)::text AS count FROM admins')) return [{ count: '0' }];
+    throw new Error(`unexpected raced setup sql: ${sql}`);
+  },
+  async withTransaction(handler) {
+    return handler({
+      async query(sql) {
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+        if (sql === 'SELECT id FROM admins LIMIT 1') return { rows: [{ id: 'concurrent-admin' }] };
+        throw new Error('raced setup attempted an insert');
+      },
+    });
+  },
+};
+try {
+  await initializeSetup({ ...config, setupToken: 'setup-token' }, racedSetupDb, {
+    setupToken: 'setup-token',
+    username: 'raced-admin',
+    password: 'local-smoke-password-only',
+    confirmPassword: 'local-smoke-password-only',
+  });
+  throw new Error('setup race rejection smoke failed');
+} catch (error) {
+  if (error instanceof Error && error.message === 'setup race rejection smoke failed') throw error;
+  if (!(error instanceof HttpError) || error.status !== 409 || error.code !== 'already_configured') {
+    throw new Error('setup concurrent initialization smoke failed');
+  }
 }
 
 const compatRoutes = new Set(FRONTEND_COMPAT_ROUTES);
@@ -258,9 +301,13 @@ const frontendSession = mapFrontendSession({
   archivedAt: null,
   deletedAt: null,
   historyClearedAt: null,
+  assignedOperatorId: '00000000-0000-0000-0000-000000000001',
 });
 if (!('created_at' in frontendSession) || !('updated_at' in frontendSession) || !('unread_count' in frontendSession)) {
   throw new Error('frontend session snake_case smoke failed');
+}
+if (frontendSession.assigned_operator_id !== '00000000-0000-0000-0000-000000000001') {
+  throw new Error('frontend session assignment mapping smoke failed');
 }
 
 const frontendMessage = mapFrontendMessage({

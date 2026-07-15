@@ -20,9 +20,35 @@ set -a
 source .env
 set +a
 
-echo "Starting upgrade. Create a backup before running this script in production."
-echo "Pulling service images where available..."
-docker compose pull || true
+PREVIOUS_IMAGE_ID="$(docker image inspect customer-chat-app:local --format '{{.Id}}' 2>/dev/null || true)"
+ROLLBACK_TAG="customer-chat-app:rollback-$(date +%Y%m%d%H%M%S)"
+UPGRADE_SUCCEEDED=0
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  if [[ "$UPGRADE_SUCCEEDED" != "1" && -n "$PREVIOUS_IMAGE_ID" ]]; then
+    echo "Upgrade failed; restoring the previous application image."
+    docker image tag "$ROLLBACK_TAG" customer-chat-app:local || true
+    docker compose up -d app caddy || true
+    if [[ "$RUN_MIGRATIONS" == "1" ]]; then
+      echo "WARNING: application image was rolled back, but database migrations require a verified backup or down migration."
+    fi
+  fi
+  if [[ -n "$PREVIOUS_IMAGE_ID" ]]; then
+    docker image rm "$ROLLBACK_TAG" >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+
+if [[ -n "$PREVIOUS_IMAGE_ID" ]]; then
+  docker image tag "$PREVIOUS_IMAGE_ID" "$ROLLBACK_TAG"
+fi
+
+echo "Starting upgrade. Create and verify a backup before running this script in production."
+echo "Pulling PostgreSQL and Caddy service images..."
+docker compose pull postgres caddy
 
 echo "Building application image..."
 docker compose build app
@@ -37,6 +63,6 @@ fi
 echo "Starting services..."
 docker compose up -d
 "$ROOT_DIR/healthcheck.sh"
+UPGRADE_SUCCEEDED=1
 
-echo "Rollback TODO: restore the previous image and latest verified backup if healthcheck or business validation fails."
-echo "Upgrade completed."
+echo "Upgrade completed. Application-image rollback is automatic on failure; database migration rollback remains operator-managed."

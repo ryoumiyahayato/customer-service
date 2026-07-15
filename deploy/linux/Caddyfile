@@ -1,9 +1,23 @@
 {$APP_DOMAIN} {
   encode zstd gzip
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "same-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+  }
   reverse_proxy app:{$APP_PORT:3000}
 }
 
 {$VISITOR_ROOT_DOMAIN} {
   encode zstd gzip
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "same-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+  }
   reverse_proxy app:{$APP_PORT:3000}
 }

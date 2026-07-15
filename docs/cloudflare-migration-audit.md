@@ -5,7 +5,7 @@
 - Public visitor chat page: login/register/guest entry, visitor identity in localStorage/cookie, message list, quote replies, image upload, responsive mobile shell.
 - Admin login: username/password login through HTTP-only cookie.
 - Super admin account: bootstrapped from environment when no super admin exists; can update own username/password.
-- Customer service account management: super admin can create, disable, and hard-delete operator accounts.
+- Customer service account management: super admin can create and disable operator accounts; physical deletion is intentionally rejected to preserve historical references.
 - Visitor conversation list: grouped by PENDING, OPEN, CLOSED, ARCHIVED, and soft-deleted sessions with unread counts.
 - Message sending/receiving: visitor and operator text/image messages with quote_message_id and recall support.
 - Message history: persisted messages ordered by created_at.

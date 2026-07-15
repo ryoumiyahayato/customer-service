@@ -91,7 +91,9 @@ async function hmac(secret: string, value: string) {
 
 async function verifySignedId(env: Env, token?: string) {
   if (!token) return null;
-  const [value, signature] = token.split('.');
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [value, signature] = parts;
   if (!value || !signature) return null;
   const expected = await hmac(env.SESSION_SECRET, value);
   if (signature.length !== expected.length) return null;
@@ -105,11 +107,12 @@ async function tokenHash(env: Env, value: string) {
 }
 
 function sameOriginWrite(req: Request) {
-  const expected = new URL(req.url).origin;
+  const requestUrl = new URL(req.url);
+  const expected = requestUrl.origin;
   const origin = req.headers.get('origin');
   if (origin) return origin === expected;
   const referer = req.headers.get('referer');
-  if (!referer) return true;
+  if (!referer) return isLocalDevHost(requestUrl.hostname) || isLocalDevHost(req.headers.get('host') || '');
   try {
     return new URL(referer).origin === expected;
   } catch {
@@ -117,9 +120,54 @@ function sameOriginWrite(req: Request) {
   }
 }
 
+function isLocalDevHost(host: string) {
+  let normalized = String(host || '').toLowerCase();
+  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
+  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) {
+    normalized = normalized.slice(0, normalized.lastIndexOf(':'));
+  }
+  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '::1';
+}
+
 function requestBodyTooLarge(req: Request) {
   const length = Number(req.headers.get('content-length') || '0');
   return Number.isFinite(length) && length > JSON_REQUEST_MAX_BYTES;
+}
+
+async function readJsonWithinLimit(req: Request): Promise<{ body: any; tooLarge: boolean }> {
+  if (requestBodyTooLarge(req)) return { body: {}, tooLarge: true };
+  const reader = req.clone().body?.getReader();
+  if (!reader) return { body: {}, tooLarge: false };
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > JSON_REQUEST_MAX_BYTES) {
+        await reader.cancel();
+        return { body: {}, tooLarge: true };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { body: {}, tooLarge: false };
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { body: JSON.parse(new TextDecoder().decode(bytes)), tooLarge: false };
+  } catch {
+    return { body: {}, tooLarge: false };
+  }
 }
 
 function adminSessionExpired(session: AdminSessionRow, at = Date.now()) {
@@ -172,14 +220,15 @@ async function mutationRateLimit(env: Env, req: Request) {
   const key = `hardening:${ip}:${path}`.slice(0, 240);
   const nowMs = Date.now();
   const resetAt = Math.floor(nowMs / 60000) * 60000 + 60000;
-  const row = await env.DB.prepare('SELECT count,reset_at FROM rate_limits WHERE key=?').bind(key).first<{ count: number; reset_at: number }>();
-  if (!row || row.reset_at <= nowMs) {
-    await env.DB.prepare('INSERT OR REPLACE INTO rate_limits(key,count,reset_at) VALUES(?,?,?)').bind(key, 1, resetAt).run();
-    return null;
-  }
-  if (row.count >= 20) return json({ error: 'rate_limited' }, 429);
-  await env.DB.prepare('UPDATE rate_limits SET count=count+1 WHERE key=?').bind(key).run();
-  return null;
+  await env.DB.prepare('INSERT INTO rate_limits(key,count,reset_at) VALUES(?,0,?) ON CONFLICT(key) DO NOTHING')
+    .bind(key, resetAt).run();
+  const consumed: any = await env.DB.prepare(
+    `UPDATE rate_limits
+        SET count=CASE WHEN reset_at <= ? THEN 1 ELSE count+1 END,
+            reset_at=CASE WHEN reset_at <= ? THEN ? ELSE reset_at END
+      WHERE key=? AND (reset_at <= ? OR count < 20)`,
+  ).bind(nowMs, nowMs, resetAt, key, nowMs).run();
+  return Number(consumed?.meta?.changes || 0) > 0 ? null : json({ error: 'rate_limited' }, 429);
 }
 
 function auditId() {
@@ -209,14 +258,15 @@ async function notifyAdmins(env: Env) {
 
 async function handleOperatorDisable(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!sameOriginWrite(req)) return json({ error: 'forbidden' }, 403);
-  if (requestBodyTooLarge(req)) return json({ error: 'request_too_large' }, 413);
+  const parsed = await readJsonWithinLimit(req);
+  if (parsed.tooLarge) return json({ error: 'request_too_large' }, 413);
   const limited = await mutationRateLimit(env, req);
   if (limited) return limited;
 
   const actor = await requireSuperAdmin(env, req);
   if (actor instanceof Response) return actor;
 
-  const body: any = await req.json().catch(() => ({}));
+  const body: any = parsed.body;
   const operatorId = typeof body.id === 'string' ? body.id.trim() : '';
   if (!operatorId) return json({ error: 'operator_id_required' }, 400);
   if (body.hard) {
@@ -351,7 +401,10 @@ async function releaseAttachmentClaim(env: Env, attachmentKey: string, claimToke
 }
 
 async function handleImageMessage(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const body: any = await req.clone().json().catch(() => ({}));
+  if (!sameOriginWrite(req)) return json({ error: 'forbidden' }, 403);
+  const parsed = await readJsonWithinLimit(req);
+  if (parsed.tooLarge) return json({ error: 'request_too_large' }, 413);
+  const body: any = parsed.body;
   if (body.messageType !== 'image') return inner.fetch(req, env, ctx);
 
   const attachmentKey = attachmentKeyFromPath(body.imagePath);

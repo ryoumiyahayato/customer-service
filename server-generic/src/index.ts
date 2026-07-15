@@ -21,8 +21,9 @@ import { assertExperimentalPublicExposure, loadConfig } from './config.js';
 import { createPostgresAdapter } from './db/postgres.js';
 import { handleFrontendCompatRequest } from './frontendCompat.js';
 import { healthPayload } from './health.js';
+import { HttpError } from './http.js';
 import { describeLifecycleMigration } from './lifecycle.js';
-import { readJsonBody, sendError, sendJson, sendNoContent, sendText } from './response.js';
+import { applySecurityHeaders, readJsonBody, sendError, sendJson, sendNoContent, sendText } from './response.js';
 import {
   matchAdminAttachmentDownload,
   matchAdminSessionAction,
@@ -31,7 +32,7 @@ import {
   matchVisitorAttachmentDownload,
   matchVisitorSessionAttachments,
 } from './routes.js';
-import { getAdminSessionToken, serializeAdminSessionCookie, serializeClearAdminSessionCookie } from './security.js';
+import { getAdminSessionToken, isSameOriginWrite, serializeAdminSessionCookie, serializeClearAdminSessionCookie } from './security.js';
 import { getSetupStatus, initializeSetup } from './setup.js';
 import { createLocalStorage } from './storage/localStorage.js';
 import {
@@ -98,8 +99,13 @@ async function serveStatic(request: IncomingMessage, response: ServerResponse, u
 }
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
+  applySecurityHeaders(response);
   const host = request.headers.host || 'localhost';
   const url = new URL(request.url || '/', `http://${host}`);
+
+  if (url.pathname.startsWith('/api/') && !isSameOriginWrite(request)) {
+    throw new HttpError(403, 'forbidden');
+  }
 
   if (request.method === 'GET' && url.pathname === '/healthz') {
     sendJson(response, 200, {
@@ -157,6 +163,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === 'POST' && url.pathname === '/api/visitor/sessions') {
+    if (enforceAbuseLimit(response, abuseGuard.check(request, 'guest_bootstrap'))) return;
     await handleCreateVisitorSession(request, response, db);
     return;
   }

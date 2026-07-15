@@ -22,6 +22,8 @@
     "typecheck": "tsc --noEmit",
     "check:obvious": "node scripts/check-obvious-code-issues.mjs",
     "check:admin-race": "node scripts/check-admin-message-race-guard.mjs",
+    "check:linux-deploy-security": "node scripts/check-linux-deploy-security.mjs",
+    "check:android-shell-security": "node scripts/check-android-shell-security.mjs",
     "deploy:safe": "node scripts/deploy-cloudflare-safe.mjs"
   },
   "dependencies": {

@@ -7,6 +7,22 @@ const STATIC_ASSETS = [
   '/icons/app-icon-maskable.svg',
 ];
 
+const SENSITIVE_QUERY_PARTS = [
+  'token',
+  'session',
+  'cookie',
+  'password',
+  'secret',
+  'key',
+  'setup_token',
+  'setup-token',
+];
+
+function isSensitiveQueryKey(key) {
+  const normalizedKey = key.toLowerCase();
+  return SENSITIVE_QUERY_PARTS.some((part) => normalizedKey.includes(part));
+}
+
 function shouldSkipCache(request) {
   const url = new URL(request.url);
   return (
@@ -14,7 +30,8 @@ function shouldSkipCache(request) {
     url.origin !== location.origin ||
     url.pathname.startsWith('/api/') ||
     url.protocol === 'ws:' ||
-    url.protocol === 'wss:'
+    url.protocol === 'wss:' ||
+    Array.from(url.searchParams.keys()).some((key) => isSensitiveQueryKey(key))
   );
 }
 
