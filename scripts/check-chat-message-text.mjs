@@ -68,7 +68,7 @@ try {
   assert.match(chatTextSource, /<a\s/);
   assert.match(chatTextSource, /href=\{part\.href\}/);
   assert.match(chatTextSource, /target="_blank"/);
-  assert.match(chatTextSource, /rel="noopener noreferrer"/);
+  assert.match(chatTextSource, /rel="[^"]*\bnoopener\b[^"]*\bnoreferrer\b[^"]*"/);
   assert.match(chatTextSource, /onClick=\{keepLinkInteractionOnLink\}/);
   assert.match(chatTextSource, /onTouchStart=\{keepLinkInteractionOnLink\}/);
   assert.doesNotMatch(chatTextSource, /dangerouslySetInnerHTML|innerHTML/);

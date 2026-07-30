@@ -1,7 +1,8 @@
 import type { ChangeEvent, FormEvent, KeyboardEvent, RefObject } from 'react';
+import type { ChatMessage } from '../chatModel';
 
 type GuestComposerProps = {
-  quote: any;
+  quote: ChatMessage | null;
   uploadRef: RefObject<HTMLInputElement | null>;
   messageInputRef: RefObject<HTMLTextAreaElement | null>;
   text: string;

@@ -73,7 +73,7 @@ function enforceMessageAbuseLimits(request: IncomingMessage, response: ServerRes
   return enforceAbuseLimit(response, abuseGuard.check(request, 'message_session', [abuseSessionPart(sessionId)]));
 }
 
-async function serveStatic(request: IncomingMessage, response: ServerResponse, url: URL) {
+async function serveStatic(response: ServerResponse, url: URL) {
   const rawPath = decodeURIComponent(url.pathname);
   const relativePath = rawPath === '/' ? 'index.html' : rawPath.replace(/^\/+/, '');
   let filePath = path.resolve(staticRoot, relativePath);
@@ -241,7 +241,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
-  await serveStatic(request, response, url);
+  await serveStatic(response, url);
 }
 
 await storage.ensureRoot();

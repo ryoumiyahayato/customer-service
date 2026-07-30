@@ -55,7 +55,7 @@ function json(body: unknown, init: ResponseInit = {}) {
 }
 
 function withSecurityHeaders(response: Response) {
-  if ((response as any).webSocket) return response;
+  if ((response as Response & { webSocket?: unknown }).webSocket) return response;
   const headers = new Headers(response.headers);
   for (const [key, value] of Object.entries(SECURITY_HEADERS)) headers.set(key, value);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
@@ -95,8 +95,14 @@ function shouldProtectAgainstCsrf(req: Request) {
   return req.method.toUpperCase() === 'GET' && /^\/api\/sessions\/[^/]+\/messages$/.test(path);
 }
 
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 async function readJsonClone(req: Request) {
-  return await req.clone().json().catch(() => ({} as any));
+  return jsonObject(await req.clone().json().catch(() => null));
 }
 
 function isSameOriginWebSocket(req: Request) {
@@ -202,7 +208,7 @@ async function consumeLimit(env: Env, key: string, limit: number, windowMs: numb
   const resetAt = nowMs + windowMs;
   await env.DB.prepare('INSERT INTO rate_limits(key,count,reset_at) VALUES(?,0,?) ON CONFLICT(key) DO NOTHING')
     .bind(key, resetAt).run();
-  const consumed: any = await env.DB.prepare(
+  const consumed = await env.DB.prepare(
     `UPDATE rate_limits
         SET count=CASE WHEN reset_at <= ? THEN 1 ELSE count+1 END,
             reset_at=CASE WHEN reset_at <= ? THEN ? ELSE reset_at END
@@ -242,7 +248,7 @@ async function protectLogin(req: Request, env: Env) {
   if (req.method !== 'POST' || !['/api/auth/login', '/api/login', '/api/account/login'].includes(path)) return null;
 
   if (contentLengthExceeds(req, JSON_REQUEST_MAX_BYTES)) return invalidInput('请求体过大', 413);
-  const body: any = await readJsonClone(req);
+  const body = await readJsonClone(req);
   const username = String(body.username || '').trim().toLowerCase().slice(0, 80);
   const ipLimited = await consumeLimit(env, rateLimitKey(`login:ip:${clientIp(req)}:${path}`), LOGIN_IP_LIMIT, LOGIN_WINDOW_MS);
   if (ipLimited) return ipLimited;
@@ -261,7 +267,7 @@ async function protectPublicRegister(req: Request, env: Env) {
   const ipLimited = await consumeLimit(env, rateLimitKey(`register:ip:${clientIp(req)}`), REGISTER_IP_LIMIT, REGISTER_WINDOW_MS);
   if (ipLimited) return ipLimited;
 
-  const body: any = await readJsonClone(req);
+  const body = await readJsonClone(req);
   const username = String(body.username || '').trim();
   const password = typeof body.password === 'string' ? body.password : '';
   const displayName = String(body.displayName || username).trim();
@@ -295,7 +301,7 @@ async function protectAdminMutation(req: Request) {
   }
 
   if (path === '/api/admins' && req.method === 'POST') {
-    const body: any = await readJsonClone(req);
+    const body = await readJsonClone(req);
     const username = String(body.username || '').trim();
     const password = typeof body.password === 'string' ? body.password : '';
     if (!validAdminUsername(username)) return invalidInput('管理员用户名必须为 3-64 位字母、数字、下划线、点、@ 或 -');
@@ -303,7 +309,7 @@ async function protectAdminMutation(req: Request) {
   }
 
   if (path === '/api/admins/profile' && req.method === 'PATCH') {
-    const body: any = await readJsonClone(req);
+    const body = await readJsonClone(req);
     const username = String(body.username || '').trim();
     const password = typeof body.password === 'string' ? body.password : '';
     if (username && !validAdminUsername(username)) return invalidInput('管理员用户名必须为 3-64 位字母、数字、下划线、点、@ 或 -');
@@ -330,7 +336,7 @@ async function protectMessageMutation(req: Request, env: Env) {
   const path = new URL(req.url).pathname;
   if (path === '/api/messages' && req.method === 'POST') {
     if (contentLengthExceeds(req, JSON_REQUEST_MAX_BYTES)) return invalidInput('请求体过大', 413);
-    const body: any = await readJsonClone(req);
+    const body = await readJsonClone(req);
     const content = typeof body.content === 'string' ? body.content : '';
     if (content.length > CHAT_MESSAGE_MAX_LENGTH) return invalidInput(`消息内容不能超过 ${CHAT_MESSAGE_MAX_LENGTH} 个字符`);
 
@@ -365,7 +371,7 @@ async function protectMessageMutation(req: Request, env: Env) {
 
   if (path === '/api/staff-chat' && req.method === 'POST') {
     if (contentLengthExceeds(req, JSON_REQUEST_MAX_BYTES)) return invalidInput('请求体过大', 413);
-    const body: any = await readJsonClone(req);
+    const body = await readJsonClone(req);
     const content = typeof body.content === 'string' ? body.content.trim() : '';
     if (!content) return invalidInput('内部消息不能为空');
     if (content.length > STAFF_MESSAGE_MAX_LENGTH) return invalidInput(`内部消息不能超过 ${STAFF_MESSAGE_MAX_LENGTH} 个字符`);
@@ -383,7 +389,9 @@ async function protectAttachmentDownload(req: Request, env: Env) {
 
   const key = attachmentKeyFromPath(`${ATTACHMENT_PATH_PREFIX}${match[1]}`);
   if (!key) return new Response('Not found', { status: 404 });
-  const attachment = await env.DB.prepare('SELECT message_id,expires_at,deleted_at FROM attachments WHERE object_key=? LIMIT 1').bind(key).first<any>();
+  const attachment = await env.DB.prepare(
+    'SELECT message_id,expires_at,deleted_at FROM attachments WHERE object_key=? LIMIT 1',
+  ).bind(key).first<{ message_id: string | null; expires_at: string | null; deleted_at: string | null }>();
   if (attachment?.deleted_at) return new Response('Not found', { status: 404 });
   if (attachment && !attachment.message_id && attachment.expires_at && attachment.expires_at <= new Date().toISOString()) return new Response('Gone', { status: 410 });
   return null;
@@ -452,9 +460,8 @@ async function currentAuditActor(env: Env, adminCookie?: string): Promise<AuditA
   return admin || null;
 }
 
-async function readJsonBody(req: Request): Promise<any> {
-  const body = await req.json().catch(() => ({}));
-  return body as any;
+async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
+  return jsonObject(await req.json().catch(() => null));
 }
 
 function pickString(value: unknown, maxLength = 120) {
@@ -492,19 +499,19 @@ async function classifyAdminMutation(req: Request): Promise<AuditEvent | null> {
   if (path === '/api/invites' && method === 'POST') return makeAuditEvent('admin.invite.create', path, method);
   if (path === '/api/messages/purge-images' && method === 'POST') return makeAuditEvent('admin.messages.purge_images', path, method);
   if (path === '/api/admins' && method === 'POST') {
-    const body: any = await readJsonBody(req);
+    const body = await readJsonBody(req);
     return makeAuditEvent('admin.operator.create', path, method, {
       details: { username: pickString(body.username) },
     });
   }
   if (path === '/api/admins/operators' && method === 'DELETE') {
-    const body: any = await readJsonBody(req);
+    const body = await readJsonBody(req);
     return makeAuditEvent(body.hard ? 'admin.operator.delete' : 'admin.operator.disable', path, method, {
       resource: pickString(body.id),
     });
   }
   if (path === '/api/admins/profile' && method === 'PATCH') {
-    const body: any = await readJsonBody(req);
+    const body = await readJsonBody(req);
     return makeAuditEvent('admin.profile.update', path, method, {
       details: {
         usernameChanged: Boolean(body.username),

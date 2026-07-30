@@ -1,5 +1,5 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
-import { apiFetch } from '../api';
+import { ApiError, apiFetch } from '../api';
 import { FormError, SetupNotice } from '../ui/Notice';
 import { LoadingState } from '../ui/StatusBlock';
 import '../styles.css';
@@ -133,8 +133,8 @@ export default function SetupPage() {
 
       setInitialized(true);
       setForm(initialForm);
-    } catch (error: any) {
-      setFormError(safeSubmitMessage(error?.data?.reason));
+    } catch (error) {
+      setFormError(safeSubmitMessage(error instanceof ApiError ? error.data?.reason : undefined));
     } finally {
       setSubmitting(false);
     }

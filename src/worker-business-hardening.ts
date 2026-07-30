@@ -134,7 +134,13 @@ function requestBodyTooLarge(req: Request) {
   return Number.isFinite(length) && length > JSON_REQUEST_MAX_BYTES;
 }
 
-async function readJsonWithinLimit(req: Request): Promise<{ body: any; tooLarge: boolean }> {
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+async function readJsonWithinLimit(req: Request): Promise<{ body: Record<string, unknown>; tooLarge: boolean }> {
   if (requestBodyTooLarge(req)) return { body: {}, tooLarge: true };
   const reader = req.clone().body?.getReader();
   if (!reader) return { body: {}, tooLarge: false };
@@ -164,7 +170,7 @@ async function readJsonWithinLimit(req: Request): Promise<{ body: any; tooLarge:
     offset += chunk.byteLength;
   }
   try {
-    return { body: JSON.parse(new TextDecoder().decode(bytes)), tooLarge: false };
+    return { body: jsonObject(JSON.parse(new TextDecoder().decode(bytes))), tooLarge: false };
   } catch {
     return { body: {}, tooLarge: false };
   }
@@ -222,7 +228,7 @@ async function mutationRateLimit(env: Env, req: Request) {
   const resetAt = Math.floor(nowMs / 60000) * 60000 + 60000;
   await env.DB.prepare('INSERT INTO rate_limits(key,count,reset_at) VALUES(?,0,?) ON CONFLICT(key) DO NOTHING')
     .bind(key, resetAt).run();
-  const consumed: any = await env.DB.prepare(
+  const consumed = await env.DB.prepare(
     `UPDATE rate_limits
         SET count=CASE WHEN reset_at <= ? THEN 1 ELSE count+1 END,
             reset_at=CASE WHEN reset_at <= ? THEN ? ELSE reset_at END
@@ -266,7 +272,7 @@ async function handleOperatorDisable(req: Request, env: Env, ctx: ExecutionConte
   const actor = await requireSuperAdmin(env, req);
   if (actor instanceof Response) return actor;
 
-  const body: any = parsed.body;
+  const body = parsed.body;
   const operatorId = typeof body.id === 'string' ? body.id.trim() : '';
   if (!operatorId) return json({ error: 'operator_id_required' }, 400);
   if (body.hard) {
@@ -295,7 +301,7 @@ async function handleOperatorDisable(req: Request, env: Env, ctx: ExecutionConte
     ).bind(timestamp, operatorId),
   ]);
 
-  if (Number((results[0] as any)?.meta?.changes || 0) !== 1) {
+  if (Number(results[0]?.meta?.changes || 0) !== 1) {
     return json({ error: 'operator_state_conflict' }, 409);
   }
 
@@ -307,8 +313,8 @@ async function handleOperatorDisable(req: Request, env: Env, ctx: ExecutionConte
   return json({
     ok: true,
     disabled: true,
-    revokedSessionCount: Number((results[1] as any)?.meta?.changes || 0),
-    unassignedSessionCount: Number((results[2] as any)?.meta?.changes || 0),
+    revokedSessionCount: Number(results[1]?.meta?.changes || 0),
+    unassignedSessionCount: Number(results[2]?.meta?.changes || 0),
   });
 }
 
@@ -324,12 +330,19 @@ function attachmentKeyFromPath(value: unknown) {
   }
 }
 
-async function resolveMessageSender(env: Env, req: Request, body: any): Promise<MessageSender | Response> {
+async function resolveMessageSender(env: Env, req: Request, body: Record<string, unknown>): Promise<MessageSender | Response> {
   const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
   if (!sessionId) return json({ error: 'session_required' }, 400);
   const session = await env.DB.prepare(
     'SELECT id,user_id,assigned_operator_id,status,deleted_at,purged_at FROM sessions WHERE id=? LIMIT 1',
-  ).bind(sessionId).first<any>();
+  ).bind(sessionId).first<{
+    id: string;
+    user_id: string;
+    assigned_operator_id: string | null;
+    status: string;
+    deleted_at: string | null;
+    purged_at: string | null;
+  }>();
   if (!session?.id) return json({ error: 'session_not_found' }, 404);
   if (session.deleted_at || session.purged_at || session.status === 'CLOSED' || session.status === 'ARCHIVED') {
     return json({ error: 'session_ended' }, 400);
@@ -360,7 +373,7 @@ async function resolveMessageSender(env: Env, req: Request, body: any): Promise<
 async function existingImageRetry(
   env: Env,
   sender: MessageSender,
-  body: any,
+  body: Record<string, unknown>,
   attachmentKey: string,
 ): Promise<'none' | 'deduped' | 'conflict'> {
   const rawClientMessageId = typeof body.clientMessageId === 'string' ? body.clientMessageId.trim() : '';
@@ -404,7 +417,7 @@ async function handleImageMessage(req: Request, env: Env, ctx: ExecutionContext)
   if (!sameOriginWrite(req)) return json({ error: 'forbidden' }, 403);
   const parsed = await readJsonWithinLimit(req);
   if (parsed.tooLarge) return json({ error: 'request_too_large' }, 413);
-  const body: any = parsed.body;
+  const body = parsed.body;
   if (body.messageType !== 'image') return inner.fetch(req, env, ctx);
 
   const attachmentKey = attachmentKeyFromPath(body.imagePath);
@@ -418,7 +431,7 @@ async function handleImageMessage(req: Request, env: Env, ctx: ExecutionContext)
   if (retry === 'conflict') return json({ error: 'client_message_id_conflict' }, 409);
 
   const claimToken = crypto.randomUUID();
-  const claimed: any = await env.DB.prepare(
+  const claimed = await env.DB.prepare(
     `UPDATE attachments SET claim_token=?
       WHERE conversation_id=? AND object_key=?
         AND created_by_type=? AND created_by_id=?
@@ -442,8 +455,9 @@ async function handleImageMessage(req: Request, env: Env, ctx: ExecutionContext)
     return response;
   }
 
-  const payload: any = await response.clone().json().catch(() => null);
-  const messageId = typeof payload?.message?.id === 'string' ? payload.message.id : '';
+  const payload = jsonObject(await response.clone().json().catch(() => null));
+  const message = jsonObject(payload.message);
+  const messageId = typeof message.id === 'string' ? message.id : '';
   const attachment = await env.DB.prepare(
     'SELECT message_id,claim_token FROM attachments WHERE object_key=? LIMIT 1',
   ).bind(attachmentKey).first<{ message_id: string | null; claim_token: string | null }>();

@@ -1,8 +1,8 @@
 import { StatusBlock } from '../ui/StatusBlock';
+import type { ChatSession, SessionGroup } from '../chatModel';
 import { setActiveAdminSessionId } from './activeSessionGuard';
 
-type Session = any;
-type SessionGroup = 'active' | 'archived' | 'trash';
+type Session = ChatSession;
 
 type AdminSessionListProps = {
   sessions: Session[];
@@ -74,7 +74,7 @@ export default function AdminSessionList({
             <div className="session-main"><b>{customerName(session)}</b><p>{session.deleted_at ? '回收站' : session.archived_at || session.status === 'ARCHIVED' || session.status === 'CLOSED' ? '已归档' : '进行中'}</p></div>
             <div className="session-meta">
               <small>{formatTime(session.updated_at)}</small>
-              {session.unread_count > 0 && <span className="badge">{session.unread_count}</span>}
+              {(session.unread_count ?? 0) > 0 && <span className="badge">{session.unread_count}</span>}
             </div>
           </button>
         ))}

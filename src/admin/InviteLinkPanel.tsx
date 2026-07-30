@@ -1,9 +1,18 @@
 import { useRef, useState } from 'react';
 import { apiFetch } from '../api';
+import { getErrorMessage } from '../compat';
+import type { OperatorSummary } from '../chatModel';
 
 type InviteLinkPanelProps = {
   adminRole?: string;
-  operators?: any[];
+  operators?: OperatorSummary[];
+};
+
+type InviteResponse = {
+  invite?: {
+    token?: string;
+    url?: string;
+  };
 };
 
 const text = {
@@ -43,7 +52,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
     setCopied(false);
     try {
       const body = isSuper && sourceOperatorId ? { sourceOperatorId } : {};
-      const res: any = await apiFetch('/api/invites', { method: 'POST', body: JSON.stringify(body) });
+      const res = await apiFetch<InviteResponse>('/api/invites', { method: 'POST', body: JSON.stringify(body) });
       const token = res?.invite?.token;
       const rootDomain = visitorRootDomain();
       let fullUrl: string;
@@ -59,8 +68,8 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
         fullUrl = path.startsWith('http') ? path : `${visitorBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
       }
       setInviteUrl(fullUrl);
-    } catch (e: any) {
-      setError(e?.message || text.createFailed);
+    } catch (error) {
+      setError(getErrorMessage(error, text.createFailed));
     } finally {
       setLoading(false);
     }

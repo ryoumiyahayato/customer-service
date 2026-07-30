@@ -1,14 +1,23 @@
-﻿import { isAbortControllerSupported } from './compat';
+﻿import { isAbortControllerSupported, isAbortError } from './compat';
+
+type ApiErrorData = Record<string, unknown> & {
+  error?: string;
+  reason?: unknown;
+};
+
+function asApiErrorData(data: unknown): ApiErrorData | null {
+  return data && typeof data === 'object' ? data as ApiErrorData : null;
+}
 
 export class ApiError extends Error {
   status: number;
-  data: any;
+  data: ApiErrorData | null;
 
-  constructor(message: string, status = 0, data: any = null) {
+  constructor(message: string, status = 0, data: unknown = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
-    this.data = data;
+    this.data = asApiErrorData(data);
   }
 }
 
@@ -33,8 +42,8 @@ function pathFromInput(input: RequestInfo | URL) {
   }
 }
 
-function messageForStatus(status: number, data: any, path: string) {
-  const backend = typeof data?.error === 'string' ? data.error : '';
+function messageForStatus(status: number, data: unknown, path: string) {
+  const backend = asApiErrorData(data)?.error || '';
   if (path === '/api/auth/login' && status === 401) return '账号或密码错误';
   if (path === '/api/account/login' && status === 401) return '账号或密码错误';
   if (path === '/api/auth/me' && status === 401) return '请登录';
@@ -47,30 +56,35 @@ function messageForStatus(status: number, data: any, path: string) {
 
 async function fetchOnce(input: RequestInfo | URL, options: ApiFetchOptions) {
   const timeoutMs = options.timeoutMs ?? 10000;
-  const supportsAbort = isAbortControllerSupported();
-  const controller = supportsAbort ? new AbortController() : null;
-  const timer = setTimeout(() => controller?.abort(), timeoutMs);
+  const controller = isAbortControllerSupported() ? new AbortController() : null;
+  const requestOptions = { ...options };
+  delete requestOptions.timeoutMs;
+  delete requestOptions.retryGet;
   const credentials = options.credentials ?? 'same-origin';
-  const request = fetch(input, { ...options, credentials, signal: controller?.signal });
-  const timeout = new Promise<Response>((_, reject) => {
-    if (!supportsAbort) setTimeout(() => reject(new ApiError('请求超时，请检查网络后重试', 408)), timeoutMs);
+  const request = fetch(input, { ...requestOptions, credentials, signal: controller?.signal });
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      if (controller) controller.abort();
+      else reject(new ApiError('请求超时，请检查网络后重试', 408));
+    }, timeoutMs);
   });
 
   try {
-    const response = await (supportsAbort ? request : Promise.race([request, timeout]));
+    const response = await Promise.race([request, timeout]);
     const data = await parseBody(response);
     if (!response.ok) throw new ApiError(messageForStatus(response.status, data, pathFromInput(input)), response.status, data);
     return data;
-  } catch (error: any) {
-    if (error?.name === 'AbortError') throw new ApiError('请求超时，请检查网络后重试', 408);
+  } catch (error) {
+    if (isAbortError(error)) throw new ApiError('请求超时，请检查网络后重试', 408);
     if (error instanceof ApiError) throw error;
     throw new ApiError('网络不稳定，请重试', 0);
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timeoutId);
   }
 }
 
-export async function apiFetch<T = any>(input: RequestInfo | URL, options: ApiFetchOptions = {}): Promise<T> {
+export async function apiFetch<T = unknown>(input: RequestInfo | URL, options: ApiFetchOptions = {}): Promise<T> {
   const method = String(options.method || 'GET').toUpperCase();
   try {
     return await fetchOnce(input, options) as T;

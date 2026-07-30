@@ -6,10 +6,10 @@
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function getErrorMessage(error: unknown) {
+export function getErrorMessage(error: unknown, fallback = '未知错误') {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === 'string') return error;
-  return '未知错误';
+  return fallback;
 }
 
 export function copyText(text: string) {

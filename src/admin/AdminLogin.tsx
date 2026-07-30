@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { apiFetch } from '../api';
+import { getErrorMessage } from '../compat';
 import '../styles.css';
 
 type AdminLoginProps = {
@@ -18,7 +19,7 @@ export default function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
       if (onLoginSuccess) await onLoginSuccess();
       else window.location.reload();
     }
-    catch (e: any) { setError(e?.message || '登录失败'); }
+    catch (error) { setError(getErrorMessage(error, '登录失败')); }
     setLoading(false);
   };
   return (

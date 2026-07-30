@@ -14,6 +14,12 @@ const now = () => new Date().toISOString();
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 
 type LifecycleEnv = { DB: D1Database; UPLOADS?: R2Bucket };
+type SessionState = {
+  status?: string | null;
+  archived_at?: string | null;
+  deleted_at?: string | null;
+  purged_at?: string | null;
+};
 type PurgeCandidate = {
   id: string;
   deleted_at: string | null;
@@ -21,7 +27,7 @@ type PurgeCandidate = {
   history_cleared_at: string | null;
 };
 
-export function normalizeSessionBucket(session: any): SessionBucket | null {
+export function normalizeSessionBucket(session?: SessionState | null): SessionBucket | null {
   if (!session) return null;
   if (session.purged_at) return 'purged';
   if (session.deleted_at) return 'trash';
@@ -29,7 +35,7 @@ export function normalizeSessionBucket(session: any): SessionBucket | null {
   return 'active';
 }
 
-export function sessionEnded(session: any): boolean {
+export function sessionEnded(session?: SessionState | null): boolean {
   return Boolean(!session || session.deleted_at || session.purged_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
 }
 
@@ -61,14 +67,14 @@ export async function autoArchiveActiveSessions(
          AND datetime(COALESCE(updated_at, created_at)) <= datetime('now', '-24 hours')
        ORDER BY datetime(COALESCE(updated_at, created_at)) ASC
        LIMIT ?`,
-    ).bind(archiveLimit).all<any>()
+    ).bind(archiveLimit).all<{ id: string }>()
   ).results || [];
 
-  const ids = candidates.map((row: any) => String(row.id || '')).filter(Boolean);
+  const ids = candidates.map((row) => String(row.id || '')).filter(Boolean);
   if (!ids.length) return { archivedCount: 0 };
 
   const t = now();
-  const result: any = await env.DB.prepare(
+  const result = await env.DB.prepare(
     `UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=NULL,updated_at=?
      WHERE id IN (${ids.map(() => '?').join(',')})
        AND deleted_at IS NULL
@@ -95,12 +101,12 @@ function attachmentKeyFromPath(path: unknown): string {
 
 async function collectPurgeKeys(env: LifecycleEnv, sessionId: string): Promise<Set<string>> {
   const messages = (
-    await env.DB.prepare('SELECT image_path FROM messages WHERE session_id=?').bind(sessionId).all<any>()
+    await env.DB.prepare('SELECT image_path FROM messages WHERE session_id=?').bind(sessionId).all<{ image_path: string | null }>()
   ).results || [];
   const attachments = (
     await env.DB.prepare(
       'SELECT object_key FROM attachments WHERE conversation_id=? OR message_id IN (SELECT id FROM messages WHERE session_id=?)',
-    ).bind(sessionId, sessionId).all<any>()
+    ).bind(sessionId, sessionId).all<{ object_key: string | null }>()
   ).results || [];
 
   const keys = new Set<string>();
@@ -119,7 +125,7 @@ async function claimTrashSessionForPurge(env: LifecycleEnv, candidate: PurgeCand
   if (candidate.purged_at && !candidate.history_cleared_at) return true;
 
   const t = now();
-  const result: any = await env.DB.prepare(
+  const result = await env.DB.prepare(
     `UPDATE sessions
         SET purged_at=?,updated_at=?
       WHERE id=?
@@ -170,7 +176,7 @@ async function purgeTrashSessionData(env: LifecycleEnv, candidate: PurgeCandidat
     ).bind(t, t, sessionId),
   ]);
 
-  return Number((results[2] as any)?.meta?.changes || 0) === 1;
+  return Number(results[2]?.meta?.changes || 0) === 1;
 }
 
 export async function purgeTrashSessions(
@@ -224,7 +230,7 @@ export async function cleanupExpiredOrphanAttachments(
          AND datetime(expires_at) <= datetime('now')
        ORDER BY datetime(expires_at) ASC
        LIMIT ?`,
-    ).bind(cleanupLimit).all<any>()
+    ).bind(cleanupLimit).all<{ id: string; object_key: string }>()
   ).results || [];
 
   const cleanedIds: string[] = [];
@@ -264,9 +270,9 @@ export async function cleanupExpiredRateLimits(
        WHERE reset_at <= ?
        ORDER BY reset_at ASC
        LIMIT ?`,
-    ).bind(cutoff, cleanupLimit).all<any>()
+    ).bind(cutoff, cleanupLimit).all<{ key: string }>()
   ).results || [];
-  const keys = rows.map((row: any) => String(row.key || '')).filter(Boolean);
+  const keys = rows.map((row) => String(row.key || '')).filter(Boolean);
   if (!keys.length) return { expiredRateLimitCount: 0 };
 
   for (let i = 0; i < keys.length; i += 80) {
@@ -293,13 +299,13 @@ export async function cleanupExpiredAuthSessions(
             OR datetime(expires_at) <= datetime('now')
          ORDER BY datetime(COALESCE(revoked_at, expires_at, created_at)) ASC
          LIMIT ?`,
-      ).bind(cleanupLimit).all<any>()
+      ).bind(cleanupLimit).all<{ id: string }>()
     ).results || [];
-    const ids = rows.map((row: any) => String(row.id || '')).filter(Boolean);
+    const ids = rows.map((row) => String(row.id || '')).filter(Boolean);
     for (let i = 0; i < ids.length; i += 80) {
       const chunk = ids.slice(i, i + 80);
       if (chunk.length) {
-        const result: any = await env.DB.prepare(`DELETE FROM ${table} WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
+        const result = await env.DB.prepare(`DELETE FROM ${table} WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
         expiredSessionCount += Number(result?.meta?.changes || chunk.length);
       }
     }
@@ -323,16 +329,16 @@ export async function cleanupExpiredInviteLinks(
           OR (consumed_at IS NOT NULL AND datetime(consumed_at) <= datetime('now', '-7 days'))
        ORDER BY datetime(COALESCE(revoked_at, consumed_at, expires_at, created_at)) ASC
        LIMIT ?`,
-    ).bind(cleanupLimit).all<any>()
+    ).bind(cleanupLimit).all<{ id: string }>()
   ).results || [];
-  const ids = rows.map((row: any) => String(row.id || '')).filter(Boolean);
+  const ids = rows.map((row) => String(row.id || '')).filter(Boolean);
   if (!ids.length) return { expiredInviteCount: 0 };
 
   let expiredInviteCount = 0;
   for (let i = 0; i < ids.length; i += 80) {
     const chunk = ids.slice(i, i + 80);
     if (chunk.length) {
-      const result: any = await env.DB.prepare(`DELETE FROM invite_links WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
+      const result = await env.DB.prepare(`DELETE FROM invite_links WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).run();
       expiredInviteCount += Number(result?.meta?.changes || chunk.length);
     }
   }

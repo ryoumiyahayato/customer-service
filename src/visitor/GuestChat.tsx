@@ -1,42 +1,42 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { apiFetch } from '../api';
+import { ApiError, apiFetch } from '../api';
 import ChatMessageText from '../ChatMessageText';
 import LinkExpired from '../common/LinkExpired';
-import { copyText } from '../compat';
+import { copyText, getErrorMessage } from '../compat';
 import GuestComposer from './GuestComposer';
 import GuestMessageList from './GuestMessageList';
 import { NetworkNotice } from '../ui/Notice';
+import {
+  fallbackDelay,
+  isMessageCreatedEvent,
+  isSessionEnded,
+  lastServerMessageTime,
+  localMessageId,
+  markMessageFailed,
+  mergeMessage,
+  mergeMessages,
+  newClientMessageId,
+  recordChatMetric,
+  type ChatMessage,
+  type ChatSession,
+} from '../chatModel';
 import '../styles.css';
 
-type Message = any;
-type Session = any;
+type Message = ChatMessage;
+type GuestBootstrapResponse = {
+  visitorId?: string;
+  session?: ChatSession;
+  messages?: Message[];
+};
+type MessageListResponse = { messages?: Message[] };
+type MessageMutationResponse = { message?: Message };
+type UploadResponse = { path: string };
 
-const formatTime = (ts?: string) => (ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const INVITE_NOT_FOUND = 'invite-not-found';
 const SERVER_ERROR_TEXT = '\u670d\u52a1\u5668\u9519\u8bef\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5';
 const SESSION_ENDED_ERROR = '\u4f1a\u8bdd\u5df2\u7ed3\u675f';
-const inviteConsumeRequests = new Map<string, Promise<any>>();
+const inviteConsumeRequests = new Map<string, Promise<GuestBootstrapResponse>>();
 const INIT_RETRY_DELAYS = [800, 1600, 3000];
-const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
-const localMessageId = (clientMessageId: string) => `local-${clientMessageId}`;
-const isMessageCreatedEvent = (type?: string) => type === 'message:new' || type === 'message_created';
-const mergeMessage = (messages: Message[], message?: Message) => {
-  if (!message) return messages;
-  const idx = messages.findIndex(m =>
-    (message.id && m.id === message.id) ||
-    (message.client_message_id && m.client_message_id === message.client_message_id)
-  );
-  if (idx < 0) return [...messages, message];
-  const next = messages.slice();
-  next[idx] = message;
-  return next;
-};
-const mergeMessages = (messages: Message[], incoming: Message[] = []) => incoming.reduce(mergeMessage, messages);
-const markMessageFailed = (messages: Message[], id: string) => messages.map(m => m.id === id ? { ...m, status: 'failed' } : m);
-const lastServerMessageTime = (messages: Message[]) => messages.reduce((latest, msg) => {
-  if (!msg.created_at || String(msg.id || '').startsWith('local-') || msg.status === 'sending' || msg.status === 'failed') return latest;
-  return !latest || msg.created_at > latest ? msg.created_at : latest;
-}, '');
 const isUnreadOperatorMessage = (msg: Message, sessionId?: string) =>
     msg?.id &&
     !String(msg.id).startsWith('local-') &&
@@ -56,14 +56,12 @@ const markMessagesCustomerRead = (messages: Message[], messageIds: string[], rea
     ? { ...msg, is_read: 1, status: msg.status === 'sent' ? 'read' : msg.status, read_at: msg.read_at || readAt }
     : msg);
 };
-const fallbackDelay = (misses: number) => misses < 3 ? 2000 : misses < 12 ? 5000 : 10000;
-const chatMetric = (name: string, started: number, extra?: Record<string, number | string>) => {
-  try { console.debug('[chat_metric]', name, Math.round(performance.now() - started), extra || {}); } catch {}
-};
 const isNotFoundStatus = (status?: number) => status === 401 || status === 403 || status === 404 || status === 410;
 const isInviteGoneStatus = (status?: number) => status === 404 || status === 410;
-const isSessionGoneError = (error: any) => isNotFoundStatus(error?.status) || (error?.status === 400 && error?.data?.error === SESSION_ENDED_ERROR);
-const sessionUnavailable = (session?: any) => !session || session.deleted_at || session.status === 'CLOSED' || session.status === 'ARCHIVED';
+const isSessionGoneError = (error: unknown) =>
+  error instanceof ApiError
+  && (isNotFoundStatus(error.status) || (error.status === 400 && error.data?.error === SESSION_ENDED_ERROR));
+const sessionUnavailable = isSessionEnded;
 
 /* ========== VISITOR CHAT PAGE ========== */
 function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
@@ -79,8 +77,6 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const [networkBanner, setNetworkBanner] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const [quote, setQuote] = useState<Message | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
-  const [recallLoading, setRecallLoading] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ msg: Message; x: number; y: number } | null>(null);
   const [toast, setToast] = useState('');
   const [accessError, setAccessError] = useState('');
@@ -99,10 +95,10 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const onlineRef = useRef(false);
   const fallbackMissesRef = useRef(0);
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimer = useRef<any>(null);
-  const fallbackTimer = useRef<any>(null);
-  const initRetryTimer = useRef<any>(null);
-  const customerReadTimer = useRef<any>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const fallbackTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const initRetryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const customerReadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const customerReadInFlight = useRef(false);
   const customerReadSchedulerRef = useRef<(delay?: number) => void>(() => {});
   const initRetryCountRef = useRef(0);
@@ -190,10 +186,10 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       const endpoint = `/api/guest/${encodeURIComponent(resolvedInviteToken)}`;
       let request = inviteConsumeRequests.get(resolvedInviteToken);
       if (!request) {
-        request = apiFetch(endpoint, { method: 'POST', body: JSON.stringify({ visitorId }) });
+        request = apiFetch<GuestBootstrapResponse>(endpoint, { method: 'POST', body: JSON.stringify({ visitorId }) });
         inviteConsumeRequests.set(resolvedInviteToken, request);
       }
-      const res: any = await request;
+      const res = await request;
       if (!res.session) throw new Error(SERVER_ERROR_TEXT);
       if (sessionUnavailable(res.session)) {
         showNotFound();
@@ -208,13 +204,14 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       clearTimeout(initRetryTimer.current);
       setAccessError(''); setOnline(false); setConnecting(false);
       return res.session?.id;
-    } catch (e: any) {
-      const retryable = !isInviteGoneStatus(e?.status);
+    } catch (error) {
+      const status = error instanceof ApiError ? error.status : undefined;
+      const retryable = !isInviteGoneStatus(status);
       if (retryable) {
         inviteConsumeRequests.delete(resolvedInviteToken);
         consumeStartedRef.current = false;
       }
-      if (isInviteGoneStatus(e?.status)) {
+      if (isInviteGoneStatus(status)) {
         showNotFound();
         return null;
       }
@@ -231,7 +228,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
         }, INIT_RETRY_DELAYS[retryIndex]);
         return null;
       }
-      setAccessError(e?.message || '连接失败，请检查网络后点击重试');
+      setAccessError(getErrorMessage(error, '连接失败，请检查网络后点击重试'));
       setConnecting(false);
       setOnline(false);
       return null;
@@ -257,8 +254,8 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const connectStarted = performance.now();
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/conversations/${sid}`);
-    ws.onopen = () => { chatMetric('ws_connect_ms', connectStarted); clearTimeout(fallbackTimer.current); fallbackMissesRef.current = 0; setOnline(true); setReconnecting(false); };
-    ws.onclose = (e) => { try { console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 }); } catch {} setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => wsConnect(sid), 5000); };
+    ws.onopen = () => { recordChatMetric('ws_connect_ms', connectStarted); clearTimeout(fallbackTimer.current); fallbackMissesRef.current = 0; setOnline(true); setReconnecting(false); };
+    ws.onclose = (e) => { console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 }); setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => wsConnect(sid), 5000); };
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
@@ -287,16 +284,17 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     const started = performance.now();
     const after = lastServerMessageTime(messagesRef.current);
     const url = `/api/sessions/${encodeURIComponent(sid)}/messages${after ? `?after=${encodeURIComponent(after)}` : ''}`;
-    const res: any = await apiFetch(url, { retryGet: false });
-    const count = Array.isArray(res?.messages) ? res.messages.length : 0;
-    chatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
+    const res = await apiFetch<MessageListResponse>(url, { retryGet: false });
+    const incoming = Array.isArray(res.messages) ? res.messages : [];
+    const count = incoming.length;
+    recordChatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
     if (count) {
       setMessages(prev => {
-        const next = mergeMessages(prev, res.messages);
+        const next = mergeMessages(prev, incoming);
         messagesRef.current = next;
         return next;
       });
-      if (document.visibilityState === 'visible' && unreadOperatorMessageIds(res.messages, sid).length) {
+      if (document.visibilityState === 'visible' && unreadOperatorMessageIds(incoming, sid).length) {
         setTimeout(() => customerReadSchedulerRef.current(180), 0);
       }
     }
@@ -315,8 +313,8 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
         messagesRef.current = next;
         return next;
       });
-    } catch (e: any) {
-      if (isSessionGoneError(e)) showNotFound();
+    } catch (error) {
+      if (isSessionGoneError(error)) showNotFound();
     } finally {
       customerReadInFlight.current = false;
     }
@@ -335,9 +333,9 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       try {
         const count = await syncMessages(sid);
         fallbackMissesRef.current = count ? 0 : fallbackMissesRef.current + 1;
-      } catch (e: any) {
+      } catch (error) {
         fallbackMissesRef.current += 1;
-        if (isSessionGoneError(e)) { showNotFound(); return; }
+        if (isSessionGoneError(error)) { showNotFound(); return; }
       }
       if (!sessionClosedRef.current && !onlineRef.current) scheduleFallback(sid, fallbackDelay(fallbackMissesRef.current));
     }, delay);
@@ -357,7 +355,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       setTimeout(() => scrollToBottom('auto'), 120);
       scheduleCustomerRead(120);
       if (!sessionId || online || sessionClosed || accessError) return;
-      syncMessages(sessionId).catch((e: any) => { if (isSessionGoneError(e)) showNotFound(); });
+      syncMessages(sessionId).catch((error) => { if (isSessionGoneError(error)) showNotFound(); });
     };
     addEventListener('focus', syncIfVisible);
     document.addEventListener('visibilitychange', syncIfVisible);
@@ -406,7 +404,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     const currentQuote = quote;
     const clientMessageId = newClientMessageId();
     const tempId = localMessageId(clientMessageId);
-    const optimisticMessage = {
+    const optimisticMessage: Message = {
       id: tempId,
       session_id: sessionId,
       sender_type: 'VISITOR',
@@ -428,11 +426,11 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     focusMessageInput();
     try {
       const postStarted = performance.now();
-      const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content, senderType: 'VISITOR', quoteMessageId: currentQuote?.id || null }) });
-      chatMetric('api_post_total_ms', postStarted);
+      const res = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content, senderType: 'VISITOR', quoteMessageId: currentQuote?.id || null }) });
+      recordChatMetric('api_post_total_ms', postStarted);
       if (res?.message) setMessages(prev => mergeMessage(prev, res.message));
-      syncMessages(sessionId).catch((e: any) => { if (isSessionGoneError(e)) showNotFound(); });
-    } catch (e: any) { if (isSessionGoneError(e)) { showNotFound(); } else { setMessages(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); setNetworkBanner(true); } }
+      syncMessages(sessionId).catch((error) => { if (isSessionGoneError(error)) showNotFound(); });
+    } catch (error) { if (isSessionGoneError(error)) { showNotFound(); } else { setMessages(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); setNetworkBanner(true); } }
   };
 
   const upload = async (file: File) => {
@@ -442,27 +440,13 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     try {
       const clientMessageId = newClientMessageId();
       const fd = new FormData(); fd.append('file', file); fd.append('sessionId', sessionId);
-      const res: any = await apiFetch(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST', body: fd });
+      const res = await apiFetch<UploadResponse>(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST', body: fd });
       tempId = localMessageId(clientMessageId);
       setMessages(prev => mergeMessage(prev, { id: tempId, session_id: sessionId, sender_type: 'VISITOR', sender_id: visitorId, content: '', message_type: 'image', image_path: res.path, status: 'sending', created_at: new Date().toISOString(), read_at: null, is_read: 0, quote_message_id: null, client_message_id: clientMessageId }));
-      const msgRes: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
+      const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
       if (msgRes?.message) setMessages(prev => mergeMessage(prev, msgRes.message));
-    } catch (e: any) { if (isSessionGoneError(e)) { showNotFound(); } else { if (tempId) setMessages(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); setNetworkBanner(true); } }
+    } catch (error) { if (isSessionGoneError(error)) { showNotFound(); } else { if (tempId) setMessages(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); setNetworkBanner(true); } }
     sendingRef.current = false; setSending('idle');
-  };
-
-  const doDelete = async (msg: Message) => {
-    if (deleteLoading) return; setDeleteLoading(msg.id);
-    try { await apiFetch(`/api/messages/${msg.id}/delete`, { method: 'POST' }); }
-    catch (e: any) { if (isSessionGoneError(e)) showNotFound(); else showToast(e?.message || '删除失败'); }
-    setDeleteLoading(null);
-  };
-
-  const doRecall = async (msg: Message) => {
-    if (recallLoading) return; setRecallLoading(msg.id);
-    try { await apiFetch(`/api/messages/${msg.id}/recall`, { method: 'POST' }); }
-    catch (e: any) { if (isSessionGoneError(e)) showNotFound(); else showToast(e?.message || '撤回失败'); }
-    setRecallLoading(null);
   };
 
   const handleContextMenu = (e: React.MouseEvent, msg: Message) => { e.preventDefault(); setContextMenu({ msg, x: e.clientX, y: e.clientY }); };
@@ -481,7 +465,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
 
   const isOwn = (m: Message) => m.sender_type === 'VISITOR';
   const copyMessageText = (content: string) => {
-    copyText(content).then(() => showToast('已复制')).catch((e) => showToast(e?.message || '复制失败'));
+    copyText(content).then(() => showToast('已复制')).catch((error) => showToast(getErrorMessage(error, '复制失败')));
   };
   const menuItems = (msg: Message) => {
     const items: { label: string; action: () => void; disabled?: boolean }[] = [];
@@ -556,7 +540,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       {/* Context menu */}
       {contextMenu && (() => {
         const items = menuItems(contextMenu.msg);
-        if (items.length === 0) { setContextMenu(null); return null; }
+        if (items.length === 0) return null;
         const mx = Math.min(contextMenu.x, window.innerWidth - 180);
         const my = Math.min(contextMenu.y, window.innerHeight - items.length * 44 - 10);
         return <div className="context-menu-overlay" onClick={() => setContextMenu(null)} onContextMenu={e => { e.preventDefault(); setContextMenu(null); }}>

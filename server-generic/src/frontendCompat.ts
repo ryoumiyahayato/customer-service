@@ -363,7 +363,7 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
     context.hub.broadcastToSession(sessionId, {
       type: 'message_created',
       sessionId,
-      message: frontendMessage as unknown as ChatMessage,
+      message: frontendMessage,
     });
   }
   sendJson(response, message.deduped ? 200 : 201, {

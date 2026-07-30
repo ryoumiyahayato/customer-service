@@ -12,11 +12,11 @@ const VISITOR_COOKIE_NAME = 'support_visitor';
 const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024;
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
 
-export type WebSocketBroadcast =
+export type WebSocketBroadcast<TMessage extends object = ChatMessage> =
   | {
       type: 'message_created';
       sessionId: string;
-      message: ChatMessage;
+      message: TMessage;
     }
   | {
       type: 'messages:read';
@@ -32,7 +32,10 @@ export type WebSocketBroadcast =
 
 export type WebSocketHub = {
   handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => Promise<void>;
-  broadcastToSession: (sessionId: string, event: WebSocketBroadcast) => void;
+  broadcastToSession: <TMessage extends object = ChatMessage>(
+    sessionId: string,
+    event: WebSocketBroadcast<TMessage>,
+  ) => void;
   subscriberCount: (sessionId: string) => number;
 };
 
@@ -45,8 +48,14 @@ type UpgradeBinding = {
   room: string;
 };
 
-export function createBroadcastPayload(event: WebSocketBroadcast): string {
+export function createBroadcastPayload<TMessage extends object>(event: WebSocketBroadcast<TMessage>): string {
   return JSON.stringify(event);
+}
+
+function errorStatus(error: unknown) {
+  if (!error || typeof error !== 'object') return 0;
+  const candidate = error as { status?: unknown; statusCode?: unknown };
+  return Number(candidate.status || candidate.statusCode || 0);
 }
 
 function rejectUpgrade(socket: Duplex, status: 401 | 403 | 404) {
@@ -152,8 +161,8 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
         server.handleUpgrade(request, socket, head, (websocket) => {
           bindAuthenticatedSocket(websocket, binding.room);
         });
-      } catch (error: any) {
-        const status = Number(error?.status || error?.statusCode || 0);
+      } catch (error) {
+        const status = errorStatus(error);
         rejectUpgrade(socket, status === 401 ? 401 : status === 404 ? 404 : 403);
       }
     },

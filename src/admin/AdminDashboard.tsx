@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { apiFetch } from '../api';
+import { ApiError, apiFetch } from '../api';
 import ChatMessageText from '../ChatMessageText';
-import { copyText } from '../compat';
+import { copyText, getErrorMessage } from '../compat';
 import InviteLinkPanel from './InviteLinkPanel';
 import AdminLogin from './AdminLogin';
 import AdminMessageList from './AdminMessageList';
@@ -9,39 +9,47 @@ import AdminSessionList from './AdminSessionList';
 import { getActiveAdminSessionId, messageBelongsToActiveSession, setActiveAdminSessionId } from './activeSessionGuard';
 import { InlineNotice } from '../ui/Notice';
 import { LoadingState, StatusBlock } from '../ui/StatusBlock';
+import {
+  fallbackDelay,
+  isMessageCreatedEvent,
+  isSessionEnded,
+  lastServerMessageTime,
+  localMessageId,
+  markMessageFailed,
+  mergeMessage,
+  mergeMessages,
+  messageSessionId,
+  newClientMessageId,
+  recordChatMetric,
+  type AdminIdentity,
+  type ChatMessage,
+  type ChatRealtimeEvent,
+  type ChatSession,
+  type ClearHistoryPlan,
+  type OperatorSummary,
+  type SessionGroup,
+  type StaffMessage,
+} from '../chatModel';
 import '../styles.css';
 
-type Message = any;
-type Session = any;
-type Admin = any;
-type SessionGroup = 'active' | 'archived' | 'trash';
+type Message = ChatMessage;
+type Session = ChatSession;
+type Admin = AdminIdentity;
+type AuthMeResponse = { admin: Admin | null; disabled?: boolean };
+type SessionListResponse = { sessions?: Session[] };
+type MessageListResponse = { messages?: Message[] };
+type MessageMutationResponse = { message?: Message; session?: Session };
+type UploadResponse = { path: string };
+type SessionMutationResponse = { session: Session };
+type ClearHistoryDryRunResponse = { counts?: Partial<ClearHistoryPlan['counts']> };
+type ClearHistoryResponse = { failed?: { r2Objects?: number } };
+type OperatorListResponse = { operators?: OperatorSummary[] };
+type StaffMessageListResponse = { messages?: StaffMessage[] };
+
+const isUnauthorized = (error: unknown) => error instanceof ApiError && error.status === 401;
 
 const formatTime = (ts?: string) => (ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
-const newClientMessageId = () => `cm_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
-const localMessageId = (clientMessageId: string) => `local-${clientMessageId}`;
-const isMessageCreatedEvent = (type?: string) => type === 'message:new' || type === 'message_created';
-const mergeMessage = (messages: Message[], message?: Message) => {
-  if (!message) return messages;
-  const idx = messages.findIndex(m =>
-    (message.id && m.id === message.id) ||
-    (message.client_message_id && m.client_message_id === message.client_message_id)
-  );
-  if (idx < 0) return [...messages, message];
-  const next = messages.slice();
-  next[idx] = message;
-  return next;
-};
-const mergeMessages = (messages: Message[], incoming: Message[] = []) => incoming.reduce(mergeMessage, messages);
-const markMessageFailed = (messages: Message[], id: string) => messages.map(m => m.id === id ? { ...m, status: 'failed' } : m);
-const lastServerMessageTime = (messages: Message[]) => messages.reduce((latest, msg) => {
-  if (!msg.created_at || String(msg.id || '').startsWith('local-') || msg.status === 'sending' || msg.status === 'failed') return latest;
-  return !latest || msg.created_at > latest ? msg.created_at : latest;
-}, '');
-const fallbackDelay = (misses: number) => misses < 3 ? 2000 : misses < 12 ? 5000 : 10000;
-const chatMetric = (name: string, started: number, extra?: Record<string, number | string>) => {
-  try { console.debug('[chat_metric]', name, Math.round(performance.now() - started), extra || {}); } catch {}
-};
-const sessionEnded = (session?: Session | null) => Boolean(!session || session.deleted_at || session.purged_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
+const sessionEnded = isSessionEnded;
 const isArchivedSession = (session?: Session | null) => Boolean(session?.archived_at || session?.status === 'ARCHIVED' || session?.status === 'CLOSED');
 const sessionGroupOf = (session?: Session | null): SessionGroup | null => {
   if (!session) return null;
@@ -64,8 +72,7 @@ const applyReadReceipt = (messages: Message[], messageIds: string[] = [], readAt
     ? { ...message, is_read: 1, status: message.status === 'sent' ? 'read' : message.status, read_at: message.read_at || readAt || new Date().toISOString() }
     : message);
 };
-const messageSessionId = (message?: Message | null) => String(message?.session_id || message?.sessionId || '');
-const eventSessionId = (event: any, fallbackSessionId: string) => String(event?.session?.id || event?.message?.session_id || event?.message?.sessionId || event?.sessionId || fallbackSessionId || '');
+const eventSessionId = (event: ChatRealtimeEvent, fallbackSessionId: string) => String(event.session?.id || messageSessionId(event.message) || event.sessionId || fallbackSessionId || '');
 
 /* ========== ADMIN DASHBOARD ========== */
 export default function AdminDashboard() {
@@ -84,13 +91,13 @@ export default function AdminDashboard() {
   const [recallLoading, setRecallLoading] = useState<string | null>(null);
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth <= 820);
   const [mobileView, setMobileView] = useState<'dir' | 'chat' | 'panel'>('dir');
-  const [operators, setOperators] = useState<any[]>([]);
+  const [operators, setOperators] = useState<OperatorSummary[]>([]);
   const [createOpLoading, setCreateOpLoading] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
   const [disableOpLoading, setDisableOpLoading] = useState<string | null>(null);
   const [staffText, setStaffText] = useState('');
   const [staffSending, setStaffSending] = useState(false);
-  const [staffMsgs, setStaffMsgs] = useState<any[]>([]);
+  const [staffMsgs, setStaffMsgs] = useState<StaffMessage[]>([]);
   const [contextMenu, setContextMenu] = useState<{ msg: Message; x: number; y: number } | null>(null);
   const [toast, setToast] = useState('');
   const [sessionGroup, setSessionGroup] = useState<SessionGroup>('active');
@@ -99,7 +106,7 @@ export default function AdminDashboard() {
   const [logoutLoading, setLogoutLoading] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null);
-  const [clearHistoryPlan, setClearHistoryPlan] = useState<any>(null);
+  const [clearHistoryPlan, setClearHistoryPlan] = useState<ClearHistoryPlan | null>(null);
   const [clearHistoryLoading, setClearHistoryLoading] = useState(false);
   const [convOnline, setConvOnline] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
@@ -121,7 +128,6 @@ export default function AdminDashboard() {
   const currentCustomerName = customerName(cur);
   const currentCustomerAvatar = customerAvatar(cur);
   const sendingRef = useRef(false);
-  const uploadRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedMsgsRef = useRef<Message[]>([]);
   const curRef = useRef<Session | null>(null);
@@ -131,8 +137,8 @@ export default function AdminDashboard() {
   const messageSyncRequestIdRef = useRef(0);
   const messageFallbackMissesRef = useRef(0);
   const wsRefs = useRef<{ admin?: WebSocket; conv?: WebSocket; staff?: WebSocket }>({});
-  const reconnectTimers = useRef<{ admin?: any; conv?: any; staff?: any }>({});
-  const messageFallbackTimer = useRef<any>(null);
+  const reconnectTimers = useRef<Partial<Record<'admin' | 'conv' | 'staff', ReturnType<typeof setTimeout>>>>({});
+  const messageFallbackTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const clearActiveSessionState = useCallback(() => {
     activeSessionIdRef.current = '';
@@ -190,12 +196,12 @@ export default function AdminDashboard() {
   useEffect(() => { setRemarkDraft(String(cur?.customer_remark_name || '').slice(0, 40)); }, [cur?.id, cur?.customer_remark_name]);
 
   const fetchAdmin = useCallback(async () => {
-    try { const res: any = await apiFetch('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (e: any) { if (e?.status === 401) resetAdminState(); else showToast(e?.message || '获取管理员信息失败'); } setLoading(false);
+    try { const res = await apiFetch<AuthMeResponse>('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (error) { if (isUnauthorized(error)) resetAdminState(); else showToast(getErrorMessage(error, '获取管理员信息失败')); } setLoading(false);
   }, [resetAdminState, showToast]);
   useEffect(() => { fetchAdmin(); }, [fetchAdmin]);
 
   const fetchSessions = async () => {
-    try { const res: any = await apiFetch('/api/sessions?includeDeleted=1'); setSessions(res.sessions || []); } catch (e: any) { if (e?.status === 401) handleAuthExpired(); }
+    try { const res = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1'); setSessions(res.sessions || []); } catch (error) { if (isUnauthorized(error)) handleAuthExpired(); }
   };
   useEffect(() => { if (admin) fetchSessions(); }, [admin]);
 
@@ -203,13 +209,13 @@ export default function AdminDashboard() {
     const requestId = ++messageLoadRequestIdRef.current;
     setLoadingMsgs(sid);
     try {
-      const res: any = await apiFetch(`/api/sessions/${sid}/messages`);
+      const res = await apiFetch<MessageListResponse>(`/api/sessions/${sid}/messages`);
       if (!isLatestMessageLoad(sid, requestId)) return;
       const messages = filterMessagesForSession(res.messages || [], sid);
       setSelectedMsgs(mergeMessages([], messages));
       setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s));
-    } catch (e: any) {
-      if (e?.status === 401) handleAuthExpired();
+    } catch (error) {
+      if (isUnauthorized(error)) handleAuthExpired();
     } finally {
       if (isLatestMessageLoad(sid, requestId)) setLoadingMsgs(null);
     }
@@ -221,11 +227,11 @@ export default function AdminDashboard() {
     const started = performance.now();
     const after = lastServerMessageTime(selectedMsgsRef.current.filter(message => messageBelongsToActiveSession(message, sid)));
     const url = `/api/sessions/${encodeURIComponent(sid)}/messages${after ? `?after=${encodeURIComponent(after)}` : ''}`;
-    const res: any = await apiFetch(url, { retryGet: false });
+    const res = await apiFetch<MessageListResponse>(url, { retryGet: false });
     if (!isLatestMessageSync(sid, requestId)) return 0;
     const messages = filterMessagesForSession(res?.messages || [], sid);
     const count = messages.length;
-    chatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
+    recordChatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
     if (count) setSelectedMsgs(prev => mergeMessages(filterMessagesForSession(prev, sid), messages));
     setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s));
     return count;
@@ -264,7 +270,7 @@ export default function AdminDashboard() {
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/conversations/${sid}`);
     ws.onopen = () => {
       if (!isActiveAdminSession(sid)) { ws.close(); return; }
-      chatMetric('ws_connect_ms', connectStarted);
+      recordChatMetric('ws_connect_ms', connectStarted);
       clearTimeout(messageFallbackTimer.current);
       messageFallbackMissesRef.current = 0;
       setConvOnline(true);
@@ -276,16 +282,16 @@ export default function AdminDashboard() {
         if (sidFromEvent && sidFromEvent !== sid) { if (d.session) setSessions(prev => prev.map(s => s.id === d.session.id ? { ...s, ...d.session } : s)); return; }
         if (!isActiveAdminSession(sid)) { if (d.session) setSessions(prev => prev.map(s => s.id === d.session.id ? { ...s, ...d.session } : s)); return; }
         if ((isMessageCreatedEvent(d.type) || d.type === 'message:updated') && d.message && !messageBelongsToActiveSession(d.message, sid)) return;
-        if (isMessageCreatedEvent(d.type)) { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); if (d.session) { setCur((c: any) => c?.id === d.session.id ? d.session : c); } }
+        if (isMessageCreatedEvent(d.type)) { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); if (d.session) { setCur(c => c?.id === d.session.id ? d.session : c); } }
         else if (d.type === 'message:updated') { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); }
         else if (d.type === 'messages:read') { setSelectedMsgs(prev => applyReadReceipt(filterMessagesForSession(prev, sid), d.messageIds, d.readAt)); }
         else if (d.type === 'message:deleted') { setSelectedMsgs(prev => filterMessagesForSession(prev, sid).map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
-        else if (d.type === 'session:updated') { setCur((c: any) => c?.id === d.session?.id ? { ...c, ...d.session } : c); }
+        else if (d.type === 'session:updated') { setCur(c => c?.id === d.session?.id ? { ...c, ...d.session } : c); }
       } catch {}
     };
     ws.onerror = () => ws.close();
     ws.onclose = (e) => {
-      try { console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 }); } catch {}
+      console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 });
       if (isActiveAdminSession(sid)) {
         setConvOnline(false);
         reconnectTimers.current.conv = setTimeout(() => wsConv(sid), 5000);
@@ -349,7 +355,7 @@ export default function AdminDashboard() {
     const currentQuote = quote;
     const clientMessageId = newClientMessageId();
     const tempId = localMessageId(clientMessageId);
-    const optimisticMessage = {
+    const optimisticMessage: Message = {
       id: tempId,
       session_id: sid,
       sender_type: 'OPERATOR',
@@ -371,13 +377,14 @@ export default function AdminDashboard() {
     focusMessageInput();
     try {
       const postStarted = performance.now();
-      const res: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: sid, clientMessageId, content, senderType: 'OPERATOR', quoteMessageId: currentQuote?.id || null }) });
-      chatMetric('api_post_total_ms', postStarted);
+      const res = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: sid, clientMessageId, content, senderType: 'OPERATOR', quoteMessageId: currentQuote?.id || null }) });
+      recordChatMetric('api_post_total_ms', postStarted);
       if (!isActiveAdminSession(sid)) return;
       if (res?.message && messageBelongsToActiveSession(res.message, sid)) setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), res.message));
-      if (res?.session) setCur((c: any) => c?.id === res.session.id ? res.session : c);
+      const updatedSession = res.session;
+      if (updatedSession) setCur(c => c?.id === updatedSession.id ? updatedSession : c);
       syncSelectedMsgs(sid).catch(() => {});
-    } catch (e: any) { if (isActiveAdminSession(sid)) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
+    } catch (error) { if (isActiveAdminSession(sid)) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); }
   };
 
   const upload = async (file: File) => {
@@ -388,29 +395,30 @@ export default function AdminDashboard() {
     try {
       const clientMessageId = newClientMessageId();
       const fd = new FormData(); fd.append('file', file); fd.append('sessionId', sid);
-      const res: any = await apiFetch(`/api/upload?sessionId=${encodeURIComponent(sid)}`, { method: 'POST', body: fd });
+      const res = await apiFetch<UploadResponse>(`/api/upload?sessionId=${encodeURIComponent(sid)}`, { method: 'POST', body: fd });
       if (!isActiveAdminSession(sid)) return;
       tempId = localMessageId(clientMessageId);
       setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), { id: tempId, session_id: sid, sender_type: 'OPERATOR', sender_id: admin?.id || '', content: '', message_type: 'image', image_path: res.path, status: 'sending', created_at: new Date().toISOString(), read_at: null, is_read: 0, quote_message_id: null, client_message_id: clientMessageId }));
-      const msgRes: any = await apiFetch('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: sid, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'OPERATOR' }) });
+      const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: sid, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'OPERATOR' }) });
       if (!isActiveAdminSession(sid)) return;
       if (msgRes?.message && messageBelongsToActiveSession(msgRes.message, sid)) setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), msgRes.message));
-      if (msgRes?.session) setCur((c: any) => c?.id === msgRes.session.id ? msgRes.session : c);
-    } catch (e: any) { if (tempId && isActiveAdminSession(sid)) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(e?.message || '发送失败'); }
+      const updatedSession = msgRes.session;
+      if (updatedSession) setCur(c => c?.id === updatedSession.id ? updatedSession : c);
+    } catch (error) { if (tempId && isActiveAdminSession(sid)) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); }
     sendingRef.current = false; setSending('idle');
   };
 
   const doDelete = async (msg: Message) => {
     if (deleteLoading) return; setDeleteLoading(msg.id);
     try { await apiFetch(`/api/messages/${msg.id}/delete`, { method: 'POST' }); }
-    catch (e: any) { showToast(e?.message || '删除失败'); }
+    catch (error) { showToast(getErrorMessage(error, '删除失败')); }
     setDeleteLoading(null);
   };
 
   const doRecall = async (msg: Message) => {
     if (recallLoading) return; setRecallLoading(msg.id);
     try { await apiFetch(`/api/messages/${msg.id}/recall`, { method: 'POST' }); }
-    catch (e: any) { showToast(e?.message || '撤回失败'); }
+    catch (error) { showToast(getErrorMessage(error, '撤回失败')); }
     setRecallLoading(null);
   };
 
@@ -433,7 +441,7 @@ export default function AdminDashboard() {
       items.push({
         label: '复制文本',
         action: () => {
-          copyText(String(msg.content || '')).then(() => showToast('已复制')).catch((e) => showToast(e?.message || '复制失败'));
+          copyText(String(msg.content || '')).then(() => showToast('已复制')).catch((error) => showToast(getErrorMessage(error, '复制失败')));
           setContextMenu(null);
         },
       });
@@ -468,10 +476,6 @@ export default function AdminDashboard() {
     try { await apiFetch(`/api/sessions/${s.id}/assign`, { method: 'POST' }); } catch {}
   };
 
-  const handleSessionAction = async (s: Session, action: string) => {
-    try { await apiFetch(`/api/sessions/${s.id}/${action}`, { method: 'POST' }); } catch {}
-  };
-
   const closeSession = async (s: Session) => {
     if (closingSessionId || sessionEnded(s)) return;
     if (!window.confirm('确认结束该会话？结束后访客不能继续发送消息或上传图片。')) return;
@@ -483,8 +487,8 @@ export default function AdminDashboard() {
       setCur((c: Session | null) => c?.id === s.id ? { ...c, status: 'ARCHIVED', archived_at: new Date().toISOString(), assigned_operator_id: null } : c);
       setSessionGroup('archived');
       showToast('会话已结束');
-    } catch (e: any) {
-      showToast(e?.message || '结束会话失败，请稍后重试');
+    } catch (error) {
+      showToast(getErrorMessage(error, '结束会话失败，请稍后重试'));
     } finally {
       setClosingSessionId(null);
     }
@@ -496,49 +500,17 @@ export default function AdminDashboard() {
     setCur((c: Session | null) => c?.id === session.id ? { ...c, ...session } : c);
   }, []);
 
-  const archiveSession = async (s: Session) => {
-    if (!s || sessionActionLoading || s.deleted_at || sessionEnded(s)) return;
-    setSessionActionLoading(`archive:${s.id}`);
-    try {
-      const res: any = await apiFetch(`/api/sessions/${s.id}/archive`, { method: 'POST' });
-      applySessionUpdate(res.session);
-      setSessionGroup('archived');
-      await fetchSessions();
-      showToast('会话已归档');
-    } catch (e: any) {
-      showToast(e?.message || '归档失败');
-    } finally {
-      setSessionActionLoading(null);
-    }
-  };
-
-  const unarchiveSession = async (s: Session) => {
-    if (!s || sessionActionLoading || !isArchivedSession(s) || s.deleted_at) return;
-    setSessionActionLoading(`unarchive:${s.id}`);
-    try {
-      const res: any = await apiFetch(`/api/sessions/${s.id}/unarchive`, { method: 'POST' });
-      applySessionUpdate(res.session);
-      setSessionGroup('archived');
-      await fetchSessions();
-      showToast('会话已还原');
-    } catch (e: any) {
-      showToast(e?.message || '还原失败');
-    } finally {
-      setSessionActionLoading(null);
-    }
-  };
-
   const moveSessionToTrash = async (s: Session) => {
     if (!s || sessionActionLoading || s.deleted_at || !isArchivedSession(s)) return;
     setSessionActionLoading(`delete:${s.id}`);
     try {
-      const res: any = await apiFetch(`/api/sessions/${s.id}/delete`, { method: 'POST' });
+      const res = await apiFetch<SessionMutationResponse>(`/api/sessions/${s.id}/delete`, { method: 'POST' });
       applySessionUpdate(res.session);
       setSessionGroup('trash');
       await fetchSessions();
       showToast('会话已移入回收站');
-    } catch (e: any) {
-      showToast(e?.message || '移入回收站失败');
+    } catch (error) {
+      showToast(getErrorMessage(error, '移入回收站失败'));
     } finally {
       setSessionActionLoading(null);
     }
@@ -548,13 +520,13 @@ export default function AdminDashboard() {
     if (!s || sessionActionLoading || !s.deleted_at) return;
     setSessionActionLoading(`restore:${s.id}`);
     try {
-      const res: any = await apiFetch(`/api/sessions/${s.id}/restore`, { method: 'POST' });
+      const res = await apiFetch<SessionMutationResponse>(`/api/sessions/${s.id}/restore`, { method: 'POST' });
       applySessionUpdate(res.session);
       setSessionGroup(sessionGroupOf(res.session) || 'archived');
       await fetchSessions();
       showToast('会话已恢复');
-    } catch (e: any) {
-      showToast(e?.message || '恢复失败');
+    } catch (error) {
+      showToast(getErrorMessage(error, '恢复失败'));
     } finally {
       setSessionActionLoading(null);
     }
@@ -566,10 +538,17 @@ export default function AdminDashboard() {
     if (!canClearHistorySession(session) || clearHistoryLoading) return;
     setClearHistoryLoading(true);
     try {
-      const res: any = await apiFetch(`/api/sessions/${session.id}/clear-history/dry-run`, { method: 'POST' });
-      setClearHistoryPlan({ session, counts: res.counts || { messages: 0, attachments: 0, r2Objects: 0 } });
-    } catch (e: any) {
-      showToast(e?.message || '清空历史预检查失败');
+      const res = await apiFetch<ClearHistoryDryRunResponse>(`/api/sessions/${session.id}/clear-history/dry-run`, { method: 'POST' });
+      setClearHistoryPlan({
+        session,
+        counts: {
+          messages: res.counts?.messages ?? 0,
+          attachments: res.counts?.attachments ?? 0,
+          r2Objects: res.counts?.r2Objects ?? 0,
+        },
+      });
+    } catch (error) {
+      showToast(getErrorMessage(error, '清空历史预检查失败'));
     } finally {
       setClearHistoryLoading(false);
     }
@@ -580,21 +559,21 @@ export default function AdminDashboard() {
     const sessionId = clearHistoryPlan.session.id;
     setClearHistoryLoading(true);
     try {
-      const res: any = await apiFetch(`/api/sessions/${sessionId}/clear-history`, { method: 'POST', body: JSON.stringify({ confirm: 'CLEAR_HISTORY' }) });
+      const res = await apiFetch<ClearHistoryResponse>(`/api/sessions/${sessionId}/clear-history`, { method: 'POST', body: JSON.stringify({ confirm: 'CLEAR_HISTORY' }) });
       await fetchSessions();
       if (cur?.id === sessionId) await fetchMsgs(sessionId);
       setClearHistoryPlan(null);
       const failed = Number(res?.failed?.r2Objects || 0);
       showToast(failed ? `历史已部分清空，${failed} 个附件清理失败，可重试` : '历史已清空');
-    } catch (e: any) {
-      showToast(e?.message || '清空历史失败');
+    } catch (error) {
+      showToast(getErrorMessage(error, '清空历史失败'));
     } finally {
       setClearHistoryLoading(false);
     }
   };
 
   const renderClearHistoryButton = (session?: Session | null) => {
-    if (!canClearHistorySession(session)) return null;
+    if (!session || !canClearHistorySession(session)) return null;
     return <button type="button" className="danger session-action-btn clear-history-btn" onClick={() => startClearHistory(session)} disabled={clearHistoryLoading}>清空历史</button>;
   };
 
@@ -624,14 +603,14 @@ export default function AdminDashboard() {
     const remarkName = remarkDraft.trim().slice(0, 40);
     setRemarkSaving(true);
     try {
-      const res: any = await apiFetch(`/api/sessions/${cur.id}/customer-remark`, { method: 'PATCH', body: JSON.stringify({ remarkName }) });
+      const res = await apiFetch<SessionMutationResponse>(`/api/sessions/${cur.id}/customer-remark`, { method: 'PATCH', body: JSON.stringify({ remarkName }) });
       const nextRemark = res?.session?.customer_remark_name || null;
       applyCustomerRemark(cur.id, nextRemark);
       setRemarkDraft(nextRemark || '');
       showToast(nextRemark ? '备注已保存' : '备注已清除');
       fetchSessions();
-    } catch (e: any) {
-      showToast(e?.message || '备注保存失败');
+    } catch (error) {
+      showToast(getErrorMessage(error, '备注保存失败'));
     } finally {
       setRemarkSaving(false);
     }
@@ -663,7 +642,7 @@ export default function AdminDashboard() {
     e.preventDefault(); setProfileLoading(true);
     const fd = new FormData(e.currentTarget);
     try { await apiFetch('/api/admins/profile', { method: 'PATCH', body: JSON.stringify({ username: fd.get('username'), password: fd.get('password') }) }); showToast('更新成功'); }
-    catch (e: any) { showToast(e?.message || '更新失败'); }
+    catch (error) { showToast(getErrorMessage(error, '更新失败')); }
     setProfileLoading(false);
   };
 
@@ -671,23 +650,23 @@ export default function AdminDashboard() {
     e.preventDefault(); setCreateOpLoading(true);
     const fd = new FormData(e.currentTarget);
     try { await apiFetch('/api/admins', { method: 'POST', body: JSON.stringify({ username: fd.get('username'), password: fd.get('password') }) }); showToast('创建成功'); e.currentTarget.reset(); fetchOps(); }
-    catch (e: any) { showToast(e?.message || '创建失败'); }
+    catch (error) { showToast(getErrorMessage(error, '创建失败')); }
     setCreateOpLoading(false);
   };
 
-  const disableOp = async (op: any) => {
+  const disableOp = async (op: OperatorSummary) => {
     setDisableOpLoading('禁用中...');
     try { await apiFetch('/api/admins/operators', { method: 'DELETE', body: JSON.stringify({ id: op.id }) }); await fetchOps(); }
-    catch (e: any) { showToast(e?.message || '操作失败'); }
+    catch (error) { showToast(getErrorMessage(error, '操作失败')); }
     setDisableOpLoading(null);
   };
 
   const fetchOps = async () => {
-    try { const res: any = await apiFetch('/api/admins/operators'); setOperators(res.operators || []); } catch {}
+    try { const res = await apiFetch<OperatorListResponse>('/api/admins/operators'); setOperators(res.operators || []); } catch {}
   };
 
   const fetchStaff = async () => {
-    try { const res: any = await apiFetch('/api/staff-chat'); setStaffMsgs(res.messages || []); } catch {}
+    try { const res = await apiFetch<StaffMessageListResponse>('/api/staff-chat'); setStaffMsgs(res.messages || []); } catch {}
   };
 
   useEffect(() => { if (isSuper) fetchOps(); }, [isSuper]);
@@ -696,7 +675,7 @@ export default function AdminDashboard() {
   const sendStaff = async (e: React.FormEvent) => {
     e.preventDefault(); if (staffSending || !staffText.trim()) return; setStaffSending(true);
     try { await apiFetch('/api/staff-chat', { method: 'POST', body: JSON.stringify({ content: staffText }) }); setStaffText(''); }
-    catch (e: any) { showToast(e?.message || '发送失败'); }
+    catch (error) { showToast(getErrorMessage(error, '发送失败')); }
     setStaffSending(false);
   };
 
@@ -706,8 +685,8 @@ export default function AdminDashboard() {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });
       resetAdminState();
-    } catch (e: any) {
-      showToast(e?.message || '退出登录失败，请刷新后重试');
+    } catch (error) {
+      showToast(getErrorMessage(error, '退出登录失败，请刷新后重试'));
     } finally {
       setLogoutLoading(false);
     }
@@ -886,7 +865,7 @@ export default function AdminDashboard() {
                 <section className="chat-panel" style={{ height: '100%' }}>
                   <div className="msgs">
                     {staffMsgs.length === 0 ? <StatusBlock>暂无内部消息，发送一条同步团队状态。</StatusBlock> : staffMsgs.map(m => (
-                      <div key={m.id} className={'msg ' + (m.sender_admin_id === admin.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
+                      <div key={m.id} className={'msg ' + (m.sender_admin_id === admin?.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
                     ))}
                   </div>
                   <form className="composer staff-composer" autoComplete="off" onSubmit={sendStaff}>
@@ -960,7 +939,7 @@ export default function AdminDashboard() {
                 <section className="chat-panel">
                   <div className="msgs">
                     {staffMsgs.length === 0 ? <StatusBlock>暂无内部消息，发送一条同步团队状态。</StatusBlock> : staffMsgs.map(m => (
-                      <div key={m.id} className={'msg ' + (m.sender_admin_id === admin.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
+                      <div key={m.id} className={'msg ' + (m.sender_admin_id === admin?.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
                     ))}
                   </div>
                   <form className="composer staff-composer" autoComplete="off" onSubmit={sendStaff}>
@@ -976,7 +955,7 @@ export default function AdminDashboard() {
 
       {contextMenu && (() => {
         const items = adminMenuItems(contextMenu.msg);
-        if (items.length === 0) { setContextMenu(null); return null; }
+        if (items.length === 0) return null;
         const mx = Math.min(contextMenu.x, window.innerWidth - 180);
         const my = Math.min(contextMenu.y, window.innerHeight - items.length * 44 - 10);
         return <div className="context-menu-overlay" onClick={() => setContextMenu(null)} onContextMenu={e => { e.preventDefault(); setContextMenu(null); }}

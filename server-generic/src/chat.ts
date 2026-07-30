@@ -3,11 +3,9 @@ import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError, optionalString } from './http.js';
 import { isSuperAdmin, type AdminIdentity } from './sessions.js';
 
-export type ChatSessionStatus = 'open' | 'closed' | string;
-
 export type ChatSessionSummary = {
   id: string;
-  status: ChatSessionStatus;
+  status: string;
   customerName: string | null;
   createdAt: string;
   updatedAt: string;

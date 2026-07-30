@@ -1,5 +1,5 @@
 export { ChatRoom } from './durable-objects/ChatRoom';
-import { runLifecycle, normalizeSessionBucket } from './sessionLifecycle';
+import { runLifecycle } from './sessionLifecycle';
 export interface Env {
   DB: D1Database;
   UPLOADS: R2Bucket;
@@ -14,6 +14,89 @@ export interface Env {
 
 type Admin = { id: string; username: string; role: 'SUPER_ADMIN' | 'OPERATOR'; is_disabled?: number; must_change_password?: number; last_seen_at?: string };
 type VisitorAccount = { id: string; username: string; display_name: string; last_login_at: string };
+type VisitorAccountAuthRecord = VisitorAccount & { password_hash: string };
+type AdminAuthRecord = Admin & { password_hash: string };
+type AdminSessionRecord = {
+  id: string;
+  admin_id: string;
+  created_at: string;
+  last_seen_at: string | null;
+  expires_at: string;
+};
+type VisitorSessionRecord = {
+  visitor_account_id?: string | null;
+  visitor_key?: string | null;
+};
+type UserRecord = {
+  id: string;
+  visitor_key: string;
+  account_id?: string | null;
+  display_name?: string | null;
+};
+type SessionRecord = {
+  id: string;
+  user_id: string;
+  status: string;
+  assigned_operator_id?: string | null;
+  archived_at?: string | null;
+  deleted_at?: string | null;
+  purged_at?: string | null;
+  [key: string]: unknown;
+};
+type MessageRecord = {
+  id: string;
+  session_id: string;
+  sender_type: 'VISITOR' | 'OPERATOR';
+  sender_id: string;
+  content: string;
+  message_type: 'text' | 'image';
+  image_path: string | null;
+  status: string;
+  created_at: string;
+  read_at: string | null;
+  is_read: number;
+  quote_message_id: string | null;
+  recalled_at: string | null;
+  image_purged_at: string | null;
+  client_message_id: string;
+  deleted_at?: string | null;
+};
+type GuestContext = {
+  visitorKey: string;
+  user: UserRecord;
+  session: SessionRecord;
+};
+type SessionListRecord = SessionRecord & {
+  visitor_key: string;
+  display_name: string | null;
+  customer_remark_name: string | null;
+  operator_name: string | null;
+  unread_count: number;
+};
+type ClearHistoryMessage = Pick<MessageRecord, 'id' | 'image_path'>;
+type ClearHistoryAttachment = {
+  id: string;
+  message_id: string | null;
+  object_key: string | null;
+};
+type InviteRecord = {
+  source_operator_id: string | null;
+  expires_at: string;
+  revoked_at: string | null;
+  consumed_at: string | null;
+  consumed_session_id: string | null;
+};
+type OperatorRecord = Admin & {
+  created_at: string;
+  disabled_at?: string | null;
+};
+type StaffMessageRecord = {
+  id: string;
+  sender_admin_id: string;
+  sender_name: string;
+  content: string;
+  created_at: string;
+};
 const ADMIN_COOKIE = 'support_admin';
 const VISITOR_COOKIE = 'visitor_account';
 const GUEST_COOKIE = 'guest_session';
@@ -43,7 +126,12 @@ const json = (body: unknown, init: ResponseInit = {}) => new Response(JSON.strin
 const getCookie = (req: Request, name: string) => (req.headers.get('cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith(`${name}=`))?.slice(name.length + 1);
 const setCookie = (name: string, value: string) => `${name}=${value}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure`;
 const clearCookie = (name: string) => `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure`;
-async function readJson(req: Request) { return await req.json().catch(() => ({} as any)); }
+async function readJson(req: Request): Promise<Record<string, unknown>> {
+  const body = await req.json().catch(() => null);
+  return body && typeof body === 'object' && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : {};
+}
 function b64(bytes: Uint8Array) { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); }
 function unb64(value: string) { const bin = atob(value); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
 async function hmac(secret: string, value: string) { const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); const sig = await crypto.subtle.sign('HMAC', key, enc.encode(value)); return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join(''); }
@@ -57,7 +145,7 @@ async function hashPassword(password: string) { const salt = crypto.getRandomVal
 async function verifyPassword(password: string, stored: string) { if (!stored?.startsWith('pbkdf2:')) return false; const [, iterRaw, saltRaw, hashRaw] = stored.split(':'); const salt = unb64(saltRaw); const expected = unb64(hashRaw); const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: Number(iterRaw), hash: 'SHA-256' }, key, expected.length * 8); const actual = new Uint8Array(bits); let diff = actual.length ^ expected.length; for (let i = 0; i < Math.min(actual.length, expected.length); i++) diff |= actual[i] ^ expected[i]; return diff === 0; }
 function constantTimeEqual(a: string, b: string) { const left = enc.encode(a); const right = enc.encode(b); let diff = left.length ^ right.length; const len = Math.max(left.length, right.length); for (let i = 0; i < len; i++) diff |= (left[i] || 0) ^ (right[i] || 0); return diff === 0; }
 async function ensureBootstrap(env: Env) { const row = await env.DB.prepare("SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1").first(); if (row) return; const username = env.SUPER_ADMIN_USERNAME?.trim(); const password = env.SUPER_ADMIN_PASSWORD; if (!username || !password) return; const t = now(); await env.DB.prepare('INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind('admin_primary', username, username, await hashPassword(password), 'SUPER_ADMIN', 0, 0, t, t, t).run(); }
-function isAdminSessionExpired(session: any, at = Date.now()) {
+function isAdminSessionExpired(session: AdminSessionRecord, at = Date.now()) {
   const createdAt = Date.parse(session?.created_at || '');
   const lastSeenAt = Date.parse(session?.last_seen_at || session?.created_at || '');
   const expiresAtMs = Date.parse(session?.expires_at || '');
@@ -69,10 +157,46 @@ function isAdminSessionExpired(session: any, at = Date.now()) {
     || at - lastSeenAt > ADMIN_SESSION_IDLE_TIMEOUT_MS;
 }
 async function revokeAdminSession(env: Env, sessionId: string) { await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=?').bind(now(), sessionId).run(); }
-async function currentAdmin(env: Env, req: Request, raw = false) { const sessionId = await verifyToken(env, getCookie(req, ADMIN_COOKIE)); if (!sessionId) return null; const session = await env.DB.prepare('SELECT id,admin_id,created_at,last_seen_at,expires_at FROM admin_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL').bind(sessionId, await tokenHash(env, sessionId)).first<any>(); if (!session) return null; const t = now(); if (isAdminSessionExpired(session)) { await revokeAdminSession(env, sessionId); return null; } const admin = await env.DB.prepare('SELECT id,username,role,must_change_password,is_disabled,last_seen_at FROM admins WHERE id=?').bind(session.admin_id).first<Admin>(); if (!admin || (!raw && admin.is_disabled)) return null; await env.DB.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL').bind(t, sessionId).run(); if (!raw) await env.DB.prepare('UPDATE admins SET last_seen_at=? WHERE id=? AND is_disabled=0').bind(t, admin.id).run(); return admin; }
+async function currentAdmin(env: Env, req: Request, raw = false) {
+  const sessionId = await verifyToken(env, getCookie(req, ADMIN_COOKIE));
+  if (!sessionId) return null;
+  const session = await env.DB.prepare(
+    'SELECT id,admin_id,created_at,last_seen_at,expires_at FROM admin_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL',
+  ).bind(sessionId, await tokenHash(env, sessionId)).first<AdminSessionRecord>();
+  if (!session) return null;
+  const t = now();
+  if (isAdminSessionExpired(session)) {
+    await revokeAdminSession(env, sessionId);
+    return null;
+  }
+  const admin = await env.DB.prepare(
+    'SELECT id,username,role,must_change_password,is_disabled,last_seen_at FROM admins WHERE id=?',
+  ).bind(session.admin_id).first<Admin>();
+  if (!admin || (!raw && admin.is_disabled)) return null;
+  await env.DB.prepare(
+    'UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL',
+  ).bind(t, sessionId).run();
+  if (!raw) {
+    await env.DB.prepare(
+      'UPDATE admins SET last_seen_at=? WHERE id=? AND is_disabled=0',
+    ).bind(t, admin.id).run();
+  }
+  return admin;
+}
 async function requireAdmin(env: Env, req: Request) { const admin = await currentAdmin(env, req); if (!admin) throw new Response('Unauthorized', { status: 401 }); return admin; }
 async function requireSuper(env: Env, req: Request) { const admin = await requireAdmin(env, req); if (admin.role !== 'SUPER_ADMIN') throw new Response('Forbidden', { status: 403 }); return admin; }
-async function currentVisitorAccount(env: Env, req: Request) { const sessionId = await verifyToken(env, getCookie(req, VISITOR_COOKIE)); if (!sessionId) return null; const session = await env.DB.prepare('SELECT visitor_account_id FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>?').bind(sessionId, await tokenHash(env, sessionId), now()).first<any>(); return session?.visitor_account_id ? await env.DB.prepare('SELECT id,username,display_name,last_login_at FROM visitor_accounts WHERE id=?').bind(session.visitor_account_id).first<VisitorAccount>() : null; }
+async function currentVisitorAccount(env: Env, req: Request) {
+  const sessionId = await verifyToken(env, getCookie(req, VISITOR_COOKIE));
+  if (!sessionId) return null;
+  const session = await env.DB.prepare(
+    'SELECT visitor_account_id FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>?',
+  ).bind(sessionId, await tokenHash(env, sessionId), now()).first<VisitorSessionRecord>();
+  return session?.visitor_account_id
+    ? await env.DB.prepare(
+      'SELECT id,username,display_name,last_login_at FROM visitor_accounts WHERE id=?',
+    ).bind(session.visitor_account_id).first<VisitorAccount>()
+    : null;
+}
 async function inviteTokenHash(env: Env, value: string) { return await hmac(env.SESSION_SECRET, 'invite:' + value); }
 function randomToken(bytes = 20) { const data = crypto.getRandomValues(new Uint8Array(bytes)); return [...data].map((b) => b.toString(16).padStart(2, '0')).join(''); }
 const invalidInvite = () => json({ error: ERR_INVALID_INVITE }, { status: 410 });
@@ -81,24 +205,98 @@ async function createGuestSessionRecord(env: Env, visitorKey: string) {
   await env.DB.prepare('INSERT INTO visitor_sessions(id,visitor_account_id,visitor_key,token_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)').bind(id, null, visitorKey, await tokenHash(env, id), now(), expiresAt()).run();
   return { id, token: await makeToken(env, id) };
 }
-async function createGuestSession(env: Env, visitorKey: string) { return (await createGuestSessionRecord(env, visitorKey)).token; }
-async function currentGuestSession(env: Env, req: Request) { const sessionId = await verifyToken(env, getCookie(req, GUEST_COOKIE)); if (!sessionId) return null; const row = await env.DB.prepare('SELECT visitor_key FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>? AND visitor_key IS NOT NULL').bind(sessionId, await tokenHash(env, sessionId), now()).first<any>(); if (!row?.visitor_key) return null; const user = await env.DB.prepare('SELECT * FROM users WHERE visitor_key=?').bind(row.visitor_key).first<any>(); if (!user) return null; const session = await latestSession(env, user.id); if (sessionEnded(session)) return null; return { visitorKey: row.visitor_key as string, user, session }; }
-function canAccessSession(admin: Admin | null, session: any) { return Boolean(admin && session && (admin.role === 'SUPER_ADMIN' || session.assigned_operator_id === admin.id)); }
-function sessionEnded(session: any) { return Boolean(!session || session.deleted_at || session.purged_at || session.status === 'CLOSED' || session.status === 'ARCHIVED'); }
-function canSendMessage(admin: Admin | null, session: any) { return canAccessSession(admin, session) && !sessionEnded(session); }
-function canUploadAttachment(admin: Admin | null, session: any) { return canSendMessage(admin, session); }
-function canManageSession(admin: Admin | null, session: any) { return canAccessSession(admin, session); }
-function canJoinConversationRoom(admin: Admin | null, session: any) { return canAccessSession(admin, session); }
-async function getSessionById(env: Env, sessionId: string) { return sessionId ? await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<any>() : null; }
-async function guestOwnsSession(env: Env, req: Request, session: any) { const guest = await currentGuestSession(env, req); return Boolean(guest && session && guest.session.id === session.id && guest.user.id === session.user_id); }
-function publicGuestSession(session: any) { if (!session) return session; const { archived_at, archived_by, deleted_at, deleted_by, ...safeSession } = session; return safeSession; }
-function sessionForAudience(session: any, admin: Admin | null) { return admin ? session : publicGuestSession(session); }
-async function guestPayload(env: Env, guest: any, init: ResponseInit = {}) { await markMessagesRead(env, guest.session.id, 'OPERATOR'); return json({ visitorId: guest.visitorKey, account: null, user: guest.user, session: publicGuestSession(guest.session), messages: await getMessages(env, guest.session.id) }, init); }
-async function createInviteLink(req: Request, env: Env) { const admin = await requireAdmin(env, req); const b: any = await readJson(req); let sourceOperatorId: string | null = admin.role === 'OPERATOR' ? admin.id : null; if (admin.role === 'SUPER_ADMIN' && b.sourceOperatorId) { const op = await env.DB.prepare("SELECT id FROM admins WHERE id=? AND role='OPERATOR' AND is_disabled=0").bind(String(b.sourceOperatorId)).first<any>(); if (!op) return json({ error: ERR_OPERATOR_NOT_FOUND }, { status: 400 }); sourceOperatorId = op.id; } const token = randomToken(); const t = now(); const exp = new Date(Date.now() + INVITE_TTL_MS).toISOString(); const id = rid('inv'); await env.DB.prepare('INSERT INTO invite_links(id,token_hash,source_operator_id,created_by_admin_id,expires_at,created_at) VALUES(?,?,?,?,?,?)').bind(id, await inviteTokenHash(env, token), sourceOperatorId, admin.id, exp, t).run(); return json({ invite: { id, token, url: `/g/${token}`, expires_at: exp, source_operator_id: sourceOperatorId } }); }
+async function currentGuestSession(env: Env, req: Request): Promise<GuestContext | null> {
+  const sessionId = await verifyToken(env, getCookie(req, GUEST_COOKIE));
+  if (!sessionId) return null;
+  const row = await env.DB.prepare(
+    'SELECT visitor_key FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>? AND visitor_key IS NOT NULL',
+  ).bind(sessionId, await tokenHash(env, sessionId), now()).first<VisitorSessionRecord>();
+  if (!row?.visitor_key) return null;
+  const user = await env.DB.prepare(
+    'SELECT * FROM users WHERE visitor_key=?',
+  ).bind(row.visitor_key).first<UserRecord>();
+  if (!user) return null;
+  const session = await latestSession(env, user.id);
+  if (!session || sessionEnded(session)) return null;
+  return { visitorKey: row.visitor_key, user, session };
+}
+function canAccessSession(admin: Admin | null, session: SessionRecord | null) {
+  return Boolean(admin && session && (admin.role === 'SUPER_ADMIN' || session.assigned_operator_id === admin.id));
+}
+function sessionEnded(session?: SessionRecord | null) {
+  return Boolean(!session || session.deleted_at || session.purged_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
+}
+function canSendMessage(admin: Admin | null, session: SessionRecord | null) {
+  return canAccessSession(admin, session) && !sessionEnded(session);
+}
+function canUploadAttachment(admin: Admin | null, session: SessionRecord | null) {
+  return canSendMessage(admin, session);
+}
+function canManageSession(admin: Admin | null, session: SessionRecord | null) {
+  return canAccessSession(admin, session);
+}
+function canJoinConversationRoom(admin: Admin | null, session: SessionRecord | null) {
+  return canAccessSession(admin, session);
+}
+async function getSessionById(env: Env, sessionId: string) {
+  return sessionId
+    ? await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<SessionRecord>()
+    : null;
+}
+async function guestOwnsSession(env: Env, req: Request, session: SessionRecord | null) {
+  const guest = await currentGuestSession(env, req);
+  return Boolean(guest && session && guest.session.id === session.id && guest.user.id === session.user_id);
+}
+function publicGuestSession(session: SessionRecord | null) {
+  if (!session) return session;
+  const { archived_at, archived_by, deleted_at, deleted_by, ...safeSession } = session;
+  return safeSession;
+}
+function sessionForAudience(session: SessionRecord | null, admin: Admin | null) {
+  return admin ? session : publicGuestSession(session);
+}
+async function guestPayload(env: Env, guest: GuestContext, init: ResponseInit = {}) {
+  await markMessagesRead(env, guest.session.id, 'OPERATOR');
+  return json({
+    visitorId: guest.visitorKey,
+    account: null,
+    user: guest.user,
+    session: publicGuestSession(guest.session),
+    messages: await getMessages(env, guest.session.id),
+  }, init);
+}
+async function createInviteLink(req: Request, env: Env) {
+  const admin = await requireAdmin(env, req);
+  const body = await readJson(req);
+  let sourceOperatorId: string | null = admin.role === 'OPERATOR' ? admin.id : null;
+  if (admin.role === 'SUPER_ADMIN' && body.sourceOperatorId) {
+    const operator = await env.DB.prepare(
+      "SELECT id FROM admins WHERE id=? AND role='OPERATOR' AND is_disabled=0",
+    ).bind(String(body.sourceOperatorId)).first<{ id: string }>();
+    if (!operator) return json({ error: ERR_OPERATOR_NOT_FOUND }, { status: 400 });
+    sourceOperatorId = operator.id;
+  }
+  const token = randomToken();
+  const t = now();
+  const expiresAt = new Date(Date.now() + INVITE_TTL_MS).toISOString();
+  const id = rid('inv');
+  await env.DB.prepare(
+    'INSERT INTO invite_links(id,token_hash,source_operator_id,created_by_admin_id,expires_at,created_at) VALUES(?,?,?,?,?,?)',
+  ).bind(id, await inviteTokenHash(env, token), sourceOperatorId, admin.id, expiresAt, t).run();
+  return json({
+    invite: {
+      id,
+      token,
+      url: `/g/${token}`,
+      expires_at: expiresAt,
+      source_operator_id: sourceOperatorId,
+    },
+  });
+}
 async function consumeInvite(req: Request, env: Env, token: string) {
   const guest = await currentGuestSession(env, req);
   const tokenHash = await inviteTokenHash(env, token);
-  const invite = await env.DB.prepare('SELECT * FROM invite_links WHERE token_hash=?').bind(tokenHash).first<any>();
+  const invite = await env.DB.prepare('SELECT * FROM invite_links WHERE token_hash=?').bind(tokenHash).first<InviteRecord>();
   const t = now();
   if (!invite || invite.revoked_at || invite.expires_at <= t) return invalidInvite();
   if (invite.consumed_at) {
@@ -106,7 +304,7 @@ async function consumeInvite(req: Request, env: Env, token: string) {
     return invalidInvite();
   }
   const sid = rid('sess');
-  const claimed: any = await env.DB.prepare('UPDATE invite_links SET consumed_at=? WHERE token_hash=? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>?').bind(t, tokenHash, t).run();
+  const claimed = await env.DB.prepare('UPDATE invite_links SET consumed_at=? WHERE token_hash=? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>?').bind(t, tokenHash, t).run();
   if (typeof claimed?.meta?.changes !== 'number' || claimed.meta.changes < 1) return invalidInvite();
 
   let guestSessionId: string | null = null;
@@ -116,7 +314,7 @@ async function consumeInvite(req: Request, env: Env, token: string) {
     const source = invite.source_operator_id || null;
     const status = source ? 'OPEN' : 'PENDING';
     await env.DB.prepare('INSERT INTO sessions(id,user_id,source_user_id,assigned_operator_id,last_operator_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(sid, user.id, source, source, source, status, t, t).run();
-    const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sid).first<any>();
+    const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sid).first<SessionRecord>();
     if (!session) throw new Error('Failed to create guest session');
     await env.DB.prepare('UPDATE invite_links SET consumed_session_id=? WHERE token_hash=? AND consumed_at=?').bind(sid, tokenHash, t).run();
     const guestSession = await createGuestSessionRecord(env, visitorKey);
@@ -149,7 +347,7 @@ async function rateLimit(env: Env, req: Request) {
   const resetAt = Math.floor(nowMs / 60000) * 60000 + 60000;
   await env.DB.prepare('INSERT INTO rate_limits(key,count,reset_at) VALUES(?,0,?) ON CONFLICT(key) DO NOTHING')
     .bind(key, resetAt).run();
-  const consumed: any = await env.DB.prepare(
+  const consumed = await env.DB.prepare(
     `UPDATE rate_limits
         SET count=CASE WHEN reset_at <= ? THEN 1 ELSE count+1 END,
             reset_at=CASE WHEN reset_at <= ? THEN ? ELSE reset_at END
@@ -160,15 +358,45 @@ async function rateLimit(env: Env, req: Request) {
   const retryAfter = Math.max(1, Math.ceil((Number(row?.reset_at || resetAt) - nowMs) / 1000));
   return json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
 }
-async function upsertVisitor(env: Env, visitorId?: string, account?: VisitorAccount | null) { const key = account ? `acct_${account.id}` : (visitorId?.startsWith('visitor_') ? visitorId : rid('visitor')); const displayName = account?.display_name || `璁垮 ${key.slice(-6)}`; const t = now(); let user = await env.DB.prepare('SELECT * FROM users WHERE visitor_key=?').bind(key).first<any>(); if (!user) { const uid = rid('user'); await env.DB.prepare('INSERT INTO users(id,visitor_key,account_id,display_name,last_seen_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(uid, key, account?.id || null, displayName, t, t, t).run(); user = await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(uid).first<any>(); } else await env.DB.prepare('UPDATE users SET account_id=COALESCE(?,account_id),display_name=?,last_seen_at=?,updated_at=? WHERE id=?').bind(account?.id || null, displayName, t, t, user.id).run(); return { key, user }; }
-async function latestSession(env: Env, userId: string) { return await env.DB.prepare("SELECT * FROM sessions WHERE user_id=? AND status!='ARCHIVED' AND deleted_at IS NULL AND purged_at IS NULL ORDER BY updated_at DESC LIMIT 1").bind(userId).first<any>(); }
-async function getOrCreateSession(env: Env, userId: string) { let session = await latestSession(env, userId); if (!session || session.status === 'CLOSED') { const t = now(); const sid = rid('sess'); await env.DB.prepare('INSERT INTO sessions(id,user_id,status,created_at,updated_at,last_operator_id) VALUES(?,?,?,?,?,NULL)').bind(sid, userId, 'PENDING', t, t).run(); session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sid).first<any>(); } return session; }
-async function getMessages(env: Env, sessionId: string, after?: string | null) { const q = after ? env.DB.prepare('SELECT * FROM messages WHERE session_id=? AND created_at>? ORDER BY created_at').bind(sessionId, after) : env.DB.prepare('SELECT * FROM messages WHERE session_id=? ORDER BY created_at').bind(sessionId); return (await q.all<any>()).results || []; }
+async function upsertVisitor(env: Env, visitorId?: string, account?: VisitorAccount | null) {
+  const key = account
+    ? `acct_${account.id}`
+    : (visitorId?.startsWith('visitor_') ? visitorId : rid('visitor'));
+  const displayName = account?.display_name || `璁垮 ${key.slice(-6)}`;
+  const t = now();
+  let user = await env.DB.prepare(
+    'SELECT * FROM users WHERE visitor_key=?',
+  ).bind(key).first<UserRecord>();
+  if (!user) {
+    const userId = rid('user');
+    await env.DB.prepare(
+      'INSERT INTO users(id,visitor_key,account_id,display_name,last_seen_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+    ).bind(userId, key, account?.id || null, displayName, t, t, t).run();
+    user = await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(userId).first<UserRecord>();
+  } else {
+    await env.DB.prepare(
+      'UPDATE users SET account_id=COALESCE(?,account_id),display_name=?,last_seen_at=?,updated_at=? WHERE id=?',
+    ).bind(account?.id || null, displayName, t, t, user.id).run();
+  }
+  if (!user) throw new Error('visitor upsert did not return a user');
+  return { key, user };
+}
+async function latestSession(env: Env, userId: string) {
+  return await env.DB.prepare(
+    "SELECT * FROM sessions WHERE user_id=? AND status!='ARCHIVED' AND deleted_at IS NULL AND purged_at IS NULL ORDER BY updated_at DESC LIMIT 1",
+  ).bind(userId).first<SessionRecord>();
+}
+async function getMessages(env: Env, sessionId: string, after?: string | null) {
+  const query = after
+    ? env.DB.prepare('SELECT * FROM messages WHERE session_id=? AND created_at>? ORDER BY created_at').bind(sessionId, after)
+    : env.DB.prepare('SELECT * FROM messages WHERE session_id=? ORDER BY created_at').bind(sessionId);
+  return (await query.all<MessageRecord>()).results || [];
+}
 async function markMessagesRead(env: Env, sessionId: string, senderType: 'VISITOR' | 'OPERATOR', requestedMessageIds: string[] = []) {
   const ids = Array.from(new Set(requestedMessageIds.map((id) => String(id || '').trim()).filter(Boolean))).slice(0, 200);
   const idClause = ids.length ? ` AND id IN (${ids.map(() => '?').join(',')})` : '';
-  const rows = (await env.DB.prepare(`SELECT id FROM messages WHERE session_id=? AND sender_type=? AND is_read=0 AND status!='recalled'${idClause}`).bind(sessionId, senderType, ...ids).all<any>()).results || [];
-  const readMessageIds = rows.map((row: any) => String(row.id || '')).filter(Boolean);
+  const rows = (await env.DB.prepare(`SELECT id FROM messages WHERE session_id=? AND sender_type=? AND is_read=0 AND status!='recalled'${idClause}`).bind(sessionId, senderType, ...ids).all<{ id: string }>()).results || [];
+  const readMessageIds = rows.map((row) => String(row.id || '')).filter(Boolean);
   if (!readMessageIds.length) return;
   const t = now();
   await env.DB.prepare(`UPDATE messages SET is_read=1,status=CASE WHEN status='sent' THEN 'read' ELSE status END,read_at=COALESCE(read_at,?) WHERE session_id=? AND sender_type=? AND is_read=0 AND status!='recalled'${idClause}`).bind(t, sessionId, senderType, ...ids).run();
@@ -179,7 +407,6 @@ async function markMessagesRead(env: Env, sessionId: string, senderType: 'VISITO
     console.error('Failed to broadcast read status update', e);
   }
 }
-async function visitorOwnsSession(env: Env, req: Request, session: any) { return guestOwnsSession(env, req, session); }
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 function parseAttachmentPath(path?: string | null) {
   if (typeof path !== 'string' || !path.startsWith(ATTACHMENT_PATH_PREFIX)) return { matched: false, key: '' };
@@ -243,57 +470,22 @@ async function broadcast(env: Env, room: string, payload: unknown) {
   await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room)).fetch('https://room/broadcast', { method: 'POST', body: JSON.stringify(payload) });
 }
 const notifyAdmins = (env: Env) => broadcast(env, 'admin-feed', { type: 'sessions:changed', ts: Date.now() });
-async function listSessions(env: Env, admin: Admin, includeDeleted: boolean) { const visible = "s.purged_at IS NULL AND (EXISTS (SELECT 1 FROM messages mx WHERE mx.session_id=s.id) OR s.status='CLOSED' OR s.status='ARCHIVED' OR s.archived_at IS NOT NULL OR s.deleted_at IS NOT NULL)"; const where = includeDeleted ? `WHERE ${visible}` : `WHERE s.deleted_at IS NULL AND ${visible}`; const scoped = admin.role === 'SUPER_ADMIN' ? '' : ' AND s.assigned_operator_id=?'; const sql = `SELECT s.*,u.visitor_key,u.display_name,cr.remark_name customer_remark_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN customer_remarks cr ON cr.user_id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ${where}${scoped} ORDER BY COALESCE(s.deleted_at,s.updated_at) DESC`; const stmt = env.DB.prepare(sql); return (admin.role === 'SUPER_ADMIN' ? (await stmt.all<any>()).results : (await stmt.bind(admin.id).all<any>()).results) || []; }
-type LifecycleDryRunStats = {
-  cutoff: string | null;
-  autoArchiveCount: number;
-  autoRecycleCount: number;
-  autoClearHistorySessionCount: number;
-  autoClearHistoryMessageCount: number;
-  autoClearHistoryAttachmentCount: number;
-};
-async function collectLifecycleDryRunStats(env: Env): Promise<LifecycleDryRunStats> {
-  const cutoff = await env.DB.prepare("SELECT datetime('now', '-24 hours') AS cutoff").first<any>();
-  const archive = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE status='CLOSED' AND closed_at <= datetime('now', '-24 hours') AND archived_at IS NULL AND deleted_at IS NULL").first<any>();
-  const recycle = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE archived_at IS NOT NULL AND deleted_at IS NULL AND archived_at <= datetime('now', '-24 hours')").first<any>();
-  const clearSessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL").first<any>();
-  const clearMessages = await env.DB.prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL)").first<any>();
-  const clearAttachments = await env.DB.prepare("SELECT COUNT(*) AS count FROM attachments WHERE conversation_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL) OR message_id IN (SELECT id FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL))").first<any>();
-  return {
-    cutoff: cutoff?.cutoff || null,
-    autoArchiveCount: Number(archive?.count || 0),
-    autoRecycleCount: Number(recycle?.count || 0),
-    autoClearHistorySessionCount: Number(clearSessions?.count || 0),
-    autoClearHistoryMessageCount: Number(clearMessages?.count || 0),
-    autoClearHistoryAttachmentCount: Number(clearAttachments?.count || 0),
-  };
+async function listSessions(env: Env, admin: Admin, includeDeleted: boolean) {
+  const visible = "s.purged_at IS NULL AND (EXISTS (SELECT 1 FROM messages mx WHERE mx.session_id=s.id) OR s.status='CLOSED' OR s.status='ARCHIVED' OR s.archived_at IS NOT NULL OR s.deleted_at IS NOT NULL)";
+  const where = includeDeleted
+    ? `WHERE ${visible}`
+    : `WHERE s.deleted_at IS NULL AND ${visible}`;
+  const scoped = admin.role === 'SUPER_ADMIN' ? '' : ' AND s.assigned_operator_id=?';
+  const sql = `SELECT s.*,u.visitor_key,u.display_name,cr.remark_name customer_remark_name,a.username operator_name,(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.sender_type='VISITOR' AND m.is_read=0) unread_count FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN customer_remarks cr ON cr.user_id=s.user_id LEFT JOIN admins a ON a.id=s.assigned_operator_id ${where}${scoped} ORDER BY COALESCE(s.deleted_at,s.updated_at) DESC`;
+  const statement = env.DB.prepare(sql);
+  return admin.role === 'SUPER_ADMIN'
+    ? (await statement.all<SessionListRecord>()).results || []
+    : (await statement.bind(admin.id).all<SessionListRecord>()).results || [];
 }
-async function autoArchiveClosedSessions(env: Env, limit = 20) {
-  const archiveLimit = Math.max(0, Math.min(20, Math.floor(limit)));
-  if (!archiveLimit) return { archiveLimit, archivedCount: 0 };
-  const candidates = (await env.DB.prepare("SELECT id FROM sessions WHERE status='CLOSED' AND closed_at <= datetime('now', '-24 hours') AND archived_at IS NULL AND deleted_at IS NULL ORDER BY closed_at ASC LIMIT ?").bind(archiveLimit).all<any>()).results || [];
-  const ids = candidates.map((row: any) => String(row.id || '')).filter(Boolean);
-  if (!ids.length) return { archiveLimit, archivedCount: 0 };
-  const t = now();
-  const result: any = await env.DB.prepare(`UPDATE sessions SET archived_at=?,archived_by=NULL,updated_at=? WHERE id IN (${ids.map(() => '?').join(',')}) AND status='CLOSED' AND closed_at <= datetime('now', '-24 hours') AND archived_at IS NULL AND deleted_at IS NULL`).bind(t, t, ...ids).run();
-  return { archiveLimit, archivedCount: Number(result?.meta?.changes || 0) };
+function canClearHistory(session: SessionRecord | null) {
+  return Boolean(session && !session.purged_at && (session.status === 'CLOSED' || session.status === 'ARCHIVED' || session.archived_at || session.deleted_at));
 }
-async function autoRecycleArchivedSessions(env: Env, limit = 20) {
-  const recycleLimit = Math.max(0, Math.min(20, Math.floor(limit)));
-  if (!recycleLimit) return { recycleLimit, recycledCount: 0 };
-  const candidates = (await env.DB.prepare("SELECT id FROM sessions WHERE archived_at IS NOT NULL AND deleted_at IS NULL AND archived_at <= datetime('now', '-24 hours') ORDER BY archived_at ASC LIMIT ?").bind(recycleLimit).all<any>()).results || [];
-  const ids = candidates.map((row: any) => String(row.id || '')).filter(Boolean);
-  if (!ids.length) return { recycleLimit, recycledCount: 0 };
-  const t = now();
-  const result: any = await env.DB.prepare(`UPDATE sessions SET deleted_at=?,deleted_by=NULL,updated_at=? WHERE id IN (${ids.map(() => '?').join(',')}) AND archived_at IS NOT NULL AND deleted_at IS NULL AND archived_at <= datetime('now', '-24 hours')`).bind(t, t, ...ids).run();
-  return { recycleLimit, recycledCount: Number(result?.meta?.changes || 0) };
-}
-type AutoClearHistoryResult = { clearHistoryLimit: number; clearedCount: number; attemptedCount: number; messageCount: number; attachmentCount: number; writesMayHaveExecuted: boolean };
-function autoClearHistoryFailure(result: AutoClearHistoryResult) {
-  return Object.assign(new Error('auto clear history failed'), { autoClearHistoryResult: result });
-}
-function canClearHistory(session: any) { return Boolean(session && !session.purged_at && (session.status === 'CLOSED' || session.status === 'ARCHIVED' || session.archived_at || session.deleted_at)); }
-function clearHistoryR2Keys(messages: any[], attachments: any[]) {
+function clearHistoryR2Keys(messages: ClearHistoryMessage[], attachments: ClearHistoryAttachment[]) {
   const keys = new Set<string>();
   for (const attachment of attachments) {
     const key = String(attachment.object_key || '');
@@ -305,11 +497,15 @@ function clearHistoryR2Keys(messages: any[], attachments: any[]) {
   }
   return keys;
 }
-const clearHistoryCounts = (messages: any[], attachments: any[], r2Keys = clearHistoryR2Keys(messages, attachments)) => ({ messages: messages.length, attachments: attachments.length, r2Objects: r2Keys.size });
-async function collectClearHistoryContext(env: Env, session: any) {
+const clearHistoryCounts = (
+  messages: ClearHistoryMessage[],
+  attachments: ClearHistoryAttachment[],
+  r2Keys = clearHistoryR2Keys(messages, attachments),
+) => ({ messages: messages.length, attachments: attachments.length, r2Objects: r2Keys.size });
+async function collectClearHistoryContext(env: Env, session: SessionRecord) {
   const sessionId = String(session.id || '');
-  const messages = (await env.DB.prepare('SELECT id,image_path FROM messages WHERE session_id=?').bind(sessionId).all<any>()).results || [];
-  const attachments = (await env.DB.prepare('SELECT id,message_id,object_key FROM attachments WHERE conversation_id=? OR message_id IN (SELECT id FROM messages WHERE session_id=?)').bind(sessionId, sessionId).all<any>()).results || [];
+  const messages = (await env.DB.prepare('SELECT id,image_path FROM messages WHERE session_id=?').bind(sessionId).all<ClearHistoryMessage>()).results || [];
+  const attachments = (await env.DB.prepare('SELECT id,message_id,object_key FROM attachments WHERE conversation_id=? OR message_id IN (SELECT id FROM messages WHERE session_id=?)').bind(sessionId, sessionId).all<ClearHistoryAttachment>()).results || [];
   const r2Keys = clearHistoryR2Keys(messages, attachments);
   return { session, messages, attachments, r2Keys, counts: clearHistoryCounts(messages, attachments, r2Keys) };
 }
@@ -355,36 +551,12 @@ async function clearSessionHistoryInternal(env: Env, ctx: Awaited<ReturnType<typ
     if (parsed.matched && !parsed.key) failedMessageIds.add(String(message.id));
     if (parsed.key && failedObjectKeys.has(parsed.key)) failedMessageIds.add(String(message.id));
   }
-  const deleteMessageIds = ctx.messages.map((m: any) => String(m.id)).filter((id: string) => id && !failedMessageIds.has(id));
+  const deleteMessageIds = ctx.messages.map((message) => String(message.id)).filter((id) => id && !failedMessageIds.has(id));
   await deleteByIds(env, 'attachments', successAttachmentIds);
   await deleteByIds(env, 'messages', deleteMessageIds);
   await env.DB.prepare('UPDATE sessions SET updated_at=? WHERE id=?').bind(now(), ctx.session.id).run();
   const allSucceeded = failedObjectKeys.size === 0 && failedMessageIds.size === 0 && deleteMessageIds.length === ctx.messages.length && successAttachmentIds.length === ctx.attachments.length;
   return { allSucceeded, deleted: { messages: deleteMessageIds.length, attachments: successAttachmentIds.length, r2Objects: successfulObjectKeys.size }, failed: { r2Objects: failedObjectKeys.size } };
-}
-async function autoClearDeletedSessionHistories(env: Env, limit = 10): Promise<AutoClearHistoryResult> {
-  const clearHistoryLimit = Math.max(0, Math.min(10, Math.floor(limit)));
-  const result = { clearHistoryLimit, clearedCount: 0, attemptedCount: 0, messageCount: 0, attachmentCount: 0, writesMayHaveExecuted: false };
-  if (!clearHistoryLimit) return result;
-  const candidates = (await env.DB.prepare("SELECT * FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL ORDER BY deleted_at ASC LIMIT ?").bind(clearHistoryLimit).all<any>()).results || [];
-  for (const session of candidates) {
-    try {
-      const ctx = await collectClearHistoryContext(env, session);
-      result.attemptedCount += 1;
-      result.writesMayHaveExecuted = true;
-      const clearResult = await clearSessionHistoryInternal(env, ctx);
-      result.messageCount += Number(clearResult.deleted.messages || 0);
-      result.attachmentCount += Number(clearResult.deleted.attachments || 0);
-      if (!clearResult.allSucceeded) throw autoClearHistoryFailure(result);
-      const t = now();
-      const markerResult: any = await env.DB.prepare("UPDATE sessions SET history_cleared_at=?,history_cleared_by='system',updated_at=? WHERE id=? AND deleted_at IS NOT NULL AND deleted_at <= datetime('now', '-24 hours') AND history_cleared_at IS NULL").bind(t, t, session.id).run();
-      if (Number(markerResult?.meta?.changes || 0) !== 1) throw autoClearHistoryFailure(result);
-      result.clearedCount += 1;
-    } catch {
-      throw autoClearHistoryFailure(result);
-    }
-  }
-  return result;
 }
 async function clearSessionHistory(req: Request, env: Env, sessionId: string, dryRun: boolean) {
   const admin = await requireSuper(env, req);
@@ -393,7 +565,7 @@ async function clearSessionHistory(req: Request, env: Env, sessionId: string, dr
   if (!canClearHistory(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 });
   const ctx = await collectClearHistoryContext(env, session);
   if (dryRun) return json({ ok: true, eligible: true, counts: ctx.counts });
-  const body: any = await readJson(req);
+  const body = await readJson(req);
   if (body.confirm !== 'CLEAR_HISTORY') return json({ error: 'Invalid confirmation' }, { status: 400 });
   const { allSucceeded, ...result } = await clearSessionHistoryInternal(env, ctx);
   if (allSucceeded) {
@@ -408,7 +580,7 @@ async function updateCustomerRemark(req: Request, env: Env, sessionId: string) {
   const session = await getSessionById(env, sessionId);
   if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
   if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 });
-  const b: any = await readJson(req);
+  const b = await readJson(req);
   const remarkName = String(b.remarkName || '').trim().slice(0, 40);
   const t = now();
   if (remarkName) {
@@ -442,7 +614,7 @@ function isSetupApiHostAllowed(req: Request) {
   return host === BACKEND_HOST || requestHost === BACKEND_HOST || isLocalDevHost(host) || isLocalDevHost(requestHost);
 }
 async function hasAnyAdmin(env: Env) {
-  const row = await env.DB.prepare('SELECT id FROM admins LIMIT 1').first<any>();
+  const row = await env.DB.prepare('SELECT id FROM admins LIMIT 1').first<{ id: string }>();
   return Boolean(row?.id);
 }
 function setupTokenRequired(env: Env, req: Request) {
@@ -466,7 +638,7 @@ async function initializeSetup(req: Request, env: Env) {
 
   const tokenRequired = setupTokenRequired(env, req);
   if (tokenRequired && !env.SETUP_TOKEN?.trim()) return setupError('missing_setup_token', 403);
-  const body: any = await readJson(req);
+  const body = await readJson(req);
   if (tokenRequired && !(await validSetupToken(env, body.setupToken))) return setupError('invalid_setup_token', 403);
 
   const username = String(body.username || '').trim();
@@ -489,7 +661,9 @@ async function initializeSetup(req: Request, env: Env) {
     return (await hasAnyAdmin(env)) ? setupError('already_configured', 409) : setupError('setup_failed', 500);
   }
 
-  const created = await env.DB.prepare("SELECT id FROM admins WHERE id=? AND role='SUPER_ADMIN'").bind(adminId).first<any>();
+  const created = await env.DB.prepare(
+    "SELECT id FROM admins WHERE id=? AND role='SUPER_ADMIN'",
+  ).bind(adminId).first<{ id: string }>();
   if (!created?.id) return setupError('setup_failed', 500);
   return json({ ok: true, initialized: true, next: 'login', message: 'setup_complete_rotate_token' });
 }
@@ -509,10 +683,297 @@ async function setupApi(req: Request, env: Env) {
     return setupError('setup_failed', 500);
   }
 }
-async function visitorLogin(req: Request, env: Env, username: string, password: string) { const account = await env.DB.prepare('SELECT * FROM visitor_accounts WHERE username=?').bind(username).first<any>(); if (!account || !(await verifyPassword(password, account.password_hash))) return json({ error: 'Invalid credentials' }, { status: 401 }); const t = now(); await env.DB.prepare('UPDATE visitor_accounts SET last_login_at=?,updated_at=? WHERE id=?').bind(t, t, account.id).run(); const safe = { id: account.id, username: account.username, display_name: account.display_name, last_login_at: t }; return json({ type: 'user', account: safe }, { headers: { 'Set-Cookie': setCookie(VISITOR_COOKIE, await createVisitorSession(env, account.id)) } }); }
-async function createMessage(req: Request, env: Env) { const b: any = await readJson(req); const admin = await currentAdmin(env, req); const senderType = ((b.senderType || (admin ? 'OPERATOR' : 'VISITOR')) === 'OPERATOR' ? 'OPERATOR' : 'VISITOR') as 'VISITOR' | 'OPERATOR'; let senderId = ''; let sessionId = String(b.sessionId || ''); let session: any = null; if (senderType === 'OPERATOR') { if (!admin) return json({ error: ERR_LOGIN_REQUIRED }, { status: 401 }); session = await getSessionById(env, sessionId); if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (!canSendMessage(admin, session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); senderId = admin.id; } else { const guest = await currentGuestSession(env, req); if (!guest) return invalidInvite(); sessionId = sessionId || guest.session.id; session = await getSessionById(env, sessionId); if (!session || guest.session.id !== session.id || guest.user.id !== session.user_id) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (sessionEnded(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); senderId = guest.visitorKey; } const rawClientId = typeof b.clientMessageId === 'string' ? b.clientMessageId.trim() : ''; const clientMessageId = rawClientId ? rawClientId.slice(0, 120) : `server:${rid('cmid')}`; const existing = await env.DB.prepare('SELECT * FROM messages WHERE session_id=? AND sender_type=? AND sender_id=? AND client_message_id=?').bind(sessionId, senderType, senderId, clientMessageId).first<any>(); if (existing) return json({ message: existing, session: sessionForAudience(session, admin), deduped: true }); const t = now(); const msg = { id: rid('msg'), session_id: sessionId, sender_type: senderType, sender_id: senderId, content: String(b.content || ''), message_type: b.messageType === 'image' ? 'image' : 'text', image_path: b.imagePath || null, status: 'sent', created_at: t, read_at: null, is_read: 0, quote_message_id: b.quoteMessageId || null, recalled_at: null, image_purged_at: null, client_message_id: clientMessageId }; try { await env.DB.prepare('INSERT INTO messages(id,session_id,sender_type,sender_id,content,message_type,image_path,status,created_at,read_at,is_read,quote_message_id,recalled_at,image_purged_at,client_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(msg.id, msg.session_id, msg.sender_type, msg.sender_id, msg.content, msg.message_type, msg.image_path, msg.status, msg.created_at, msg.read_at, msg.is_read, msg.quote_message_id, msg.recalled_at, msg.image_purged_at, msg.client_message_id).run(); } catch (e) { const row = await env.DB.prepare('SELECT * FROM messages WHERE session_id=? AND sender_type=? AND sender_id=? AND client_message_id=?').bind(sessionId, senderType, senderId, clientMessageId).first<any>(); if (row) return json({ message: row, session: sessionForAudience(session, admin), deduped: true }); throw e; } const attachmentKey = msg.message_type === 'image' ? attachmentKeyFromPath(msg.image_path) : ''; if (attachmentKey) await env.DB.prepare('UPDATE attachments SET message_id=? WHERE conversation_id=? AND object_key=? AND created_by_type=? AND created_by_id=? AND message_id IS NULL').bind(msg.id, sessionId, attachmentKey, senderType, senderId).run(); await env.DB.prepare('UPDATE sessions SET updated_at=? WHERE id=?').bind(t, sessionId).run(); session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<any>(); await broadcast(env, `conversation:${sessionId}`, { type: 'message:new', conversationId: sessionId, message: msg, session: publicGuestSession(session) }); await notifyAdmins(env); return json({ message: msg, session: sessionForAudience(session, admin) }); }
-async function sessionAction(req: Request, env: Env, sessionId: string, action: string) { const admin = await requireAdmin(env, req); const sessionBefore = await getSessionById(env, sessionId); if (!sessionBefore) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); if (!canManageSession(admin, sessionBefore)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); const t = now(); if (action === 'assign') { if (sessionEnded(sessionBefore)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare("UPDATE sessions SET assigned_operator_id=?,last_operator_id=?,status='OPEN',updated_at=? WHERE id=? AND deleted_at IS NULL").bind(admin.id, admin.id, t, sessionId).run(); } if (action === 'close') { if (sessionEnded(sessionBefore)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare("UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL").bind(t, t, t, admin.id, t, sessionId).run(); } if (action === 'archive') { if (sessionEnded(sessionBefore)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare("UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL").bind(t, t, t, admin.id, t, sessionId).run(); } if (action === 'unarchive') { if (sessionBefore.deleted_at || sessionBefore.purged_at) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare("UPDATE sessions SET archived_at=NULL,archived_by=NULL,status='CLOSED',updated_at=? WHERE id=? AND (archived_at IS NOT NULL OR status='ARCHIVED')").bind(t, sessionId).run(); } if (action === 'delete') { if (sessionBefore.deleted_at || sessionBefore.purged_at || (sessionBefore.status !== 'CLOSED' && sessionBefore.status !== 'ARCHIVED' && !sessionBefore.archived_at)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); await env.DB.prepare('UPDATE sessions SET deleted_at=?,deleted_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL').bind(t, admin.id, t, sessionId).run(); } if (action === 'restore') await env.DB.prepare('UPDATE sessions SET deleted_at=NULL,deleted_by=NULL,updated_at=? WHERE id=? AND purged_at IS NULL').bind(t, sessionId).run(); const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<any>(); await broadcast(env, `conversation:${sessionId}`, { type: 'session:updated', conversationId: sessionId, session: publicGuestSession(session) }); await notifyAdmins(env); return json({ ok: true, session }); }
-async function bindGuest(env: Env, visitorKey: string, account: VisitorAccount) { if (!visitorKey.startsWith('visitor_')) return; const accountKey = `acct_${account.id}`; const t = now(); const accountUser = await env.DB.prepare('SELECT id FROM users WHERE visitor_key=?').bind(accountKey).first<any>(); const guestUser = await env.DB.prepare('SELECT id FROM users WHERE visitor_key=?').bind(visitorKey).first<any>(); if (!guestUser) return; if (accountUser) { await env.DB.prepare('UPDATE sessions SET user_id=?,updated_at=? WHERE user_id=?').bind(accountUser.id, t, guestUser.id).run(); await env.DB.prepare('DELETE FROM users WHERE id=?').bind(guestUser.id).run(); } else await env.DB.prepare('UPDATE users SET visitor_key=?,account_id=?,display_name=?,updated_at=? WHERE id=?').bind(accountKey, account.id, account.display_name, t, guestUser.id).run(); }
+async function visitorLogin(env: Env, username: string, password: string) {
+  const account = await env.DB.prepare(
+    'SELECT * FROM visitor_accounts WHERE username=?',
+  ).bind(username).first<VisitorAccountAuthRecord>();
+  if (!account || !(await verifyPassword(password, account.password_hash))) {
+    return json({ error: 'Invalid credentials' }, { status: 401 });
+  }
+  const t = now();
+  await env.DB.prepare(
+    'UPDATE visitor_accounts SET last_login_at=?,updated_at=? WHERE id=?',
+  ).bind(t, t, account.id).run();
+  const safeAccount: VisitorAccount = {
+    id: account.id,
+    username: account.username,
+    display_name: account.display_name,
+    last_login_at: t,
+  };
+  return json({ type: 'user', account: safeAccount }, {
+    headers: {
+      'Set-Cookie': setCookie(VISITOR_COOKIE, await createVisitorSession(env, account.id)),
+    },
+  });
+}
+
+async function login(req: Request, env: Env, allowVisitorFallback: boolean) {
+  const body = await readJson(req);
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  const admin = await env.DB.prepare(
+    'SELECT * FROM admins WHERE username=?',
+  ).bind(username).first<AdminAuthRecord>();
+  if (!admin) {
+    return allowVisitorFallback
+      ? visitorLogin(env, username, password)
+      : json({ error: 'Invalid credentials' }, { status: 401 });
+  }
+  if (admin.is_disabled) return json({ error: 'Disabled', disabled: true }, { status: 403 });
+  if (!(await verifyPassword(password, admin.password_hash))) {
+    return json({ error: 'Invalid credentials' }, { status: 401 });
+  }
+  return json({
+    type: 'admin',
+    admin: {
+      id: admin.id,
+      username: admin.username,
+      role: admin.role,
+      must_change_password: admin.must_change_password,
+    },
+  }, {
+    headers: {
+      'Set-Cookie': setCookie(ADMIN_COOKIE, await createAdminSession(env, admin.id)),
+    },
+  });
+}
+async function createMessage(req: Request, env: Env) {
+  const body = await readJson(req);
+  const admin = await currentAdmin(env, req);
+  const senderType: 'VISITOR' | 'OPERATOR' =
+    (body.senderType || (admin ? 'OPERATOR' : 'VISITOR')) === 'OPERATOR'
+      ? 'OPERATOR'
+      : 'VISITOR';
+  let senderId = '';
+  let sessionId = String(body.sessionId || '');
+  let session: SessionRecord | null = null;
+
+  if (senderType === 'OPERATOR') {
+    if (!admin) return json({ error: ERR_LOGIN_REQUIRED }, { status: 401 });
+    session = await getSessionById(env, sessionId);
+    if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
+    if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 });
+    if (!canSendMessage(admin, session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 });
+    senderId = admin.id;
+  } else {
+    const guest = await currentGuestSession(env, req);
+    if (!guest) return invalidInvite();
+    sessionId = sessionId || guest.session.id;
+    session = await getSessionById(env, sessionId);
+    if (!session || guest.session.id !== session.id || guest.user.id !== session.user_id) {
+      return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 });
+    }
+    if (sessionEnded(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 });
+    senderId = guest.visitorKey;
+  }
+
+  const rawClientId = typeof body.clientMessageId === 'string' ? body.clientMessageId.trim() : '';
+  const clientMessageId = rawClientId ? rawClientId.slice(0, 120) : `server:${rid('cmid')}`;
+  const existing = await env.DB.prepare(
+    'SELECT * FROM messages WHERE session_id=? AND sender_type=? AND sender_id=? AND client_message_id=?',
+  ).bind(sessionId, senderType, senderId, clientMessageId).first<MessageRecord>();
+  if (existing) {
+    return json({
+      message: existing,
+      session: sessionForAudience(session, admin),
+      deduped: true,
+    });
+  }
+
+  const t = now();
+  const message: MessageRecord = {
+    id: rid('msg'),
+    session_id: sessionId,
+    sender_type: senderType,
+    sender_id: senderId,
+    content: String(body.content || ''),
+    message_type: body.messageType === 'image' ? 'image' : 'text',
+    image_path: typeof body.imagePath === 'string' ? body.imagePath : null,
+    status: 'sent',
+    created_at: t,
+    read_at: null,
+    is_read: 0,
+    quote_message_id: typeof body.quoteMessageId === 'string' ? body.quoteMessageId : null,
+    recalled_at: null,
+    image_purged_at: null,
+    client_message_id: clientMessageId,
+  };
+
+  try {
+    await env.DB.prepare(
+      'INSERT INTO messages(id,session_id,sender_type,sender_id,content,message_type,image_path,status,created_at,read_at,is_read,quote_message_id,recalled_at,image_purged_at,client_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    ).bind(
+      message.id,
+      message.session_id,
+      message.sender_type,
+      message.sender_id,
+      message.content,
+      message.message_type,
+      message.image_path,
+      message.status,
+      message.created_at,
+      message.read_at,
+      message.is_read,
+      message.quote_message_id,
+      message.recalled_at,
+      message.image_purged_at,
+      message.client_message_id,
+    ).run();
+  } catch (error) {
+    const duplicate = await env.DB.prepare(
+      'SELECT * FROM messages WHERE session_id=? AND sender_type=? AND sender_id=? AND client_message_id=?',
+    ).bind(sessionId, senderType, senderId, clientMessageId).first<MessageRecord>();
+    if (duplicate) {
+      return json({
+        message: duplicate,
+        session: sessionForAudience(session, admin),
+        deduped: true,
+      });
+    }
+    throw error;
+  }
+
+  const attachmentKey = message.message_type === 'image'
+    ? attachmentKeyFromPath(message.image_path)
+    : '';
+  if (attachmentKey) {
+    await env.DB.prepare(
+      'UPDATE attachments SET message_id=? WHERE conversation_id=? AND object_key=? AND created_by_type=? AND created_by_id=? AND message_id IS NULL',
+    ).bind(message.id, sessionId, attachmentKey, senderType, senderId).run();
+  }
+  await env.DB.prepare('UPDATE sessions SET updated_at=? WHERE id=?').bind(t, sessionId).run();
+  session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<SessionRecord>();
+  await broadcast(env, `conversation:${sessionId}`, {
+    type: 'message:new',
+    conversationId: sessionId,
+    message,
+    session: publicGuestSession(session),
+  });
+  await notifyAdmins(env);
+  return json({ message, session: sessionForAudience(session, admin) });
+}
+type SessionAction = 'assign' | 'close' | 'archive' | 'unarchive' | 'delete' | 'restore';
+
+async function sessionAction(req: Request, env: Env, sessionId: string, action: SessionAction) {
+  const admin = await requireAdmin(env, req);
+  const sessionBefore = await getSessionById(env, sessionId);
+  if (!sessionBefore) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
+  if (!canManageSession(admin, sessionBefore)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 });
+
+  const t = now();
+  if (action === 'assign') {
+    if (sessionEnded(sessionBefore)) return json({ error: ERR_SESSION_ENDED }, { status: 400 });
+    await env.DB.prepare(
+      "UPDATE sessions SET assigned_operator_id=?,last_operator_id=?,status='OPEN',updated_at=? WHERE id=? AND deleted_at IS NULL",
+    ).bind(admin.id, admin.id, t, sessionId).run();
+  }
+
+  if (action === 'close' || action === 'archive') {
+    if (sessionEnded(sessionBefore)) return json({ error: ERR_SESSION_ENDED }, { status: 400 });
+    await env.DB.prepare(
+      "UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL",
+    ).bind(t, t, admin.id, t, sessionId).run();
+  }
+
+  if (action === 'unarchive') {
+    if (sessionBefore.deleted_at || sessionBefore.purged_at) return json({ error: ERR_SESSION_ENDED }, { status: 400 });
+    await env.DB.prepare(
+      "UPDATE sessions SET archived_at=NULL,archived_by=NULL,status='CLOSED',updated_at=? WHERE id=? AND (archived_at IS NOT NULL OR status='ARCHIVED')",
+    ).bind(t, sessionId).run();
+  }
+
+  if (action === 'delete') {
+    const isArchived = sessionBefore.status === 'CLOSED'
+      || sessionBefore.status === 'ARCHIVED'
+      || Boolean(sessionBefore.archived_at);
+    if (sessionBefore.deleted_at || sessionBefore.purged_at || !isArchived) {
+      return json({ error: ERR_SESSION_ENDED }, { status: 400 });
+    }
+    await env.DB.prepare(
+      'UPDATE sessions SET deleted_at=?,deleted_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL',
+    ).bind(t, admin.id, t, sessionId).run();
+  }
+
+  if (action === 'restore') {
+    await env.DB.prepare(
+      'UPDATE sessions SET deleted_at=NULL,deleted_by=NULL,updated_at=? WHERE id=? AND purged_at IS NULL',
+    ).bind(t, sessionId).run();
+  }
+
+  const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(sessionId).first<SessionRecord>();
+  await broadcast(env, `conversation:${sessionId}`, {
+    type: 'session:updated',
+    conversationId: sessionId,
+    session: publicGuestSession(session),
+  });
+  await notifyAdmins(env);
+  return json({ ok: true, session });
+}
+async function bindGuest(env: Env, visitorKey: string, account: VisitorAccount) {
+  if (!visitorKey.startsWith('visitor_')) return;
+  const accountKey = `acct_${account.id}`;
+  const t = now();
+  const accountUser = await env.DB.prepare(
+    'SELECT id FROM users WHERE visitor_key=?',
+  ).bind(accountKey).first<{ id: string }>();
+  const guestUser = await env.DB.prepare(
+    'SELECT id FROM users WHERE visitor_key=?',
+  ).bind(visitorKey).first<{ id: string }>();
+  if (!guestUser) return;
+  if (accountUser) {
+    await env.DB.prepare(
+      'UPDATE sessions SET user_id=?,updated_at=? WHERE user_id=?',
+    ).bind(accountUser.id, t, guestUser.id).run();
+    await env.DB.prepare('DELETE FROM users WHERE id=?').bind(guestUser.id).run();
+  } else {
+    await env.DB.prepare(
+      'UPDATE users SET visitor_key=?,account_id=?,display_name=?,updated_at=? WHERE id=?',
+    ).bind(accountKey, account.id, account.display_name, t, guestUser.id).run();
+  }
+}
+
+async function registerVisitorAccount(req: Request, env: Env) {
+  const body = await readJson(req);
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  const displayName = String(body.displayName || username).trim();
+  if (username.length < 3) return json({ error: ERR_USERNAME_SHORT }, { status: 400 });
+  if (password.length < 8) return json({ error: ERR_PASSWORD_SHORT }, { status: 400 });
+
+  const t = now();
+  const accountId = rid('acct');
+  try {
+    await env.DB.prepare(
+      'INSERT INTO visitor_accounts(id,username,password_hash,display_name,last_login_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+    ).bind(accountId, username, await hashPassword(password), displayName, t, t, t).run();
+  } catch (error) {
+    const existing = await env.DB.prepare(
+      'SELECT id FROM visitor_accounts WHERE username=?',
+    ).bind(username).first<{ id: string }>();
+    if (existing) return json({ error: ERR_ACCOUNT_EXISTS }, { status: 409 });
+    throw error;
+  }
+
+  const account: VisitorAccount = {
+    id: accountId,
+    username,
+    display_name: displayName,
+    last_login_at: t,
+  };
+  const visitorId = typeof body.visitorId === 'string' ? body.visitorId : '';
+  if (body.claimGuest && visitorId) await bindGuest(env, visitorId, account);
+  if (body.discardGuest && visitorId) {
+    await env.DB.prepare('DELETE FROM users WHERE visitor_key=?').bind(visitorId).run();
+  }
+  return json({ type: 'user', account }, {
+    headers: {
+      'Set-Cookie': setCookie(
+        VISITOR_COOKIE,
+        await createVisitorSession(env, accountId, visitorId),
+      ),
+    },
+  });
+}
 async function upload(req: Request, env: Env) { const url = new URL(req.url); const sessionId = String(url.searchParams.get('sessionId') || ''); if (!sessionId) return json({ error: ERR_MISSING_SESSION }, { status: 400 }); const session = await getSessionById(env, sessionId); if (!session) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); const admin = await currentAdmin(env, req); let createdByType: 'VISITOR' | 'OPERATOR' = 'VISITOR'; let createdById = ''; if (admin) { if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (!canUploadAttachment(admin, session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); createdByType = 'OPERATOR'; createdById = admin.id; } else { const guest = await currentGuestSession(env, req); if (!guest || guest.session.id !== session.id || guest.user.id !== session.user_id) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (sessionEnded(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); createdById = guest.visitorKey; } const form = await req.formData(); const file = form.get('file'); if (!(file instanceof File)) return json({ error: ERR_PICK_IMAGE }, { status: 400 }); const allowed: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }; if (!allowed[file.type]) return json({ error: ERR_IMAGE_TYPE }, { status: 400 }); if (file.size > 5 * 1024 * 1024) return json({ error: ERR_IMAGE_SIZE }, { status: 413 }); const key = `${crypto.randomUUID()}.${allowed[file.type]}`; await env.UPLOADS.put(key, file.stream(), { httpMetadata: { contentType: file.type } }); const t = now(); await env.DB.prepare('INSERT INTO attachments(id,message_id,conversation_id,object_key,file_name,mime_type,byte_size,created_at,created_by_type,created_by_id,expires_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL)').bind(rid('att'), null, session.id, key, null, file.type, file.size, t, createdByType, createdById, expiresAt(7)).run(); return json({ path: `/api/attachments/${key}` }); }
 async function api(req: Request, env: Env) {
   const url = new URL(req.url);
@@ -523,9 +984,16 @@ async function api(req: Request, env: Env) {
   if (path === '/api/auth/me') { const admin = await currentAdmin(env, req, true); if (admin?.is_disabled) return json({ admin: null, disabled: true }, { status: 403, headers: { 'Set-Cookie': clearCookie(ADMIN_COOKIE) } }); return json({ admin }); }
   if (path === '/api/auth/logout' && req.method === 'POST') return logoutAdmin(req, env);
   if (path === '/api/account/logout' && req.method === 'POST') return json({ ok: true }, { headers: { 'Set-Cookie': clearCookie(VISITOR_COOKIE) } });
-  if ((path === '/api/auth/login' || path === '/api/login') && req.method === 'POST') { const b: any = await readJson(req); const name = String(b.username || '').trim(); const pass = String(b.password || ''); const admin = await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(name).first<any>(); if (admin) { if (admin.is_disabled) return json({ error: 'Disabled', disabled: true }, { status: 403 }); if (!(await verifyPassword(pass, admin.password_hash))) return json({ error: 'Invalid credentials' }, { status: 401 }); return json({ type: 'admin', admin: { id: admin.id, username: admin.username, role: admin.role, must_change_password: admin.must_change_password } }, { headers: { 'Set-Cookie': setCookie(ADMIN_COOKIE, await createAdminSession(env, admin.id)) } }); } return path === '/api/login' ? visitorLogin(req, env, name, pass) : json({ error: 'Invalid credentials' }, { status: 401 }); }
-  if (path === '/api/account/login' && req.method === 'POST') { const b: any = await readJson(req); return visitorLogin(req, env, String(b.username || '').trim(), String(b.password || '')); }
-  if (path === '/api/account/register' && req.method === 'POST') { const b: any = await readJson(req); const username = String(b.username || '').trim(); const password = String(b.password || ''); const display = String(b.displayName || username).trim(); if (username.length < 3) return json({ error: ERR_USERNAME_SHORT }, { status: 400 }); if (password.length < 8) return json({ error: ERR_PASSWORD_SHORT }, { status: 400 }); const t = now(); const accountId = rid('acct'); try { await env.DB.prepare('INSERT INTO visitor_accounts(id,username,password_hash,display_name,last_login_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(accountId, username, await hashPassword(password), display, t, t, t).run(); } catch { return json({ error: ERR_ACCOUNT_EXISTS }, { status: 409 }); } const account = { id: accountId, username, display_name: display, last_login_at: t }; if (b.claimGuest && b.visitorId) await bindGuest(env, String(b.visitorId), account); if (b.discardGuest && b.visitorId) await env.DB.prepare('DELETE FROM users WHERE visitor_key=?').bind(String(b.visitorId)).run(); return json({ type: 'user', account }, { headers: { 'Set-Cookie': setCookie(VISITOR_COOKIE, await createVisitorSession(env, accountId, String(b.visitorId || ''))) } }); }
+  if ((path === '/api/auth/login' || path === '/api/login') && req.method === 'POST') {
+    return login(req, env, path === '/api/login');
+  }
+  if (path === '/api/account/login' && req.method === 'POST') {
+    const body = await readJson(req);
+    return visitorLogin(env, String(body.username || '').trim(), String(body.password || ''));
+  }
+  if (path === '/api/account/register' && req.method === 'POST') {
+    return registerVisitorAccount(req, env);
+  }
   if (path === '/api/account/me') return json({ account: await currentVisitorAccount(env, req) });
   if (path === '/api/invites' && req.method === 'POST') return createInviteLink(req, env);
   const guestRoute = path.match(/^\/api\/guest\/([^/]+)$/);
@@ -536,7 +1004,21 @@ async function api(req: Request, env: Env) {
   const sm = path.match(/^\/api\/sessions\/([^/]+)\/messages$/);
   if (sm) { const session = await getSessionById(env, sm[1]); if (!session || session.deleted_at || session.purged_at) return json({ messages: [] }); const admin = await currentAdmin(env, req); if (admin) { if (!canAccessSession(admin, session)) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); await markMessagesRead(env, session.id, 'VISITOR'); } else if (await guestOwnsSession(env, req, session)) await markMessagesRead(env, session.id, 'OPERATOR'); else return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); return json({ messages: await getMessages(env, session.id, url.searchParams.get('after')) }); }
   const cr = path.match(/^\/api\/sessions\/([^/]+)\/customer-read$/);
-  if (cr && req.method === 'POST') { const session = await getSessionById(env, cr[1]); if (!session || session.deleted_at || session.purged_at) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); if (!(await guestOwnsSession(env, req, session))) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); const b: any = await readJson(req); const ids = Array.isArray(b.messageIds) ? b.messageIds : []; await markMessagesRead(env, session.id, 'OPERATOR', ids); return json({ ok: true }); }
+  if (cr && req.method === 'POST') {
+    const session = await getSessionById(env, cr[1]);
+    if (!session || session.deleted_at || session.purged_at) {
+      return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
+    }
+    if (!(await guestOwnsSession(env, req, session))) {
+      return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 });
+    }
+    const body = await readJson(req);
+    const messageIds = Array.isArray(body.messageIds)
+      ? body.messageIds.filter((id): id is string => typeof id === 'string')
+      : [];
+    await markMessagesRead(env, session.id, 'OPERATOR', messageIds);
+    return json({ ok: true });
+  }
   const remark = path.match(/^\/api\/sessions\/([^/]+)\/customer-remark$/);
   if (remark && req.method === 'PATCH') return updateCustomerRemark(req, env, remark[1]);
   const clearDryRun = path.match(/^\/api\/sessions\/([^/]+)\/clear-history\/dry-run$/);
@@ -544,19 +1026,158 @@ async function api(req: Request, env: Env) {
   const clearHistory = path.match(/^\/api\/sessions\/([^/]+)\/clear-history$/);
   if (clearHistory && req.method === 'POST') return clearSessionHistory(req, env, clearHistory[1], false);
   const sa = path.match(/^\/api\/sessions\/([^/]+)\/(assign|close|archive|unarchive|delete|restore)$/);
-  if (sa && req.method === 'POST') return sessionAction(req, env, sa[1], sa[2]);
+  if (sa && req.method === 'POST') return sessionAction(req, env, sa[1], sa[2] as SessionAction);
   const rec = path.match(/^\/api\/messages\/([^/]+)\/recall$/);
-  if (rec && req.method === 'POST') { const msg = await env.DB.prepare('SELECT * FROM messages WHERE id=?').bind(rec[1]).first<any>(); if (!msg) return json({ error: ERR_MESSAGE_NOT_FOUND }, { status: 404 }); const session = await getSessionById(env, msg.session_id); if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); let authorized = false; const admin = await currentAdmin(env, req); if (admin) authorized = canAccessSession(admin, session) && msg.sender_type === 'OPERATOR' && msg.sender_id === admin.id; else if (await guestOwnsSession(env, req, session)) authorized = msg.sender_type === 'VISITOR'; if (!authorized) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); if (sessionEnded(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 }); const t = now(); await env.DB.prepare("UPDATE messages SET status='recalled',content='',image_path=NULL,recalled_at=? WHERE id=?").bind(t, rec[1]).run(); const row = await env.DB.prepare('SELECT * FROM messages WHERE id=?').bind(rec[1]).first<any>(); if (row) await broadcast(env, `conversation:${row.session_id}`, { type: 'message:updated', conversationId: row.session_id, message: row }); return json({ ok: true }); }
+  if (rec && req.method === 'POST') {
+    const message = await env.DB.prepare(
+      'SELECT * FROM messages WHERE id=?',
+    ).bind(rec[1]).first<MessageRecord>();
+    if (!message) return json({ error: ERR_MESSAGE_NOT_FOUND }, { status: 404 });
+    const session = await getSessionById(env, message.session_id);
+    if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
+
+    const admin = await currentAdmin(env, req);
+    const authorized = admin
+      ? canAccessSession(admin, session)
+        && message.sender_type === 'OPERATOR'
+        && message.sender_id === admin.id
+      : await guestOwnsSession(env, req, session) && message.sender_type === 'VISITOR';
+    if (!authorized) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 });
+    if (sessionEnded(session)) return json({ error: ERR_SESSION_ENDED }, { status: 400 });
+
+    const t = now();
+    await env.DB.prepare(
+      "UPDATE messages SET status='recalled',content='',image_path=NULL,recalled_at=? WHERE id=?",
+    ).bind(t, message.id).run();
+    const recalledMessage = await env.DB.prepare(
+      'SELECT * FROM messages WHERE id=?',
+    ).bind(message.id).first<MessageRecord>();
+    if (recalledMessage) {
+      await broadcast(env, `conversation:${recalledMessage.session_id}`, {
+        type: 'message:updated',
+        conversationId: recalledMessage.session_id,
+        message: recalledMessage,
+      });
+    }
+    return json({ ok: true });
+  }
   const del = path.match(/^\/api\/messages\/([^/]+)\/delete$/);
-  if (del && req.method === 'POST') { const msg = await env.DB.prepare('SELECT * FROM messages WHERE id=?').bind(del[1]).first<any>(); if (!msg) return json({ error: ERR_MESSAGE_NOT_FOUND }, { status: 404 }); const session = await getSessionById(env, msg.session_id); if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 }); let authorized = false; const admin = await currentAdmin(env, req); if (admin) authorized = canAccessSession(admin, session) && msg.sender_type === 'OPERATOR' && msg.sender_id === admin.id; else if (await guestOwnsSession(env, req, session)) authorized = msg.sender_type === 'VISITOR'; if (!authorized) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 }); const t = now(); await env.DB.prepare('UPDATE messages SET deleted_at=? WHERE id=?').bind(t, del[1]).run(); await broadcast(env, `conversation:${msg.session_id}`, { type: 'message:deleted', conversationId: msg.session_id, messageId: del[1] }); return json({ ok: true }); }
+  if (del && req.method === 'POST') {
+    const message = await env.DB.prepare(
+      'SELECT * FROM messages WHERE id=?',
+    ).bind(del[1]).first<MessageRecord>();
+    if (!message) return json({ error: ERR_MESSAGE_NOT_FOUND }, { status: 404 });
+    const session = await getSessionById(env, message.session_id);
+    if (!session) return json({ error: ERR_SESSION_NOT_FOUND }, { status: 404 });
+
+    const admin = await currentAdmin(env, req);
+    const authorized = admin
+      ? canAccessSession(admin, session)
+        && message.sender_type === 'OPERATOR'
+        && message.sender_id === admin.id
+      : await guestOwnsSession(env, req, session) && message.sender_type === 'VISITOR';
+    if (!authorized) return json({ error: ERR_NO_SESSION_ACCESS }, { status: 403 });
+
+    await env.DB.prepare(
+      'UPDATE messages SET deleted_at=? WHERE id=?',
+    ).bind(now(), message.id).run();
+    await broadcast(env, `conversation:${message.session_id}`, {
+      type: 'message:deleted',
+      conversationId: message.session_id,
+      messageId: message.id,
+    });
+    return json({ ok: true });
+  }
   if (path === '/api/messages/purge-images' && req.method === 'POST') { const admin = await requireAdmin(env, req); await env.DB.prepare("UPDATE messages SET image_path=NULL,image_purged_at=?,content='' WHERE sender_id=? AND message_type='image'").bind(now(), admin.id).run(); await notifyAdmins(env); return json({ ok: true }); }
   if (path === '/api/admins' && req.method === 'GET') { await requireSuper(env, req); return json({ admins: (await env.DB.prepare('SELECT id,username,role,must_change_password,created_at,is_disabled,disabled_at,last_seen_at FROM admins ORDER BY role DESC, created_at').all()).results || [] }); }
-  if (path === '/api/admins' && req.method === 'POST') { await requireSuper(env, req); const b: any = await readJson(req); const username = String(b.username || '').trim(); const password = String(b.password || ''); const t = now(); await env.DB.prepare("INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?, 'OPERATOR',0,0,?,?,NULL)").bind(rid('admin'), username, username, await hashPassword(password), t, t).run(); return json({ ok: true }); }
-  if (path === '/api/admins/operators' && req.method === 'GET') { await requireSuper(env, req); const rows = (await env.DB.prepare("SELECT id,username,role,created_at,is_disabled,disabled_at,last_seen_at FROM admins WHERE role='OPERATOR' ORDER BY is_disabled, username").all<any>()).results || []; return json({ operators: rows.map(r => ({ ...r, online: Boolean(r.last_seen_at && Date.now() - Date.parse(r.last_seen_at) < 120000 && !r.is_disabled) })) }); }
-  if (path === '/api/admins/operators' && req.method === 'DELETE') { const admin = await requireSuper(env, req); const b: any = await readJson(req); const opId = String(b.id || ''); const t = now(); if (b.hard) await env.DB.prepare("DELETE FROM admins WHERE id=? AND role='OPERATOR' AND is_disabled=1").bind(opId).run(); else { await env.DB.prepare("UPDATE admins SET is_disabled=1,disabled_at=?,updated_at=? WHERE id=? AND role='OPERATOR'").bind(t, t, opId).run(); await env.DB.prepare('UPDATE sessions SET deleted_at=?,deleted_by=?,assigned_operator_id=NULL,updated_at=? WHERE deleted_at IS NULL AND (assigned_operator_id=? OR last_operator_id=?)').bind(t, admin.id, t, opId, opId).run(); } await notifyAdmins(env); return json({ ok: true }); }
-  if (path === '/api/admins/profile' && req.method === 'PATCH') { const admin = await requireSuper(env, req); const b: any = await readJson(req); const username = String(b.username || '').trim(); const password = String(b.password || ''); const t = now(); if (username) await env.DB.prepare('UPDATE admins SET username=?,display_name=?,updated_at=? WHERE id=?').bind(username, username, t, admin.id).run(); if (password) await env.DB.prepare('UPDATE admins SET password_hash=?,must_change_password=0,updated_at=? WHERE id=?').bind(await hashPassword(password), t, admin.id).run(); return json({ ok: true }); }
-  if (path === '/api/staff-chat' && req.method === 'GET') { await requireAdmin(env, req); const rows = (await env.DB.prepare('SELECT sm.*,a.username sender_name FROM staff_messages sm JOIN admins a ON a.id=sm.sender_admin_id ORDER BY sm.created_at DESC LIMIT 80').all<any>()).results || []; return json({ messages: rows.reverse() }); }
-  if (path === '/api/staff-chat' && req.method === 'POST') { const admin = await requireAdmin(env, req); const b: any = await readJson(req); const content = String(b.content || '').trim(); const msg = { id: rid('staffmsg'), sender_admin_id: admin.id, sender_name: admin.username, content, created_at: now() }; await env.DB.prepare('INSERT INTO staff_messages(id,sender_admin_id,content,created_at) VALUES(?,?,?,?)').bind(msg.id, admin.id, content, msg.created_at).run(); await broadcast(env, 'staff', { type: 'staff:new', message: msg }); return json({ message: msg }); }
+  if (path === '/api/admins' && req.method === 'POST') {
+    await requireSuper(env, req);
+    const body = await readJson(req);
+    const username = String(body.username || '').trim();
+    const password = String(body.password || '');
+    const t = now();
+    await env.DB.prepare(
+      "INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?, 'OPERATOR',0,0,?,?,NULL)",
+    ).bind(rid('admin'), username, username, await hashPassword(password), t, t).run();
+    return json({ ok: true });
+  }
+  if (path === '/api/admins/operators' && req.method === 'GET') {
+    await requireSuper(env, req);
+    const rows = (await env.DB.prepare(
+      "SELECT id,username,role,created_at,is_disabled,disabled_at,last_seen_at FROM admins WHERE role='OPERATOR' ORDER BY is_disabled, username",
+    ).all<OperatorRecord>()).results || [];
+    return json({
+      operators: rows.map((operator) => ({
+        ...operator,
+        online: Boolean(
+          operator.last_seen_at
+          && Date.now() - Date.parse(operator.last_seen_at) < 120000
+          && !operator.is_disabled,
+        ),
+      })),
+    });
+  }
+  if (path === '/api/admins/operators' && req.method === 'DELETE') {
+    const admin = await requireSuper(env, req);
+    const body = await readJson(req);
+    const operatorId = String(body.id || '');
+    const t = now();
+    if (body.hard) {
+      await env.DB.prepare(
+        "DELETE FROM admins WHERE id=? AND role='OPERATOR' AND is_disabled=1",
+      ).bind(operatorId).run();
+    } else {
+      await env.DB.prepare(
+        "UPDATE admins SET is_disabled=1,disabled_at=?,updated_at=? WHERE id=? AND role='OPERATOR'",
+      ).bind(t, t, operatorId).run();
+      await env.DB.prepare(
+        'UPDATE sessions SET deleted_at=?,deleted_by=?,assigned_operator_id=NULL,updated_at=? WHERE deleted_at IS NULL AND (assigned_operator_id=? OR last_operator_id=?)',
+      ).bind(t, admin.id, t, operatorId, operatorId).run();
+    }
+    await notifyAdmins(env);
+    return json({ ok: true });
+  }
+  if (path === '/api/admins/profile' && req.method === 'PATCH') {
+    const admin = await requireSuper(env, req);
+    const body = await readJson(req);
+    const username = String(body.username || '').trim();
+    const password = String(body.password || '');
+    const t = now();
+    if (username) {
+      await env.DB.prepare(
+        'UPDATE admins SET username=?,display_name=?,updated_at=? WHERE id=?',
+      ).bind(username, username, t, admin.id).run();
+    }
+    if (password) {
+      await env.DB.prepare(
+        'UPDATE admins SET password_hash=?,must_change_password=0,updated_at=? WHERE id=?',
+      ).bind(await hashPassword(password), t, admin.id).run();
+    }
+    return json({ ok: true });
+  }
+  if (path === '/api/staff-chat' && req.method === 'GET') {
+    await requireAdmin(env, req);
+    const rows = (await env.DB.prepare(
+      'SELECT sm.*,a.username sender_name FROM staff_messages sm JOIN admins a ON a.id=sm.sender_admin_id ORDER BY sm.created_at DESC LIMIT 80',
+    ).all<StaffMessageRecord>()).results || [];
+    return json({ messages: rows.reverse() });
+  }
+  if (path === '/api/staff-chat' && req.method === 'POST') {
+    const admin = await requireAdmin(env, req);
+    const body = await readJson(req);
+    const message: StaffMessageRecord = {
+      id: rid('staffmsg'),
+      sender_admin_id: admin.id,
+      sender_name: admin.username,
+      content: String(body.content || '').trim(),
+      created_at: now(),
+    };
+    await env.DB.prepare(
+      'INSERT INTO staff_messages(id,sender_admin_id,content,created_at) VALUES(?,?,?,?)',
+    ).bind(message.id, admin.id, message.content, message.created_at).run();
+    await broadcast(env, 'staff', { type: 'staff:new', message });
+    return json({ message });
+  }
   if (path === '/api/upload' && req.method === 'POST') return upload(req, env);
   const att = path.match(/^\/api\/attachments\/(.+)$/);
   if (att) return downloadAttachment(req, env, att[1]);
@@ -581,7 +1202,7 @@ function isLocalDevHost(host: string) {
 }
 
 function withNoStore(response: Response) {
-  if ((response as any).webSocket) return response;
+  if ((response as Response & { webSocket?: unknown }).webSocket) return response;
   const headers = new Headers(response.headers);
   headers.set('cache-control', 'no-store');
   headers.set('strict-transport-security', HSTS_HEADER);
@@ -590,11 +1211,15 @@ function withNoStore(response: Response) {
 
 async function validateInviteHost(env: Env, token: string) {
   const tokenHash = await inviteTokenHash(env, token);
-  const invite = await env.DB.prepare('SELECT * FROM invite_links WHERE token_hash=?').bind(tokenHash).first<any>();
+  const invite = await env.DB.prepare(
+    'SELECT * FROM invite_links WHERE token_hash=?',
+  ).bind(tokenHash).first<InviteRecord>();
   if (!invite || invite.revoked_at || invite.expires_at <= now()) return 404;
   if (invite.consumed_at && !invite.consumed_session_id) return 410;
   if (invite.consumed_at && invite.consumed_session_id) {
-    const session = await env.DB.prepare('SELECT * FROM sessions WHERE id=?').bind(invite.consumed_session_id).first<any>();
+    const session = await env.DB.prepare(
+      'SELECT * FROM sessions WHERE id=?',
+    ).bind(invite.consumed_session_id).first<SessionRecord>();
     if (!session || sessionEnded(session)) return 410;
   }
   return 200;
@@ -618,7 +1243,7 @@ export default {
       }));
     }
   },
-  async fetch(req: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(req: Request, env: Env) {
     try {
       const url = new URL(req.url);
       const host = url.hostname.toLowerCase();
@@ -665,9 +1290,9 @@ export default {
       }
 
       return empty(404);
-    } catch (e: any) {
-      if (e instanceof Response) return withNoStore(e);
-      console.error(e);
+    } catch (error) {
+      if (error instanceof Response) return withNoStore(error);
+      console.error(error);
       return json({ error: 'Internal error' }, { status: 500 });
     }
   },
