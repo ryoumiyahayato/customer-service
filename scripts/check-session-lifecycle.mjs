@@ -12,7 +12,7 @@ function readFile(file) {
   return readFileSync(full, 'utf8');
 }
 
-const worker = readFile('src/worker.ts');
+const worker = readFile('src/runtimeWorker.ts');
 const lifecycle = readFile('src/sessionLifecycle.ts');
 const sessionState = readFile('src/domain/sessionState.ts');
 const chatModel = readFile('src/chatModel.ts');

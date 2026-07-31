@@ -1,6 +1,12 @@
 export { ChatRoom } from './worker';
 import worker from './worker';
 import type { Env } from './worker';
+import { COOKIE_NAMES, clearSessionCookie, readCookie } from './security/cookies';
+import { hmacHex, verifySignedValue } from './security/signing';
+import { hashSessionToken } from './security/sessionTokens';
+import { jsonResponse, withSecurityHeaders } from './security/responseHeaders';
+import { contentLengthExceeds, requestStreamExceeds } from './security/requestLimits';
+import { consumeRateLimit } from './security/rateLimit';
 
 type WorkerModule = {
   fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response>;
@@ -29,37 +35,10 @@ const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 const UPLOAD_REQUEST_MAX_BYTES = 6 * 1024 * 1024;
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 const HEX_INVITE_TOKEN = /^[a-f0-9]{40}$/;
-const ADMIN_COOKIE = 'support_admin';
-const VISITOR_COOKIE = 'visitor_account';
-const GUEST_COOKIE = 'guest_session';
-const enc = new TextEncoder();
-const SECURITY_HEADERS = {
-  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'same-origin',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https: ws: wss:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
-};
-
-function json(body: unknown, init: ResponseInit = {}) {
-  return new Response(JSON.stringify(body), {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-      ...SECURITY_HEADERS,
-      ...(init.headers || {}),
-    },
-  });
-}
-
-function withSecurityHeaders(response: Response) {
-  if ((response as Response & { webSocket?: unknown }).webSocket) return response;
-  const headers = new Headers(response.headers);
-  for (const [key, value] of Object.entries(SECURITY_HEADERS)) headers.set(key, value);
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
-}
+const ADMIN_COOKIE = COOKIE_NAMES.admin;
+const VISITOR_COOKIE = COOKIE_NAMES.visitor;
+const GUEST_COOKIE = COOKIE_NAMES.guest;
+const json = jsonResponse;
 
 function isLocalDevHost(host: string) {
   let normalized = String(host || '').toLowerCase();
@@ -113,66 +92,12 @@ function isSameOriginWebSocket(req: Request) {
   return isLocalDevHost(url.hostname) || isLocalDevHost(requestHost);
 }
 
-async function requestStreamExceeds(req: Request, maxBytes: number) {
-  if (contentLengthExceeds(req, maxBytes)) return true;
-  const reader = req.clone().body?.getReader();
-  if (!reader) return false;
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) return false;
-      total += value?.byteLength || 0;
-      if (total > maxBytes) {
-        await reader.cancel();
-        return true;
-      }
-    }
-  } catch {
-    return false;
-  }
-}
 
-function contentLengthExceeds(req: Request, maxBytes: number) {
-  const raw = req.headers.get('content-length');
-  return Boolean(raw && Number(raw) > maxBytes);
-}
-
-function getCookie(req: Request, name: string) {
-  return (req.headers.get('cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith(`${name}=`))?.slice(name.length + 1);
-}
-
-function clearCookie(name: string) {
-  return `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure`;
-}
-
-async function hmac(secret: string, value: string) {
-  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(value));
-  return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function constantTimeEqual(a: string, b: string) {
-  const left = enc.encode(a);
-  const right = enc.encode(b);
-  let diff = left.length ^ right.length;
-  const len = Math.max(left.length, right.length);
-  for (let i = 0; i < len; i++) diff |= (left[i] || 0) ^ (right[i] || 0);
-  return diff === 0;
-}
-
-async function verifySignedId(env: Env, token?: string) {
-  if (!token) return null;
-  const parts = token.split('.');
-  if (parts.length !== 2) return null;
-  const [value, sig] = parts;
-  if (!value || !sig) return null;
-  return constantTimeEqual(sig, await hmac(env.SESSION_SECRET, value)) ? value : null;
-}
-
-async function tokenHash(env: Env, value: string) {
-  return await hmac(env.SESSION_SECRET, 'session:' + value);
-}
+const getCookie = readCookie;
+const clearCookie = clearSessionCookie;
+async function hmac(secret: string, value: string) { return hmacHex(secret, value); }
+async function verifySignedId(env: Env, token?: string) { return verifySignedValue(env.SESSION_SECRET, token); }
+async function tokenHash(env: Env, value: string) { return hashSessionToken(env.SESSION_SECRET, value); }
 
 async function currentGuestVisitorKey(env: Env, req: Request) {
   const sessionId = await verifySignedId(env, getCookie(req, GUEST_COOKIE));
@@ -204,21 +129,10 @@ function rateLimitKey(value: string) {
 }
 
 async function consumeLimit(env: Env, key: string, limit: number, windowMs: number) {
-  const nowMs = Date.now();
-  const resetAt = nowMs + windowMs;
-  await env.DB.prepare('INSERT INTO rate_limits(key,count,reset_at) VALUES(?,0,?) ON CONFLICT(key) DO NOTHING')
-    .bind(key, resetAt).run();
-  const consumed = await env.DB.prepare(
-    `UPDATE rate_limits
-        SET count=CASE WHEN reset_at <= ? THEN 1 ELSE count+1 END,
-            reset_at=CASE WHEN reset_at <= ? THEN ? ELSE reset_at END
-      WHERE key=? AND (reset_at <= ? OR count < ?)`,
-  ).bind(nowMs, nowMs, resetAt, key, nowMs, limit).run();
-  if (Number(consumed?.meta?.changes || 0) > 0) return null;
-
-  const row = await env.DB.prepare('SELECT reset_at FROM rate_limits WHERE key=?').bind(key).first<{ reset_at: number }>();
-  const retryAfter = Math.max(1, Math.ceil((Number(row?.reset_at || resetAt) - nowMs) / 1000));
-  return json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
+  const retryAfter = await consumeRateLimit(env.DB, key, limit, windowMs);
+  return retryAfter === null
+    ? null
+    : json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
 }
 
 async function protectBootstrapConfig(env: Env) {

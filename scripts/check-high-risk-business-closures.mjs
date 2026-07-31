@@ -50,8 +50,8 @@ assert.ok(secureWorker.indexOf('const blocked = await preflightSecurity') < secu
 assert.match(wrapper, /parts\.length !== 2/);
 assert.match(wrapper, /ON CONFLICT\(key\) DO NOTHING/);
 assert.match(wrapper, /reset_at <= \? OR count < 20/);
-assert.match(read('src/worker.ts'), /constantTimeEqual\(sig, await hmac/);
-assert.match(read('src/worker.ts'), /const adminId = 'admin_primary'/);
+assert.match(read('src/runtimeWorker.ts'), /constantTimeEqual\(sig, await hmac/);
+assert.match(read('src/runtimeWorker.ts'), /const adminId = 'admin_primary'/);
 assert.match(genericSetup, /pg_advisory_xact_lock/);
 assert.ok(genericSetup.indexOf('pg_advisory_xact_lock') < genericSetup.indexOf("'SELECT id FROM admins LIMIT 1'"));
 
