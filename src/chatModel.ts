@@ -8,6 +8,7 @@ export * from './chat/messageIds';
 export * from './chat/polling';
 export * from './chat/telemetry';
 export {
+  isArchivedSession,
   isSessionEnded,
   sessionBucketOf,
   sessionGroupOf,
