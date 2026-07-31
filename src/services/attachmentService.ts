@@ -31,18 +31,30 @@ export class AttachmentService {
     await this.uploads.put(objectKey, input.file.stream(), {
       httpMetadata: { contentType: input.file.type },
     });
-    const createdAt = this.clock();
-    await this.attachments.insert({
-      id: this.idFactory('att'),
-      sessionId: input.sessionId,
-      objectKey,
-      mimeType: input.file.type,
-      byteSize: input.file.size,
-      createdAt,
-      createdByType: input.createdByType,
-      createdById: input.createdById,
-      expiresAt: new Date(Date.parse(createdAt) + 7 * 86400000).toISOString(),
-    });
+    try {
+      const createdAt = this.clock();
+      await this.attachments.insert({
+        id: this.idFactory('att'),
+        sessionId: input.sessionId,
+        objectKey,
+        mimeType: input.file.type,
+        byteSize: input.file.size,
+        createdAt,
+        createdByType: input.createdByType,
+        createdById: input.createdById,
+        expiresAt: new Date(Date.parse(createdAt) + 7 * 86400000).toISOString(),
+      });
+    } catch (error) {
+      try {
+        await this.uploads.delete(objectKey);
+      } catch (cleanupError) {
+        console.error('attachment upload rollback failed', {
+          objectKey,
+          error: String(cleanupError),
+        });
+      }
+      throw error;
+    }
     return { path: `/api/attachments/${objectKey}` };
   }
 }
