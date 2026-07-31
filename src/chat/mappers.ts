@@ -1,3 +1,4 @@
+import { normalizeStoredStatus } from '../domain/sessionState.ts';
 import type { ChatMessageDto, ChatSessionDto } from './dto.ts';
 import type {
   ChatMessage,
@@ -76,7 +77,7 @@ export function mapChatMessageDto(dto: ChatMessageDto): ChatMessage {
 export function mapChatSessionDto(dto: ChatSessionDto): ChatSession {
   return {
     id: requiredString(dto.id, 'session.id'),
-    status: optionalString(dto.status, 'PENDING'),
+    status: normalizeStoredStatus(typeof dto.status === 'string' ? dto.status : null),
     visitorKey: nullableString(first(dto.visitor_key, dto.visitorKey)),
     userId: nullableString(first(dto.user_id, dto.userId)),
     customerName: nullableString(first(dto.customer_name, dto.customerName)),
@@ -116,7 +117,6 @@ function looksLikeMessage(value: Record<string, unknown>) {
 function looksLikeSession(value: Record<string, unknown>) {
   return Boolean(
     value.id
-    && typeof value.status === 'string'
     && (
       'user_id' in value
       || 'userId' in value
