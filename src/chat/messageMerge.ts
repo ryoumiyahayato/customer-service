@@ -1,4 +1,4 @@
-import type { ChatMessage } from './types';
+import type { ChatMessage } from './types.ts';
 
 function isServerMessage(message: ChatMessage) {
   return !message.id.startsWith('local-')
