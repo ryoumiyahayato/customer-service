@@ -1,4 +1,4 @@
-import type { SessionGroup } from '../domain/sessionState.ts';
+import type { NormalizedSessionStatus, SessionGroup } from '../domain/sessionState.ts';
 
 export type { SessionGroup } from '../domain/sessionState.ts';
 
@@ -27,7 +27,7 @@ export type ChatMessage = {
 
 export type ChatSession = {
   id: string;
-  status: string;
+  status: NormalizedSessionStatus;
   visitorKey: string | null;
   userId: string | null;
   customerName: string | null;
