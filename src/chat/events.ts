@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatSession } from './types';
+import type { ChatMessage, ChatSession } from './types.ts';
 
 export type MessageCreatedEvent = {
   type: 'message:new' | 'message_created';
