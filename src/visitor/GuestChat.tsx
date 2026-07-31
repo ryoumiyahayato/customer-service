@@ -418,7 +418,10 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       readAt: null,
       isRead: false,
       quoteMessageId: currentQuote?.id || null,
-      clientMessageId: clientMessageId
+      clientMessageId: clientMessageId,
+      recalledAt: null,
+      deletedAt: null,
+      imagePurgedAt: null
     };
     setMessages(prev => mergeMessage(prev, optimisticMessage));
     setText('');
@@ -443,7 +446,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       const fd = new FormData(); fd.append('file', file); fd.append('sessionId', sessionId);
       const res = await apiFetch<UploadResponse>(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST', body: fd });
       tempId = localMessageId(clientMessageId);
-      setMessages(prev => mergeMessage(prev, { id: tempId, sessionId: sessionId, senderType: 'VISITOR', senderId: visitorId, content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: false, quoteMessageId: null, clientMessageId: clientMessageId }));
+      setMessages(prev => mergeMessage(prev, { id: tempId, sessionId: sessionId, senderType: 'VISITOR', senderId: visitorId, content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: false, quoteMessageId: null, clientMessageId: clientMessageId, recalledAt: null, deletedAt: null, imagePurgedAt: null }));
       const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
       if (msgRes?.message) setMessages(prev => mergeMessage(prev, msgRes.message));
     } catch (error) { if (isSessionGoneError(error)) { showNotFound(); } else { if (tempId) setMessages(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); setNetworkBanner(true); } }
