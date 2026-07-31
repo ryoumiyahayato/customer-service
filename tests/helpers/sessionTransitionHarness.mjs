@@ -27,6 +27,7 @@ export function createDatabase() {
       purged_at TEXT,
       history_cleared_at TEXT,
       history_cleared_by TEXT,
+      history_clear_claimed_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -51,8 +52,8 @@ export function insertSession(database, input) {
     INSERT INTO sessions(
       id,user_id,status,assigned_operator_id,last_operator_id,archived_at,archived_by,
       closed_at,deleted_at,deleted_by,purged_at,history_cleared_at,history_cleared_by,
-      created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      history_clear_claimed_at,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     input.id,
     input.userId ?? `user-${input.id}`,
@@ -67,6 +68,7 @@ export function insertSession(database, input) {
     input.purgedAt ?? null,
     input.historyClearedAt ?? null,
     input.historyClearedBy ?? null,
+    input.historyClearClaimedAt ?? null,
     input.createdAt ?? T0,
     input.updatedAt ?? T0,
   );
