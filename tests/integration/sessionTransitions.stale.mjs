@@ -47,3 +47,42 @@ test('rejects stale moveToTrash after production unarchive restores the session'
     database.close();
   }
 });
+
+test('rejects stale operator actions after another production assignment takes ownership', async () => {
+  const operator = { id: 'admin_1', role: 'OPERATOR' };
+  for (const action of ['assign', 'archive']) {
+    const database = createDatabase();
+    try {
+      const sessionId = `ownership-${action}`;
+      insertSession(database, { id: sessionId, status: 'OPEN', assignedOperatorId: operator.id });
+      const adapter = new SqliteD1Adapter(database);
+      const winningRepository = new SessionRepository(adapter);
+      let hookCalls = 0;
+      const repository = new InterleavingSessionRepository(adapter, async (writeAction, targetSessionId) => {
+        if (writeAction !== action || hookCalls++) return;
+        assert.equal(changes(await winningRepository.assign(
+          targetSessionId,
+          'admin_2',
+          '2026-07-31T05:00:00.000Z',
+        )), 1);
+      });
+      const service = new SessionService(
+        repository,
+        (actor, session) => actor.id === session.assigned_operator_id,
+      );
+
+      await expectConflict(service.execute(
+        operator,
+        sessionId,
+        action,
+        '2026-07-31T05:01:00.000Z',
+      ));
+      const finalState = readSession(database, sessionId);
+      assert.equal(finalState.status, 'OPEN');
+      assert.equal(finalState.assigned_operator_id, 'admin_2');
+      assert.equal(finalState.archived_at, null);
+    } finally {
+      database.close();
+    }
+  }
+});
