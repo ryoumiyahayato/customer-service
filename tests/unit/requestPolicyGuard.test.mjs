@@ -6,7 +6,7 @@ import { SqliteD1Adapter } from '../helpers/sqliteD1Adapter.mjs';
 
 registerTypeScriptHooks();
 const { createRequestPolicyGuard } = await import('../../src/services/requestPolicyGuard.ts');
-const { createSignedValue } = await import('../../src/security/signing.ts');
+const { signValue } = await import('../../src/security/signing.ts');
 const { hashSessionToken } = await import('../../src/security/sessionTokens.ts');
 
 const secret = 'request-policy-test-secret';
@@ -63,7 +63,7 @@ test('requires the signed current guest identity before claim or discard registr
       null,
       '2099-01-01T00:00:00.000Z',
     );
-    const signed = await createSignedValue(secret, guestSessionId);
+    const signed = await signValue(secret, guestSessionId);
     const inner = innerWorker();
     const guard = createRequestPolicyGuard(inner);
 
