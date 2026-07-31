@@ -28,6 +28,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply-worker-boundaries.py')
+          source = path.read_text(encoding='utf-8')
+          old = 'r"async function upload\\(req: Request, env: Env\\) \\{.*?\\n\\}(?=\\nasync function api)"'
+          new = 'r"async function upload\\(req: Request, env: Env\\) \\{.*?\\}\\n(?=async function api)"'
+          if old not in source:
+              raise SystemExit('upload regex anchor not found')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
           set +e
           python3 scripts/apply-worker-boundaries.py > /tmp/worker-boundaries.log 2>&1
           status=$?
