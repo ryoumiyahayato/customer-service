@@ -20,10 +20,10 @@ export class SessionService {
       : action === 'close' || action === 'archive'
         ? await this.archive(session, actor, timestamp)
         : action === 'unarchive'
-          ? await this.unarchive(session, timestamp)
+          ? await this.unarchive(session, actor, timestamp)
           : action === 'delete'
             ? await this.moveToTrash(session, actor, timestamp)
-            : await this.restore(session, timestamp);
+            : await this.restore(session, actor, timestamp);
 
     if (Number(result.meta?.changes || 0) !== 1) {
       throw new DomainError('SESSION_STATE_CONFLICT', 409);
@@ -33,23 +33,50 @@ export class SessionService {
     return updated;
   }
 
+  private expectedOperatorId(actor: SessionActor) {
+    return actor.role === 'SUPER_ADMIN' ? null : actor.id;
+  }
+
   private assign(session: SessionRecord, actor: SessionActor, timestamp: string) {
-    return this.sessions.assign(session.id, actor.id, timestamp);
+    return this.sessions.assign(
+      session.id,
+      actor.id,
+      timestamp,
+      this.expectedOperatorId(actor),
+    );
   }
 
   private archive(session: SessionRecord, actor: SessionActor, timestamp: string) {
-    return this.sessions.archive(session.id, actor.id, timestamp);
+    return this.sessions.archive(
+      session.id,
+      actor.id,
+      timestamp,
+      this.expectedOperatorId(actor),
+    );
   }
 
-  private unarchive(session: SessionRecord, timestamp: string) {
-    return this.sessions.unarchive(session.id, timestamp);
+  private unarchive(session: SessionRecord, actor: SessionActor, timestamp: string) {
+    return this.sessions.unarchive(
+      session.id,
+      timestamp,
+      this.expectedOperatorId(actor),
+    );
   }
 
   private moveToTrash(session: SessionRecord, actor: SessionActor, timestamp: string) {
-    return this.sessions.moveToTrash(session.id, actor.id, timestamp);
+    return this.sessions.moveToTrash(
+      session.id,
+      actor.id,
+      timestamp,
+      this.expectedOperatorId(actor),
+    );
   }
 
-  private restore(session: SessionRecord, timestamp: string) {
-    return this.sessions.restore(session.id, timestamp);
+  private restore(session: SessionRecord, actor: SessionActor, timestamp: string) {
+    return this.sessions.restore(
+      session.id,
+      timestamp,
+      this.expectedOperatorId(actor),
+    );
   }
 }
