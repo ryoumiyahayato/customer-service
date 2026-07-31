@@ -34,7 +34,12 @@ export class SessionRepository {
       .first<SessionRecord>();
   }
 
-  assign(sessionId: string, actorId: string, timestamp: string) {
+  assign(
+    sessionId: string,
+    actorId: string,
+    timestamp: string,
+    expectedOperatorId: string | null = null,
+  ) {
     return this.database.prepare(
       `UPDATE sessions
           SET assigned_operator_id=?,
@@ -45,11 +50,17 @@ export class SessionRepository {
           AND deleted_at IS NULL
           AND purged_at IS NULL
           AND archived_at IS NULL
-          AND status IN ('PENDING','OPEN')`,
-    ).bind(actorId, actorId, timestamp, sessionId).run();
+          AND status IN ('PENDING','OPEN')
+          AND (? IS NULL OR assigned_operator_id=?)`,
+    ).bind(actorId, actorId, timestamp, sessionId, expectedOperatorId, expectedOperatorId).run();
   }
 
-  archive(sessionId: string, actorId: string, timestamp: string) {
+  archive(
+    sessionId: string,
+    actorId: string,
+    timestamp: string,
+    expectedOperatorId: string | null = null,
+  ) {
     return this.database.prepare(
       `UPDATE sessions
           SET status='ARCHIVED',
@@ -61,11 +72,16 @@ export class SessionRepository {
           AND deleted_at IS NULL
           AND purged_at IS NULL
           AND archived_at IS NULL
-          AND status IN ('PENDING','OPEN')`,
-    ).bind(timestamp, timestamp, actorId, timestamp, sessionId).run();
+          AND status IN ('PENDING','OPEN')
+          AND (? IS NULL OR assigned_operator_id=?)`,
+    ).bind(timestamp, timestamp, actorId, timestamp, sessionId, expectedOperatorId, expectedOperatorId).run();
   }
 
-  unarchive(sessionId: string, timestamp: string) {
+  unarchive(
+    sessionId: string,
+    timestamp: string,
+    expectedOperatorId: string | null = null,
+  ) {
     return this.database.prepare(
       `UPDATE sessions
           SET archived_at=NULL,
@@ -76,11 +92,17 @@ export class SessionRepository {
         WHERE id=?
           AND deleted_at IS NULL
           AND purged_at IS NULL
-          AND (archived_at IS NOT NULL OR status IN ('ARCHIVED','CLOSED'))`,
-    ).bind(timestamp, sessionId).run();
+          AND (archived_at IS NOT NULL OR status IN ('ARCHIVED','CLOSED'))
+          AND (? IS NULL OR assigned_operator_id=?)`,
+    ).bind(timestamp, sessionId, expectedOperatorId, expectedOperatorId).run();
   }
 
-  moveToTrash(sessionId: string, actorId: string, timestamp: string) {
+  moveToTrash(
+    sessionId: string,
+    actorId: string,
+    timestamp: string,
+    expectedOperatorId: string | null = null,
+  ) {
     return this.database.prepare(
       `UPDATE sessions
           SET status='ARCHIVED',
@@ -92,11 +114,25 @@ export class SessionRepository {
         WHERE id=?
           AND deleted_at IS NULL
           AND purged_at IS NULL
-          AND (archived_at IS NOT NULL OR status IN ('ARCHIVED','CLOSED'))`,
-    ).bind(timestamp, timestamp, timestamp, actorId, timestamp, sessionId).run();
+          AND (archived_at IS NOT NULL OR status IN ('ARCHIVED','CLOSED'))
+          AND (? IS NULL OR assigned_operator_id=?)`,
+    ).bind(
+      timestamp,
+      timestamp,
+      timestamp,
+      actorId,
+      timestamp,
+      sessionId,
+      expectedOperatorId,
+      expectedOperatorId,
+    ).run();
   }
 
-  restore(sessionId: string, timestamp: string) {
+  restore(
+    sessionId: string,
+    timestamp: string,
+    expectedOperatorId: string | null = null,
+  ) {
     return this.database.prepare(
       `UPDATE sessions
           SET deleted_at=NULL,
@@ -105,7 +141,10 @@ export class SessionRepository {
               archived_at=COALESCE(archived_at,?),
               closed_at=COALESCE(closed_at,?),
               updated_at=?
-        WHERE id=? AND deleted_at IS NOT NULL AND purged_at IS NULL`,
-    ).bind(timestamp, timestamp, timestamp, sessionId).run();
+        WHERE id=?
+          AND deleted_at IS NOT NULL
+          AND purged_at IS NULL
+          AND (? IS NULL OR assigned_operator_id=?)`,
+    ).bind(timestamp, timestamp, timestamp, sessionId, expectedOperatorId, expectedOperatorId).run();
   }
 }
