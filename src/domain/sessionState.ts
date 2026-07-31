@@ -6,11 +6,33 @@ export type SessionGroup = Exclude<SessionBucket, 'purged'>;
 
 export type SessionStateInput = {
   status?: string | null;
+  assignedOperatorId?: string | null;
+  archivedAt?: string | null;
+  deletedAt?: string | null;
+  purgedAt?: string | null;
+};
+
+export type StoredSessionStateInput = {
+  status?: string | null;
   assigned_operator_id?: string | null;
   archived_at?: string | null;
   deleted_at?: string | null;
   purged_at?: string | null;
 };
+
+export type SessionStateLike = SessionStateInput | StoredSessionStateInput;
+
+function canonicalState(session: SessionStateLike): SessionStateInput {
+  const stored = session as StoredSessionStateInput;
+  const domain = session as SessionStateInput;
+  return {
+    status: session.status,
+    assignedOperatorId: domain.assignedOperatorId ?? stored.assigned_operator_id ?? null,
+    archivedAt: domain.archivedAt ?? stored.archived_at ?? null,
+    deletedAt: domain.deletedAt ?? stored.deleted_at ?? null,
+    purgedAt: domain.purgedAt ?? stored.purged_at ?? null,
+  };
+}
 
 export function normalizeStoredStatus(status?: string | null): NormalizedSessionStatus {
   if (status === 'OPEN') return 'OPEN';
@@ -18,52 +40,55 @@ export function normalizeStoredStatus(status?: string | null): NormalizedSession
   return 'ARCHIVED';
 }
 
-export function sessionBucketOf(session?: SessionStateInput | null): SessionBucket | null {
+export function sessionBucketOf(session?: SessionStateLike | null): SessionBucket | null {
   if (!session) return null;
-  if (session.purged_at) return 'purged';
-  if (session.deleted_at) return 'trash';
-  if (session.archived_at || session.status === 'ARCHIVED' || session.status === 'CLOSED') return 'archived';
+  const state = canonicalState(session);
+  if (state.purgedAt) return 'purged';
+  if (state.deletedAt) return 'trash';
+  if (state.archivedAt || state.status === 'ARCHIVED' || state.status === 'CLOSED') {
+    return 'archived';
+  }
   return 'active';
 }
 
-export function sessionGroupOf(session?: SessionStateInput | null): SessionGroup | null {
+export function sessionGroupOf(session?: SessionStateLike | null): SessionGroup | null {
   const bucket = sessionBucketOf(session);
   return bucket === 'purged' ? null : bucket;
 }
 
-export function isArchivedSession(session?: SessionStateInput | null): boolean {
+export function isArchivedSession(session?: SessionStateLike | null): boolean {
   return sessionBucketOf(session) === 'archived';
 }
 
-export function isSessionEnded(session?: SessionStateInput | null): boolean {
+export function isSessionEnded(session?: SessionStateLike | null): boolean {
   const bucket = sessionBucketOf(session);
   return bucket === null || bucket !== 'active';
 }
 
-export function canSendMessage(session?: SessionStateInput | null): boolean {
+export function canSendMessage(session?: SessionStateLike | null): boolean {
   return sessionBucketOf(session) === 'active';
 }
 
-export function canArchive(session?: SessionStateInput | null): boolean {
+export function canArchive(session?: SessionStateLike | null): boolean {
   return sessionBucketOf(session) === 'active';
 }
 
-export function canUnarchive(session?: SessionStateInput | null): boolean {
+export function canUnarchive(session?: SessionStateLike | null): boolean {
   return sessionBucketOf(session) === 'archived';
 }
 
-export function canMoveToTrash(session?: SessionStateInput | null): boolean {
+export function canMoveToTrash(session?: SessionStateLike | null): boolean {
   return sessionBucketOf(session) === 'archived';
 }
 
-export function canRestore(session?: SessionStateInput | null): boolean {
+export function canRestore(session?: SessionStateLike | null): boolean {
   return sessionBucketOf(session) === 'trash';
 }
 
-export function canPurge(session?: SessionStateInput | null): boolean {
+export function canPurge(session?: SessionStateLike | null): boolean {
   return sessionBucketOf(session) === 'trash';
 }
 
-export function restoredActiveStatus(session: SessionStateInput): ActiveSessionStatus {
-  return session.assigned_operator_id ? 'OPEN' : 'PENDING';
+export function restoredActiveStatus(session: SessionStateLike): ActiveSessionStatus {
+  return canonicalState(session).assignedOperatorId ? 'OPEN' : 'PENDING';
 }
