@@ -52,3 +52,24 @@ test('maps legacy session DTO and normalizes nested API payloads', () => {
   const payload = normalizeApiPayload({ messages: [rawMessage], session });
   assert.equal(payload.messages[0].sessionId, 'sess_1');
 });
+
+test('fails closed for missing, legacy or unknown session statuses', () => {
+  for (const status of [undefined, null, '', 'UNKNOWN', 'BROKEN', 'CLOSED']) {
+    assert.equal(mapChatSessionDto({ id: 'sess_1', status }).status, 'ARCHIVED');
+  }
+  assert.equal(mapChatSessionDto({ id: 'sess_1', status: 'PENDING' }).status, 'PENDING');
+  assert.equal(mapChatSessionDto({ id: 'sess_1', status: 'OPEN' }).status, 'OPEN');
+});
+
+test('normalizes malformed session status instead of passing raw DTO through', () => {
+  const payload = normalizeApiPayload({
+    session: {
+      id: 'sess_1',
+      status: null,
+      assigned_operator_id: null,
+    },
+  });
+  assert.equal(payload.session.status, 'ARCHIVED');
+  assert.equal(payload.session.assignedOperatorId, null);
+  assert.equal('assigned_operator_id' in payload.session, false);
+});
