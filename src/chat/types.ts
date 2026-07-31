@@ -1,6 +1,6 @@
-import type { SessionGroup } from '../domain/sessionState';
+import type { SessionGroup } from '../domain/sessionState.ts';
 
-export type { SessionGroup } from '../domain/sessionState';
+export type { SessionGroup } from '../domain/sessionState.ts';
 
 export type MessageStatus = 'sending' | 'sent' | 'read' | 'failed' | 'recalled';
 export type MessageType = 'text' | 'image';
