@@ -1,0 +1,43 @@
+name: Update maintainability CI
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    if: github.head_ref == 'refactor/maintainability-session-state-phase1' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/maintainability-session-state-phase1
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Update contracts and CI labels
+        run: |
+          python3 scripts/update-maintainability-ci.py
+          git checkout HEAD -- scripts/update-maintainability-ci.py .github/workflows/update-maintainability-ci.yml
+
+      - name: Commit CI contract update
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/check-session-lifecycle.mjs .github/workflows/productization-validation.yml
+          git commit -m 'test: separate static unit and integration validation'
+          git push origin HEAD:refactor/maintainability-session-state-phase1
+
+      - name: Validate contracts
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check:static-contracts
+          npm run typecheck
+          npm run test
+          npm run build
