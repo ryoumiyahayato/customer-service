@@ -85,10 +85,14 @@ try {
 
   check('Worker imports runLifecycle', worker.includes("import { runLifecycle } from './sessionLifecycle'"));
   check('Scheduled handler calls runLifecycle', worker.includes('const result = await runLifecycle(env)'));
-  check('sessionAction close sets status ARCHIVED', worker.includes("action === 'close'") && worker.includes("status='ARCHIVED'"));
-  check('sessionAction close/archive binds values in SQL placeholder order', worker.includes('.bind(t, t, admin.id, t, sessionId).run()'));
-  check('sessionAction delete checks purged_at', worker.includes("action === 'delete'") && worker.includes('purged_at IS NULL'));
-  check('sessionAction restore checks purged_at', worker.includes("action === 'restore'") && worker.includes('purged_at IS NULL'));
+  const sessionRepository = readFile('src/repositories/sessionRepository.ts');
+  const sessionService = readFile('src/services/sessionService.ts');
+  check('session service owns archive actions', sessionService.includes("action === 'close' || action === 'archive'") && sessionService.includes('this.sessions.archive'));
+  check('session repository writes ARCHIVED with ordered bindings', sessionRepository.includes("status='ARCHIVED'") && sessionRepository.includes('.bind(timestamp, timestamp, actorId, timestamp, sessionId).run()'));
+  check('session repository delete checks purged_at', sessionRepository.includes('moveToTrash') && sessionRepository.includes('purged_at IS NULL'));
+  check('session repository restore checks purged_at', sessionRepository.includes('restore(sessionId') && sessionRepository.includes('deleted_at IS NOT NULL AND purged_at IS NULL'));
+  check('runtime worker delegates session actions to SessionService', worker.includes('new SessionService(') && worker.includes('service.execute(admin, sessionId, action, now())'));
+  check('runtime worker contains no legacy unarchive write to CLOSED', !worker.includes("status='CLOSED'"));
 
   check('chatModel is a compatibility barrel over split chat modules', chatModel.includes("export * from './chat/types'") && chatModel.includes("export * from './chat/eventParser'") && chatModel.includes("export * from './chat/messageMerge'"));
   check('realtime events use a discriminated union', chatEvents.includes("type: 'message:new' | 'message_created'") && chatEvents.includes("type: 'messages:read'") && chatEvents.includes('export type ChatRealtimeEvent ='));
