@@ -88,9 +88,10 @@ try {
   const sessionRepository = readFile('src/repositories/sessionRepository.ts');
   const sessionService = readFile('src/services/sessionService.ts');
   check('session service owns archive actions', sessionService.includes("action === 'close' || action === 'archive'") && sessionService.includes('this.sessions.archive'));
-  check('session repository writes ARCHIVED with ordered bindings', sessionRepository.includes("status='ARCHIVED'") && sessionRepository.includes('.bind(timestamp, timestamp, actorId, timestamp, sessionId).run()'));
+  check('session repository writes ARCHIVED and enforces operator ownership', sessionRepository.includes("status='ARCHIVED'") && sessionRepository.includes('expectedOperatorId') && sessionRepository.includes('assigned_operator_id=?'));
+  check('session service passes operator ownership to repository writes', sessionService.includes('expectedOperatorId(actor)') && sessionService.includes("actor.role === 'SUPER_ADMIN'"));
   check('session repository delete checks purged_at', sessionRepository.includes('moveToTrash') && sessionRepository.includes('purged_at IS NULL'));
-  check('session repository restore checks purged_at', sessionRepository.includes('restore(sessionId') && sessionRepository.includes('deleted_at IS NOT NULL AND purged_at IS NULL'));
+  check('session repository restore checks purged_at', sessionRepository.includes('restore(') && sessionRepository.includes('deleted_at IS NOT NULL') && sessionRepository.includes('purged_at IS NULL'));
   check('runtime worker delegates session actions to SessionService', worker.includes('new SessionService(') && worker.includes('service.execute(admin, sessionId, action, now())'));
   check(
     'runtime worker contains no legacy CLOSED write',
