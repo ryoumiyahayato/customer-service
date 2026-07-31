@@ -74,15 +74,14 @@ jobs:
       - name: Root production dependency audit
         run: npm audit --omit=dev --audit-level=high --no-fund
 
-      - name: Root development dependency advisory
-        continue-on-error: true
+      - name: Root development dependency audit
         run: npm audit --audit-level=high --no-fund
 
       - name: Root admin message race guard
         run: npm run check:admin-race
 
-      - name: Root session lifecycle static contracts
-        run: npm run check-session-lifecycle-static
+      - name: Static Contract Checks
+        run: npm run check:static-contracts
 
       - name: Root high-risk business closure check
         run: npm run check:business-closures
@@ -93,11 +92,14 @@ jobs:
       - name: Root obvious code issues
         run: npm run check:obvious
 
-      - name: Root typecheck
+      - name: Type Checks
         run: npm run typecheck
 
-      - name: Root unit behavior tests
+      - name: Unit Tests
         run: npm run test:unit
+
+      - name: SQLite Integration Tests
+        run: npm run test:integration
 
       - name: Root doctor
         run: npm run doctor
@@ -107,7 +109,7 @@ jobs:
           # CI does not use Cloudflare secrets, so this does not run the real Wrangler D1 dry-run.
           npm run lifecycle:ci-check
 
-      - name: Root build
+      - name: Build and Cloudflare Dry Run
         run: npm run build
 
       - name: Linux shell syntax checks
@@ -247,12 +249,14 @@ jobs:
       - name: Root production dependency audit
         run: npm audit --omit=dev --audit-level=high --no-fund
 
-      - name: Root development dependency advisory
-        continue-on-error: true
+      - name: Root development dependency audit
         run: npm audit --audit-level=high --no-fund
 
-      - name: Root unit behavior tests
+      - name: Unit Tests
         run: npm run test:unit
+
+      - name: SQLite Integration Tests
+        run: npm run test:integration
 
       - name: Root build
         shell: bash
