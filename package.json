@@ -11,7 +11,7 @@
     "check:lifecycle-boundaries": "node scripts/check-lifecycle-sql-boundaries.mjs",
     "check:business-closures": "node scripts/check-high-risk-business-closures.mjs && node scripts/check-lifecycle-sql-boundaries.mjs",
     "test": "npm run test:unit",
-    "test:unit": "node --experimental-strip-types --test tests/unit/*.test.mjs",
+    "test:unit": "node --experimental-strip-types --experimental-sqlite --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "bootstrap:cloudflare": "node scripts/bootstrap-cloudflare.mjs",
     "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
     "build": "vite build && wrangler deploy --dry-run --outdir .wrangler-dry-run",
