@@ -5,7 +5,7 @@ import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { jsonResponse } from './security/responseHeaders';
-import { readJsonObjectWithinLimit } from './security/requestLimits';
+import { jsonObject, readJsonObjectWithinLimit } from './security/requestLimits';
 import { consumeRateLimit } from './security/rateLimit';
 
 type WorkerModule = {

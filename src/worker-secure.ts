@@ -2,7 +2,7 @@ export { ChatRoom } from './worker';
 import worker from './worker';
 import type { Env } from './worker';
 import { COOKIE_NAMES, clearSessionCookie, readCookie } from './security/cookies';
-import { hmacHex, verifySignedValue } from './security/signing';
+import { verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { jsonResponse, withSecurityHeaders } from './security/responseHeaders';
 import { contentLengthExceeds, requestStreamExceeds } from './security/requestLimits';
@@ -95,7 +95,6 @@ function isSameOriginWebSocket(req: Request) {
 
 const getCookie = readCookie;
 const clearCookie = clearSessionCookie;
-async function hmac(secret: string, value: string) { return hmacHex(secret, value); }
 async function verifySignedId(env: Env, token?: string) { return verifySignedValue(env.SESSION_SECRET, token); }
 async function tokenHash(env: Env, value: string) { return hashSessionToken(env.SESSION_SECRET, value); }
 

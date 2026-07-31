@@ -11,7 +11,7 @@ import { AttachmentService } from './services/attachmentService';
 import { COOKIE_NAMES, clearSessionCookie, readCookie, serializeSessionCookie } from './security/cookies';
 import { constantTimeEqual, hmacHex, signValue, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
-import { jsonResponse } from './security/responseHeaders';
+import { SECURITY_HEADERS, jsonResponse } from './security/responseHeaders';
 export interface Env {
   DB: D1Database;
   UPLOADS: R2Bucket;
@@ -1148,7 +1148,7 @@ async function api(req: Request, env: Env) {
 
 const BACKEND_HOST = 'denglu.kefuxitong.net';
 const HEX_INVITE_TOKEN = /^[a-f0-9]{40}$/;
-const noStoreHeaders = { 'cache-control': 'no-store', 'strict-transport-security': HSTS_HEADER };
+const noStoreHeaders = { 'cache-control': 'no-store', 'strict-transport-security': SECURITY_HEADERS['Strict-Transport-Security'] };
 const empty = (status: number) => new Response(null, { status, headers: noStoreHeaders });
 
 function isLocalDevHost(host: string) {
@@ -1162,7 +1162,7 @@ function withNoStore(response: Response) {
   if ((response as Response & { webSocket?: unknown }).webSocket) return response;
   const headers = new Headers(response.headers);
   headers.set('cache-control', 'no-store');
-  headers.set('strict-transport-security', HSTS_HEADER);
+  headers.set('strict-transport-security', SECURITY_HEADERS['Strict-Transport-Security']);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
