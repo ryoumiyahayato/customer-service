@@ -103,18 +103,18 @@ export class InterleavingSessionRepository extends SessionRepository {
     this.hook = hook;
   }
 
-  async assign(sessionId, actorId, timestamp) {
+  async assign(sessionId, actorId, timestamp, expectedOperatorId = null) {
     await this.hook('assign', sessionId);
-    return super.assign(sessionId, actorId, timestamp);
+    return super.assign(sessionId, actorId, timestamp, expectedOperatorId);
   }
 
-  async archive(sessionId, actorId, timestamp) {
+  async archive(sessionId, actorId, timestamp, expectedOperatorId = null) {
     await this.hook('archive', sessionId);
-    return super.archive(sessionId, actorId, timestamp);
+    return super.archive(sessionId, actorId, timestamp, expectedOperatorId);
   }
 
-  async moveToTrash(sessionId, actorId, timestamp) {
+  async moveToTrash(sessionId, actorId, timestamp, expectedOperatorId = null) {
     await this.hook('moveToTrash', sessionId);
-    return super.moveToTrash(sessionId, actorId, timestamp);
+    return super.moveToTrash(sessionId, actorId, timestamp, expectedOperatorId);
   }
 }
