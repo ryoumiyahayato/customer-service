@@ -21,17 +21,20 @@ jobs:
         with:
           node-version: 22
 
-      - name: Update contracts and CI labels
+      - name: Update static contracts
         run: |
           python3 scripts/update-maintainability-ci.py
-          git checkout HEAD -- scripts/update-maintainability-ci.py .github/workflows/update-maintainability-ci.yml
+          git checkout HEAD -- \
+            scripts/update-maintainability-ci.py \
+            .github/workflows/update-maintainability-ci.yml \
+            .github/workflows/productization-validation.yml
 
-      - name: Commit CI contract update
+      - name: Commit static contract update
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add scripts/check-session-lifecycle.mjs .github/workflows/productization-validation.yml
-          git commit -m 'test: separate static unit and integration validation'
+          git add scripts/check-session-lifecycle.mjs
+          git commit -m 'test: align lifecycle contracts with repositories'
           git push origin HEAD:refactor/maintainability-session-state-phase1
 
       - name: Validate contracts
