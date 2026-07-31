@@ -16,12 +16,20 @@ const worker = readFile('src/worker.ts');
 const lifecycle = readFile('src/sessionLifecycle.ts');
 const sessionState = readFile('src/domain/sessionState.ts');
 const chatModel = readFile('src/chatModel.ts');
+const chatEvents = readFile('src/chat/events.ts');
+const eventParser = readFile('src/chat/eventParser.ts');
+const messageMerge = readFile('src/chat/messageMerge.ts');
+const chatMappers = readFile('src/chat/mappers.ts');
 const dashboard = readFile('src/admin/AdminDashboard.tsx');
+const guestChat = readFile('src/visitor/GuestChat.tsx');
 const sessionList = readFile('src/admin/AdminSessionList.tsx');
 const purgeMigration = readFile('migrations/0009_add_purged_at.sql');
 const unarchiveMigration = readFile('migrations/0010_normalize_unarchive_state.sql');
 const unitBehaviorTest = readFile('tests/unit/sessionState.test.mjs');
 const integrationBehaviorTest = readFile('tests/integration/sessionLifecycle.sqlite.test.mjs');
+const mapperTest = readFile('tests/unit/chatMappers.test.mjs');
+const eventTest = readFile('tests/unit/chatEvents.test.mjs');
+const mergeTest = readFile('tests/unit/messageMerge.test.mjs');
 const ciCheck = readFile('scripts/lifecycle-ci-check.mjs');
 const packageJson = JSON.parse(readFile('package.json'));
 
@@ -31,10 +39,10 @@ const results = [];
 
 function check(name, ok) {
   if (ok) {
-    passed++;
+    passed += 1;
     results.push(`  PASS  ${name}`);
   } else {
-    failed++;
+    failed += 1;
     results.push(`  FAIL  ${name}`);
   }
 }
@@ -48,9 +56,11 @@ try {
   check('Migration 0010 excludes trash and purged rows', unarchiveMigration.includes('NEW.deleted_at IS NULL') && unarchiveMigration.includes('NEW.purged_at IS NULL'));
 
   check('sessionState defines the only SessionBucket union', sessionState.includes("export type SessionBucket = 'active' | 'archived' | 'trash' | 'purged'"));
-  check('sessionState checks purged before trash', sessionState.indexOf("if (session.purged_at) return 'purged'") < sessionState.indexOf("if (session.deleted_at) return 'trash'"));
-  check('sessionState accepts legacy CLOSED as archived read data', sessionState.includes("session.status === 'CLOSED'"));
-  check('sessionState restores assigned sessions to OPEN', sessionState.includes("return session.assigned_operator_id ? 'OPEN' : 'PENDING'"));
+  const purgedIndex = sessionState.indexOf("if (state.purgedAt) return 'purged'");
+  const trashIndex = sessionState.indexOf("if (state.deletedAt) return 'trash'");
+  check('sessionState checks purged before trash', purgedIndex >= 0 && trashIndex > purgedIndex);
+  check('sessionState accepts legacy CLOSED as archived read data', sessionState.includes("state.status === 'CLOSED'"));
+  check('sessionState restores assigned sessions to OPEN', sessionState.includes("canonicalState(session).assignedOperatorId ? 'OPEN' : 'PENDING'"));
   check('sessionState exposes action guards', ['canSendMessage', 'canArchive', 'canUnarchive', 'canMoveToTrash', 'canRestore', 'canPurge'].every((name) => sessionState.includes(`export function ${name}`)));
 
   check('sessionLifecycle imports shared state rules', lifecycle.includes("from './domain/sessionState'"));
@@ -80,27 +90,33 @@ try {
   check('sessionAction delete checks purged_at', worker.includes("action === 'delete'") && worker.includes('purged_at IS NULL'));
   check('sessionAction restore checks purged_at', worker.includes("action === 'restore'") && worker.includes('purged_at IS NULL'));
 
-  check('chatModel imports shared session rules', chatModel.includes("from './domain/sessionState'"));
-  check('chatModel uses discriminated realtime event types', chatModel.includes("type: 'message:new' | 'message_created'") && chatModel.includes("type: 'messages:read'"));
-  check('chatModel validates unknown realtime payloads', chatModel.includes('export function parseChatRealtimeEvent(value: unknown)'));
-  check('chatModel prevents local optimistic data replacing server messages', chatModel.includes('preferServerMessage'));
+  check('chatModel is a compatibility barrel over split chat modules', chatModel.includes("export * from './chat/types'") && chatModel.includes("export * from './chat/eventParser'") && chatModel.includes("export * from './chat/messageMerge'"));
+  check('realtime events use a discriminated union', chatEvents.includes("type: 'message:new' | 'message_created'") && chatEvents.includes("type: 'messages:read'") && chatEvents.includes('export type ChatRealtimeEvent ='));
+  check('unknown realtime payloads are validated', eventParser.includes('export function parseChatRealtimeEvent(value: unknown)') && eventParser.includes('return null'));
+  check('server messages win over optimistic copies', messageMerge.includes('preferServerMessage') && messageMerge.includes('isServerMessage(current) && !isServerMessage(incoming)'));
+  check('DTO compatibility is isolated in mappers', chatMappers.includes('export function mapChatMessageDto') && chatMappers.includes('export function mapChatSessionDto') && chatMappers.includes('normalizeApiPayload'));
+  check('Dashboard consumes the realtime parser', dashboard.includes('parseChatRealtimeEvent(JSON.parse(e.data))'));
+  check('Guest chat consumes the realtime parser', guestChat.includes('parseChatRealtimeEvent(JSON.parse(e.data))'));
 
   check('Dashboard imports shared SessionGroup', dashboard.includes('type SessionGroup,'));
+  check('Dashboard imports shared sessionGroupOf', dashboard.includes('sessionGroupOf,'));
   check('SessionList imports shared SessionGroup', sessionList.includes('ChatSession, SessionGroup'));
   check('SessionList has trash tab', sessionList.includes("{ key: 'trash', label: '回收站' }"));
   check('SessionList no longer has ended tab', !sessionList.includes("key: 'ended'"));
   check('SessionList no longer has deleted tab', !sessionList.includes("key: 'deleted'"));
 
-  check('package.json exposes static lifecycle contract command', packageJson.scripts?.['check-session-lifecycle-static'] === 'node scripts/check-session-lifecycle.mjs');
-  check(
-    'package.json exposes executable unit and sqlite behavior tests',
-    packageJson.scripts?.['test:unit'] === 'node --experimental-strip-types --experimental-sqlite --test tests/unit/*.test.mjs tests/integration/*.test.mjs',
-  );
+  check('package.json exposes static lifecycle contract command', packageJson.scripts?.['check:static-contracts'] === 'node scripts/check-session-lifecycle.mjs');
+  check('package.json exposes separate unit tests', packageJson.scripts?.['test:unit'] === 'node --experimental-strip-types --test tests/unit/*.test.mjs');
+  check('package.json exposes separate sqlite integration tests', packageJson.scripts?.['test:integration'] === 'node --experimental-sqlite --test tests/integration/*.test.mjs');
+  check('package.json composes unit and integration tests', packageJson.scripts?.test === 'npm run test:unit && npm run test:integration');
   check('unit behavior tests cover assigned and unassigned restore targets', unitBehaviorTest.includes("'OPEN'") && unitBehaviorTest.includes("'PENDING'"));
   check('unit behavior tests cover legacy CLOSED compatibility', unitBehaviorTest.includes('legacyClosed'));
   check('sqlite behavior tests execute migration 0010', integrationBehaviorTest.includes('db.exec(migration)'));
   check('sqlite behavior tests cover assigned and unassigned unarchive', integrationBehaviorTest.includes("status: 'OPEN'") && integrationBehaviorTest.includes("status, 'PENDING'"));
   check('sqlite behavior tests protect trash and purged sessions', integrationBehaviorTest.includes('does not reactivate trash or purged sessions'));
+  check('mapper tests cover snake_case to camelCase conversion', mapperTest.includes('session_id') && mapperTest.includes('sessionId'));
+  check('event tests reject malformed realtime payloads', eventTest.includes("parseChatRealtimeEvent({ type: 'message:new' })") && eventTest.includes('null'));
+  check('merge tests protect server messages', mergeTest.includes('does not let a local pending copy overwrite a server message'));
   check('CI-safe lifecycle check does not access D1 or Cloudflare', ciCheck.includes('d1Accessed: false') && ciCheck.includes('cloudflareAccessed: false'));
 
   check(
