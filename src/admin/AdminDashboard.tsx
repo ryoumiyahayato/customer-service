@@ -11,7 +11,7 @@ import { InlineNotice } from '../ui/Notice';
 import { LoadingState, StatusBlock } from '../ui/StatusBlock';
 import {
   fallbackDelay,
-  isMessageCreatedEvent,
+  isArchivedSession,
   isSessionEnded,
   parseChatRealtimeEvent,
   sessionGroupOf,
@@ -63,10 +63,17 @@ const applyReadReceipt = (messages: Message[], messageIds: string[] = [], readAt
   if (!messageIds.length) return messages;
   const ids = new Set(messageIds);
   return messages.map((message) => ids.has(message.id)
-    ? { ...message, isRead: 1, status: message.status === 'sent' ? 'read' : message.status, readAt: message.readAt || readAt || new Date().toISOString() }
+    ? { ...message, isRead: true, status: message.status === 'sent' ? 'read' : message.status, readAt: message.readAt || readAt || new Date().toISOString() }
     : message);
 };
-const eventSessionId = (event: ChatRealtimeEvent, fallbackSessionId: string) => String(event.session?.id || messageSessionId(event.message) || event.sessionId || fallbackSessionId || '');
+const eventSessionId = (event: ChatRealtimeEvent, fallbackSessionId: string) => {
+  if (event.type === 'message:new' || event.type === 'message_created' || event.type === 'message:updated') {
+    return event.message.sessionId || event.sessionId || fallbackSessionId;
+  }
+  if (event.type === 'session:updated') return event.session.id || event.sessionId || fallbackSessionId;
+  if (event.type === 'messages:read' || event.type === 'message:deleted') return event.sessionId || fallbackSessionId;
+  return fallbackSessionId;
+};
 
 /* ========== ADMIN DASHBOARD ========== */
 export default function AdminDashboard() {
@@ -277,7 +284,7 @@ export default function AdminDashboard() {
         if (sidFromEvent && sidFromEvent !== sid) { if (d.session) setSessions(prev => prev.map(s => s.id === d.session.id ? { ...s, ...d.session } : s)); return; }
         if (!isActiveAdminSession(sid)) { if (d.session) setSessions(prev => prev.map(s => s.id === d.session.id ? { ...s, ...d.session } : s)); return; }
         if ((isMessageCreatedEvent(d.type) || d.type === 'message:updated') && d.message && !messageBelongsToActiveSession(d.message, sid)) return;
-        if (isMessageCreatedEvent(d.type)) { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); if (d.session) { setCur(c => c?.id === d.session.id ? d.session : c); } }
+        if (d.type === 'message:new' || d.type === 'message_created') { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); if (d.session) { setCur(c => c?.id === d.session.id ? d.session : c); } }
         else if (d.type === 'message:updated') { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); }
         else if (d.type === 'messages:read') { setSelectedMsgs(prev => applyReadReceipt(filterMessagesForSession(prev, sid), d.messageIds, d.readAt)); }
         else if (d.type === 'message:deleted') { setSelectedMsgs(prev => filterMessagesForSession(prev, sid).map(m => m.id === d.messageId ? { ...m, deletedAt: new Date().toISOString() } : m)); }
@@ -361,7 +368,7 @@ export default function AdminDashboard() {
       status: 'sending',
       createdAt: new Date().toISOString(),
       readAt: null,
-      isRead: 0,
+      isRead: false,
       quoteMessageId: currentQuote?.id || null,
       clientMessageId: clientMessageId
     };
@@ -393,7 +400,7 @@ export default function AdminDashboard() {
       const res = await apiFetch<UploadResponse>(`/api/upload?sessionId=${encodeURIComponent(sid)}`, { method: 'POST', body: fd });
       if (!isActiveAdminSession(sid)) return;
       tempId = localMessageId(clientMessageId);
-      setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), { id: tempId, sessionId: sid, senderType: 'OPERATOR', senderId: admin?.id || '', content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: 0, quoteMessageId: null, clientMessageId: clientMessageId }));
+      setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), { id: tempId, sessionId: sid, senderType: 'OPERATOR', senderId: admin?.id || '', content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: false, quoteMessageId: null, clientMessageId: clientMessageId }));
       const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: sid, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'OPERATOR' }) });
       if (!isActiveAdminSession(sid)) return;
       if (msgRes?.message && messageBelongsToActiveSession(msgRes.message, sid)) setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), msgRes.message));

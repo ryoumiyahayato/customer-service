@@ -8,7 +8,6 @@ import GuestMessageList from './GuestMessageList';
 import { NetworkNotice } from '../ui/Notice';
 import {
   fallbackDelay,
-  isMessageCreatedEvent,
   isSessionEnded,
   parseChatRealtimeEvent,
   lastServerMessageTime,
@@ -54,7 +53,7 @@ const unreadOperatorMessageIds = (messages: Message[], sessionId?: string) => me
 const markMessagesCustomerRead = (messages: Message[], messageIds: string[], readAt = new Date().toISOString()) => {
   const idSet = new Set(messageIds.map((id) => String(id)));
   return messages.map((msg) => idSet.has(String(msg.id))
-    ? { ...msg, isRead: 1, status: msg.status === 'sent' ? 'read' : msg.status, readAt: msg.readAt || readAt }
+    ? { ...msg, isRead: true, status: msg.status === 'sent' ? 'read' : msg.status, readAt: msg.readAt || readAt }
     : msg);
 };
 const isNotFoundStatus = (status?: number) => status === 401 || status === 403 || status === 404 || status === 410;
@@ -261,7 +260,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       try {
         const d = parseChatRealtimeEvent(JSON.parse(e.data));
         if (!d) return;
-        if (isMessageCreatedEvent(d.type)) {
+        if (d.type === 'message:new' || d.type === 'message_created') {
           setMessages(prev => {
             const next = mergeMessage(prev, d.message);
             messagesRef.current = next;
@@ -417,7 +416,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       status: 'sending',
       createdAt: new Date().toISOString(),
       readAt: null,
-      isRead: 0,
+      isRead: false,
       quoteMessageId: currentQuote?.id || null,
       clientMessageId: clientMessageId
     };
@@ -444,7 +443,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       const fd = new FormData(); fd.append('file', file); fd.append('sessionId', sessionId);
       const res = await apiFetch<UploadResponse>(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST', body: fd });
       tempId = localMessageId(clientMessageId);
-      setMessages(prev => mergeMessage(prev, { id: tempId, sessionId: sessionId, senderType: 'VISITOR', senderId: visitorId, content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: 0, quoteMessageId: null, clientMessageId: clientMessageId }));
+      setMessages(prev => mergeMessage(prev, { id: tempId, sessionId: sessionId, senderType: 'VISITOR', senderId: visitorId, content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: false, quoteMessageId: null, clientMessageId: clientMessageId }));
       const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
       if (msgRes?.message) setMessages(prev => mergeMessage(prev, msgRes.message));
     } catch (error) { if (isSessionGoneError(error)) { showNotFound(); } else { if (tempId) setMessages(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); setNetworkBanner(true); } }
