@@ -45,7 +45,7 @@ jobs:
           fi
 
       - name: Refresh Wrangler toolchain lock
-        run: npm install --save-dev --save-exact wrangler@4.116.0 --no-audit --no-fund
+        run: npm install --save-dev --save-exact @cloudflare/workers-types@5.20260731.1 wrangler@4.116.0 --no-audit --no-fund
 
       - name: Commit converted boundaries
         run: |
