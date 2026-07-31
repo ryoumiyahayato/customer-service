@@ -1,9 +1,8 @@
 name: Apply maintainability stage 2
 
 on:
-  push:
-    branches:
-      - refactor/maintainability-session-state-phase1
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: write
@@ -12,7 +11,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore: apply maintainability refactor stage 2'
+    if: github.head_ref == 'refactor/maintainability-session-state-phase1'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +24,6 @@ jobs:
           node-version: 22
 
       - name: Apply repository transformation
-        id: transform
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
