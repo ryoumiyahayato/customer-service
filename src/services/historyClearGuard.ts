@@ -27,9 +27,12 @@ function historyClearConflict() {
 function dryRunRequest(req: Request) {
   const url = new URL(req.url);
   url.pathname += '/dry-run';
+  const headers = new Headers(req.headers);
+  headers.delete('content-length');
+  headers.delete('content-type');
   return new Request(url, {
     method: 'POST',
-    headers: req.headers,
+    headers,
   });
 }
 
@@ -84,7 +87,7 @@ export function createHistoryClearGuard<Env extends HistoryClearEnv>(
       const authorized = await inner.fetch(dryRunRequest(req), env, ctx);
       if (!authorized.ok) return authorized;
 
-      const sessionId = decodeURIComponent(match[1]);
+      const sessionId = match[1];
       const claimedAt = new Date().toISOString();
       if (!(await claimHistoryClear(env, sessionId, claimedAt))) {
         return historyClearConflict();
