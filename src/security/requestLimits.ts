@@ -1,3 +1,9 @@
+export function jsonObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 export function contentLengthExceeds(request: Request, maxBytes: number) {
   const raw = request.headers.get('content-length');
   return Boolean(raw && Number(raw) > maxBytes);
@@ -27,9 +33,6 @@ export async function readJsonObjectWithinLimit(request: Request, maxBytes: numb
   if (await requestStreamExceeds(request, maxBytes)) {
     return { body: {}, tooLarge: true } as const;
   }
-  const value = await request.clone().json().catch(() => null);
-  const body = value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  const body = jsonObject(await request.clone().json().catch(() => null));
   return { body, tooLarge: false } as const;
 }
