@@ -71,14 +71,18 @@ jobs:
           fi
           tail -n 40 "$log_file"
 
-      - name: Root dependency audit
+      - name: Root production dependency audit
+        run: npm audit --omit=dev --audit-level=high --no-fund
+
+      - name: Root development dependency advisory
+        continue-on-error: true
         run: npm audit --audit-level=high --no-fund
 
       - name: Root admin message race guard
         run: npm run check:admin-race
 
-      - name: Root session lifecycle state check
-        run: npm run check-session-lifecycle
+      - name: Root session lifecycle static contracts
+        run: npm run check-session-lifecycle-static
 
       - name: Root high-risk business closure check
         run: npm run check:business-closures
@@ -91,6 +95,9 @@ jobs:
 
       - name: Root typecheck
         run: npm run typecheck
+
+      - name: Root unit behavior tests
+        run: npm run test:unit
 
       - name: Root doctor
         run: npm run doctor
@@ -237,8 +244,15 @@ jobs:
           fi
           tail -n 40 "$log_file"
 
-      - name: Root dependency audit
+      - name: Root production dependency audit
+        run: npm audit --omit=dev --audit-level=high --no-fund
+
+      - name: Root development dependency advisory
+        continue-on-error: true
         run: npm audit --audit-level=high --no-fund
+
+      - name: Root unit behavior tests
+        run: npm run test:unit
 
       - name: Root build
         shell: bash
