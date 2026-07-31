@@ -20,7 +20,8 @@ const dashboard = readFile('src/admin/AdminDashboard.tsx');
 const sessionList = readFile('src/admin/AdminSessionList.tsx');
 const purgeMigration = readFile('migrations/0009_add_purged_at.sql');
 const unarchiveMigration = readFile('migrations/0010_normalize_unarchive_state.sql');
-const behaviorTest = readFile('tests/unit/sessionState.test.mjs');
+const unitBehaviorTest = readFile('tests/unit/sessionState.test.mjs');
+const integrationBehaviorTest = readFile('tests/integration/sessionLifecycle.sqlite.test.mjs');
 const ciCheck = readFile('scripts/lifecycle-ci-check.mjs');
 const packageJson = JSON.parse(readFile('package.json'));
 
@@ -91,9 +92,15 @@ try {
   check('SessionList no longer has deleted tab', !sessionList.includes("key: 'deleted'"));
 
   check('package.json exposes static lifecycle contract command', packageJson.scripts?.['check-session-lifecycle-static'] === 'node scripts/check-session-lifecycle.mjs');
-  check('package.json exposes executable unit tests', packageJson.scripts?.['test:unit'] === 'node --experimental-strip-types --test tests/unit/*.test.mjs');
-  check('behavior tests cover assigned and unassigned restore targets', behaviorTest.includes("'OPEN'") && behaviorTest.includes("'PENDING'"));
-  check('behavior tests cover legacy CLOSED compatibility', behaviorTest.includes('legacyClosed'));
+  check(
+    'package.json exposes executable unit and sqlite behavior tests',
+    packageJson.scripts?.['test:unit'] === 'node --experimental-strip-types --experimental-sqlite --test tests/unit/*.test.mjs tests/integration/*.test.mjs',
+  );
+  check('unit behavior tests cover assigned and unassigned restore targets', unitBehaviorTest.includes("'OPEN'") && unitBehaviorTest.includes("'PENDING'"));
+  check('unit behavior tests cover legacy CLOSED compatibility', unitBehaviorTest.includes('legacyClosed'));
+  check('sqlite behavior tests execute migration 0010', integrationBehaviorTest.includes('db.exec(migration)'));
+  check('sqlite behavior tests cover assigned and unassigned unarchive', integrationBehaviorTest.includes("status: 'OPEN'") && integrationBehaviorTest.includes("status, 'PENDING'"));
+  check('sqlite behavior tests protect trash and purged sessions', integrationBehaviorTest.includes('does not reactivate trash or purged sessions'));
   check('CI-safe lifecycle check does not access D1 or Cloudflare', ciCheck.includes('d1Accessed: false') && ciCheck.includes('cloudflareAccessed: false'));
 
   check(
