@@ -48,7 +48,10 @@ export function sessionBucketOf(session?: SessionStateLike | null): SessionBucke
   if (state.archivedAt || state.status === 'ARCHIVED' || state.status === 'CLOSED') {
     return 'archived';
   }
-  return 'active';
+  if (state.status === 'PENDING' || state.status === 'OPEN') {
+    return 'active';
+  }
+  return 'archived';
 }
 
 export function sessionGroupOf(session?: SessionStateLike | null): SessionGroup | null {
