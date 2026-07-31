@@ -1,4 +1,5 @@
-﻿import { isAbortControllerSupported, isAbortError } from './compat';
+import { isAbortControllerSupported, isAbortError } from './compat';
+import { normalizeApiPayload } from './chat/mappers';
 
 type ApiErrorData = Record<string, unknown> & {
   error?: string;
@@ -72,9 +73,9 @@ async function fetchOnce(input: RequestInfo | URL, options: ApiFetchOptions) {
 
   try {
     const response = await Promise.race([request, timeout]);
-    const data = await parseBody(response);
-    if (!response.ok) throw new ApiError(messageForStatus(response.status, data, pathFromInput(input)), response.status, data);
-    return data;
+    const rawData = await parseBody(response);
+    if (!response.ok) throw new ApiError(messageForStatus(response.status, rawData, pathFromInput(input)), response.status, rawData);
+    return normalizeApiPayload(rawData);
   } catch (error) {
     if (isAbortError(error)) throw new ApiError('请求超时，请检查网络后重试', 408);
     if (error instanceof ApiError) throw error;

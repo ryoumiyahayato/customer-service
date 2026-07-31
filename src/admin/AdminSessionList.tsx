@@ -71,10 +71,10 @@ export default function AdminSessionList({
             onClick={() => selectSession(session)}
           >
             <div className="avatar-dot">{customerAvatar(session)}</div>
-            <div className="session-main"><b>{customerName(session)}</b><p>{session.deleted_at ? '回收站' : session.archived_at || session.status === 'ARCHIVED' || session.status === 'CLOSED' ? '已归档' : '进行中'}</p></div>
+            <div className="session-main"><b>{customerName(session)}</b><p>{session.deletedAt ? '回收站' : session.archivedAt || session.status === 'ARCHIVED' || session.status === 'CLOSED' ? '已归档' : '进行中'}</p></div>
             <div className="session-meta">
-              <small>{formatTime(session.updated_at)}</small>
-              {(session.unread_count ?? 0) > 0 && <span className="badge">{session.unread_count}</span>}
+              <small>{formatTime(session.updatedAt)}</small>
+              {(session.unreadCount ?? 0) > 0 && <span className="badge">{session.unreadCount}</span>}
             </div>
           </button>
         ))}
