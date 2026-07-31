@@ -9,8 +9,24 @@ export type SessionRecord = {
   [key: string]: unknown;
 };
 
+export type SqlRunResult = {
+  meta?: {
+    changes?: number | null;
+  };
+};
+
+export interface SqlStatement {
+  bind(...values: unknown[]): SqlStatement;
+  first<T>(): Promise<T | null> | T | null;
+  run(): Promise<SqlRunResult> | SqlRunResult;
+}
+
+export interface SqlDatabase {
+  prepare(query: string): SqlStatement;
+}
+
 export class SessionRepository {
-  constructor(private readonly database: D1Database) {}
+  constructor(private readonly database: SqlDatabase) {}
 
   findById(sessionId: string) {
     return this.database.prepare('SELECT * FROM sessions WHERE id=?')
@@ -20,13 +36,32 @@ export class SessionRepository {
 
   assign(sessionId: string, actorId: string, timestamp: string) {
     return this.database.prepare(
-      "UPDATE sessions SET assigned_operator_id=?,last_operator_id=?,status='OPEN',updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL",
+      `UPDATE sessions
+          SET assigned_operator_id=?,
+              last_operator_id=?,
+              status='OPEN',
+              updated_at=?
+        WHERE id=?
+          AND deleted_at IS NULL
+          AND purged_at IS NULL
+          AND archived_at IS NULL
+          AND status IN ('PENDING','OPEN')`,
     ).bind(actorId, actorId, timestamp, sessionId).run();
   }
 
   archive(sessionId: string, actorId: string, timestamp: string) {
     return this.database.prepare(
-      "UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL",
+      `UPDATE sessions
+          SET status='ARCHIVED',
+              closed_at=COALESCE(closed_at,?),
+              archived_at=COALESCE(archived_at,?),
+              archived_by=?,
+              updated_at=?
+        WHERE id=?
+          AND deleted_at IS NULL
+          AND purged_at IS NULL
+          AND archived_at IS NULL
+          AND status IN ('PENDING','OPEN')`,
     ).bind(timestamp, timestamp, actorId, timestamp, sessionId).run();
   }
 
@@ -54,7 +89,10 @@ export class SessionRepository {
               deleted_at=?,
               deleted_by=?,
               updated_at=?
-        WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL`,
+        WHERE id=?
+          AND deleted_at IS NULL
+          AND purged_at IS NULL
+          AND (archived_at IS NOT NULL OR status IN ('ARCHIVED','CLOSED'))`,
     ).bind(timestamp, timestamp, timestamp, actorId, timestamp, sessionId).run();
   }
 
@@ -67,7 +105,9 @@ export class SessionRepository {
               archived_at=COALESCE(archived_at,?),
               closed_at=COALESCE(closed_at,?),
               updated_at=?
-        WHERE id=? AND deleted_at IS NOT NULL AND purged_at IS NULL`,
+        WHERE id=?
+          AND deleted_at IS NOT NULL
+          AND purged_at IS NULL`,
     ).bind(timestamp, timestamp, timestamp, sessionId).run();
   }
 }

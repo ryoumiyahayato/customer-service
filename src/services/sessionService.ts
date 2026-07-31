@@ -1,10 +1,3 @@
-import {
-  canArchive,
-  canMoveToTrash,
-  canRestore,
-  canUnarchive,
-  isSessionEnded,
-} from '../domain/sessionState';
 import { DomainError } from '../http/errors';
 import { SessionRepository, type SessionRecord } from '../repositories/sessionRepository';
 
@@ -41,27 +34,22 @@ export class SessionService {
   }
 
   private assign(session: SessionRecord, actor: SessionActor, timestamp: string) {
-    if (isSessionEnded(session)) throw new DomainError('SESSION_ENDED', 409);
     return this.sessions.assign(session.id, actor.id, timestamp);
   }
 
   private archive(session: SessionRecord, actor: SessionActor, timestamp: string) {
-    if (!canArchive(session)) throw new DomainError('SESSION_ENDED', 409);
     return this.sessions.archive(session.id, actor.id, timestamp);
   }
 
   private unarchive(session: SessionRecord, timestamp: string) {
-    if (!canUnarchive(session)) throw new DomainError('SESSION_STATE_CONFLICT', 409);
     return this.sessions.unarchive(session.id, timestamp);
   }
 
   private moveToTrash(session: SessionRecord, actor: SessionActor, timestamp: string) {
-    if (!canMoveToTrash(session)) throw new DomainError('SESSION_STATE_CONFLICT', 409);
     return this.sessions.moveToTrash(session.id, actor.id, timestamp);
   }
 
   private restore(session: SessionRecord, timestamp: string) {
-    if (!canRestore(session)) throw new DomainError('SESSION_STATE_CONFLICT', 409);
     return this.sessions.restore(session.id, timestamp);
   }
 }
