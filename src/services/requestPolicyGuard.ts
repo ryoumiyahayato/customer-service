@@ -23,9 +23,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function requestBody(req: Request) {
-  return isRecord(await req.clone().json().catch(() => null))
-    ? await req.clone().json().catch(() => ({})) as Record<string, unknown>
-    : {};
+  const value = await req.clone().json().catch(() => null);
+  return isRecord(value) ? value : {};
 }
 
 function errorResponse(error: string, status: number) {
