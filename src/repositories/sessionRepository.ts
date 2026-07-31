@@ -105,9 +105,7 @@ export class SessionRepository {
               archived_at=COALESCE(archived_at,?),
               closed_at=COALESCE(closed_at,?),
               updated_at=?
-        WHERE id=?
-          AND deleted_at IS NOT NULL
-          AND purged_at IS NULL`,
+        WHERE id=? AND deleted_at IS NOT NULL AND purged_at IS NULL`,
     ).bind(timestamp, timestamp, timestamp, sessionId).run();
   }
 }
