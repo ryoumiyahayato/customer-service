@@ -92,7 +92,10 @@ try {
   check('session repository delete checks purged_at', sessionRepository.includes('moveToTrash') && sessionRepository.includes('purged_at IS NULL'));
   check('session repository restore checks purged_at', sessionRepository.includes('restore(sessionId') && sessionRepository.includes('deleted_at IS NOT NULL AND purged_at IS NULL'));
   check('runtime worker delegates session actions to SessionService', worker.includes('new SessionService(') && worker.includes('service.execute(admin, sessionId, action, now())'));
-  check('runtime worker contains no legacy unarchive write to CLOSED', !worker.includes("status='CLOSED'"));
+  check(
+    'runtime worker contains no legacy CLOSED write',
+    !/SET[\s\S]{0,200}status\s*=\s*['"]CLOSED['"]/i.test(worker),
+  );
 
   check('chatModel is a compatibility barrel over split chat modules', chatModel.includes("export * from './chat/types'") && chatModel.includes("export * from './chat/eventParser'") && chatModel.includes("export * from './chat/messageMerge'"));
   check('realtime events use a discriminated union', chatEvents.includes("type: 'message:new' | 'message_created'") && chatEvents.includes("type: 'messages:read'") && chatEvents.includes('export type ChatRealtimeEvent ='));
