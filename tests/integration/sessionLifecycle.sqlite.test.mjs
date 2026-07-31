@@ -50,11 +50,12 @@ function insertSession(db, session) {
 }
 
 function readSession(db, id) {
-  return db.prepare(`
+  const row = db.prepare(`
     SELECT status, archived_at, deleted_at, purged_at, closed_at
     FROM sessions
     WHERE id = ?
   `).get(id);
+  return row ? { ...row } : null;
 }
 
 test('migration repairs legacy active rows left as CLOSED', () => {
@@ -94,7 +95,7 @@ test('migration repairs legacy active rows left as CLOSED', () => {
       purged_at: null,
       closed_at: null,
     });
-    assert.equal(readSession(db, 'still-archived').status, 'CLOSED');
+    assert.equal(readSession(db, 'still-archived')?.status, 'CLOSED');
   } finally {
     db.close();
   }
@@ -149,7 +150,7 @@ test('trigger converts an unassigned unarchive transition to PENDING', () => {
       WHERE id = ?
     `).run('unassigned');
 
-    assert.equal(readSession(db, 'unassigned').status, 'PENDING');
+    assert.equal(readSession(db, 'unassigned')?.status, 'PENDING');
   } finally {
     db.close();
   }
@@ -176,8 +177,8 @@ test('trigger does not reactivate trash or purged sessions', () => {
     db.prepare("UPDATE sessions SET archived_at = NULL, status = 'CLOSED' WHERE id = ?").run('trash');
     db.prepare("UPDATE sessions SET archived_at = NULL, status = 'CLOSED' WHERE id = ?").run('purged');
 
-    assert.equal(readSession(db, 'trash').status, 'CLOSED');
-    assert.equal(readSession(db, 'purged').status, 'CLOSED');
+    assert.equal(readSession(db, 'trash')?.status, 'CLOSED');
+    assert.equal(readSession(db, 'purged')?.status, 'CLOSED');
   } finally {
     db.close();
   }
