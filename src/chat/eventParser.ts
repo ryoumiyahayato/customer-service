@@ -1,6 +1,6 @@
-import type { ChatMessageDto, ChatSessionDto } from './dto';
-import type { ChatRealtimeEvent } from './events';
-import { mapChatMessageDto, mapChatSessionDto } from './mappers';
+import type { ChatMessageDto, ChatSessionDto } from './dto.ts';
+import type { ChatRealtimeEvent } from './events.ts';
+import { mapChatMessageDto, mapChatSessionDto } from './mappers.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
