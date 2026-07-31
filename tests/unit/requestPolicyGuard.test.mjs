@@ -72,7 +72,7 @@ test('requires the signed current guest identity before claim or discard registr
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: `support_guest=${signed}`,
+          cookie: `guest_session=${signed}`,
         },
         body: JSON.stringify({
           username: 'visitor',
@@ -92,7 +92,7 @@ test('requires the signed current guest identity before claim or discard registr
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: `support_guest=${signed}`,
+          cookie: `guest_session=${signed}`,
         },
         body: JSON.stringify({
           username: 'visitor2',
