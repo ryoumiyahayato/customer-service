@@ -13,6 +13,12 @@ const message = {
   created_at: '2026-07-31T00:00:00.000Z',
 };
 
+const session = {
+  id: 'sess_1',
+  status: 'OPEN',
+  assigned_operator_id: 'admin_1',
+};
+
 test('parses supported realtime payload and rejects malformed payloads', () => {
   const event = parseChatRealtimeEvent({
     type: 'message:new',
@@ -28,4 +34,40 @@ test('parses supported realtime payload and rejects malformed payloads', () => {
     parseChatRealtimeEvent({ type: 'messages:read', sessionId: 'sess_1' }),
     null,
   );
+});
+
+test('rejects conflicting room, message and session identities', () => {
+  assert.equal(parseChatRealtimeEvent({
+    type: 'message:new',
+    sessionId: 'sess_1',
+    conversationId: 'sess_2',
+    message,
+  }), null);
+  assert.equal(parseChatRealtimeEvent({
+    type: 'message:new',
+    conversationId: 'sess_2',
+    message,
+  }), null);
+  assert.equal(parseChatRealtimeEvent({
+    type: 'message:new',
+    conversationId: 'sess_1',
+    message,
+    session: { ...session, id: 'sess_2' },
+  }), null);
+  assert.equal(parseChatRealtimeEvent({
+    type: 'session:updated',
+    conversationId: 'sess_2',
+    session,
+  }), null);
+});
+
+test('requires meaningful read and session-list event payloads', () => {
+  assert.equal(parseChatRealtimeEvent({
+    type: 'messages:read',
+    sessionId: 'sess_1',
+    messageIds: [],
+    readAt: '2026-07-31T00:00:00.000Z',
+  }), null);
+  assert.equal(parseChatRealtimeEvent({ type: 'sessions:changed' }), null);
+  assert.equal(parseChatRealtimeEvent({ type: 'sessions:changed', ts: 1 })?.timestamp, 1);
 });
