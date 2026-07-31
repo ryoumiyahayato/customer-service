@@ -73,27 +73,48 @@ export function insertSession(database, input) {
 }
 
 export function readSession(database, id) {
-  const row = database.prepare('SELECT * FROM sessions WHEQHYOÉÊK™Ù]
-Y
-NÂˆ™]\›ˆ›ÝÈÈÈ‹‹œ›ÝÈHˆ[ÂŸB‚™^Ü[˜Ý[ÛˆÜ™X]PÛÛ^
-]X˜\ÙK™\ÜÚ]ÜžHHÙ\ÜÚ[Û”™\ÜÚ]ÜžKÛÚÈH[
-HÂˆÛÛœÝY\\ˆH™]ÈÜ[]QPY\\Š]X˜\ÙJNÂˆÛÛœÝ™\ÜÚ]ÜžHHÛÚÈÈ™]È™\ÜÚ]ÜžJY\\‹ÛÚÊHˆ™]È™\ÜÚ]ÜžJY\\ŠNÂˆÛÛœÝÙ\šXÙHH™]ÈÙ\ÜÚ[Û”Ù\šXÙJ™\ÜÚ]ÜžK
+  const row = database.prepare('SELECT * FROM sessions WHERE id=?').get(id);
+  return row ? { ...row } : null;
+}
 
-HOˆYJNÂˆ™]\›ˆÈY\\‹™\ÜÚ]ÜžKÙ\šXÙHNÂŸB‚™^Ü[˜Ý[ÛˆÚ[™Ù\Ê™\Ý[
-HÂˆ™]\›ˆ[X™\Š™\Ý[Ë›Y]OË˜Ú[™Ù\È
-NÂŸB‚™^Ü\Þ[˜È[˜Ý[Ûˆ^XÝÛÛ™›XÝ
-›ÛZ\ÙJHÂˆ]ØZ]\ÜÙ\œ™Z™XÝÊ›ÛZ\ÙK
-\œ›ÜŠHOˆÂˆ\ÜÙ\›ÚÊ\œ›Üˆ[œÝ[˜Ù[ÙˆÛXZ[‘\œ›ÜŠNÂˆ\ÜÙ\™\]X[
-\œ›Ü‹˜ÛÙK	ÔÑTÔÒSÓ—ÔÕUWÐÓÓ‘“PÕ	ÊNÂˆ\ÜÙ\™\]X[
-\œ›Ü‹œÝ]\ËJNÂˆ™]\›ˆYNÂˆJNÂŸB‚™^ÜÛ\ÜÈ[\›X]š[™ÔÙ\ÜÚ[Û”™\ÜÚ]ÜžH^[™ÈÙ\ÜÚ[Û”™\ÜÚ]ÜžHÂˆÛÛœÝXÝÜŠ]X˜\ÙKÛÚÊHÂˆÝ\\Š]X˜\ÙJNÂˆ\ËšÛÚÈHÛÚÎÂˆB‚ˆ\Þ[˜È\ÜÚYÛŠÙ\ÜÚ[Û’YXÝÜ’Y[Y\Ý[\
-HÂˆ]ØZ]\ËšÛÚÊ	Ø\ÜÚYÛ‰ËÙ\ÜÚ[Û’Y
-NÂˆ™]\›ˆÝ\\‹˜\ÜÚYÛŠÙ\ÜÚ[Û’YXÝÜ’Y[Y\Ý[\
-NÂˆB‚ˆ\Þ[˜È\˜Ú]™JÙ\ÜÚ[Û’YXÝÜ’Y[Y\Ý[\
-HÂˆ]ØZ]\ËšÛÚÊ	Ø\˜Ú]™IËÙ\ÜÚ[Û’Y
-NÂˆ™]\›ˆÝ\\‹˜\˜Ú]™JÙ\ÜÚ[Û’YXÝÜ’Y[Y\Ý[\
-NÂˆB‚ˆ\Þ[˜È[Ý™UÕ˜\Ú
-Ù\ÜÚ[Û’YXÝÜ’Y[Y\Ý[\
-HÂˆ]ØZ]\ËšÛÚÊ	Û[Ý™UÕ˜\Ú	ËÙ\ÜÚ[Û’Y
-NÂˆ™]\›ˆÝ\\‹›[Ý™UÕ˜\Ú
-Ù\ÜÚ[Û’YXÝÜ’Y[Y\Ý[\
-NÂˆBŸB
+export function createContext(database, Repository = SessionRepository, hook = null) {
+  const adapter = new SqliteD1Adapter(database);
+  const repository = hook ? new Repository(adapter, hook) : new Repository(adapter);
+  const service = new SessionService(repository, () => true);
+  return { adapter, repository, service };
+}
+
+export function changes(result) {
+  return Number(result?.meta?.changes || 0);
+}
+
+export async function expectConflict(promise) {
+  await assert.rejects(promise, (error) => {
+    assert.ok(error instanceof DomainError);
+    assert.equal(error.code, 'SESSION_STATE_CONFLICT');
+    assert.equal(error.status, 409);
+    return true;
+  });
+}
+
+export class InterleavingSessionRepository extends SessionRepository {
+  constructor(database, hook) {
+    super(database);
+    this.hook = hook;
+  }
+
+  async assign(sessionId, actorId, timestamp) {
+    await this.hook('assign', sessionId);
+    return super.assign(sessionId, actorId, timestamp);
+  }
+
+  async archive(sessionId, actorId, timestamp) {
+    await this.hook('archive', sessionId);
+    return super.archive(sessionId, actorId, timestamp);
+  }
+
+  async moveToTrash(sessionId, actorId, timestamp) {
+    await this.hook('moveToTrash', sessionId);
+    return super.moveToTrash(sessionId, actorId, timestamp);
+  }
+}
