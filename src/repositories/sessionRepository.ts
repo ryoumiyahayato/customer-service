@@ -93,8 +93,12 @@ export class SessionRepository {
           AND deleted_at IS NULL
           AND purged_at IS NULL
           AND (archived_at IS NOT NULL OR status IN ('ARCHIVED','CLOSED'))
+          AND (
+            history_clear_claimed_at IS NULL
+            OR datetime(history_clear_claimed_at) <= datetime(?, '-1 hour')
+          )
           AND (? IS NULL OR assigned_operator_id=?)`,
-    ).bind(timestamp, sessionId, expectedOperatorId, expectedOperatorId).run();
+    ).bind(timestamp, sessionId, timestamp, expectedOperatorId, expectedOperatorId).run();
   }
 
   moveToTrash(
@@ -144,7 +148,19 @@ export class SessionRepository {
         WHERE id=?
           AND deleted_at IS NOT NULL
           AND purged_at IS NULL
+          AND (
+            history_clear_claimed_at IS NULL
+            OR datetime(history_clear_claimed_at) <= datetime(?, '-1 hour')
+          )
           AND (? IS NULL OR assigned_operator_id=?)`,
-    ).bind(timestamp, timestamp, timestamp, sessionId, expectedOperatorId, expectedOperatorId).run();
+    ).bind(
+      timestamp,
+      timestamp,
+      timestamp,
+      sessionId,
+      timestamp,
+      expectedOperatorId,
+      expectedOperatorId,
+    ).run();
   }
 }
