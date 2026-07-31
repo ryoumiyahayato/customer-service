@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   apply:
@@ -23,10 +25,37 @@ jobs:
           node-version: 22
 
       - name: Apply repository transformation
-        run: node scripts/apply-maintainability-stage2.mjs
+        id: transform
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          node scripts/apply-maintainability-stage2.mjs > /tmp/stage2.log 2>&1
+          status=$?
+          cat /tmp/stage2.log
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '## Stage 2 transformation failure'
+              echo
+              echo '```text'
+              tail -n 300 /tmp/stage2.log
+              echo '```'
+            } > /tmp/stage2-comment.md
+            gh pr comment 40 --body-file /tmp/stage2-comment.md
+            exit "$status"
+          fi
 
       - name: Refresh Wrangler toolchain lock
         run: npm install --save-dev --save-exact wrangler@4.116.0 --no-audit --no-fund
+
+      - name: Commit transformed repository
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: complete maintainability boundaries and services'
+          git push origin HEAD:refactor/maintainability-session-state-phase1
 
       - name: Validate transformed repository
         run: |
@@ -36,11 +65,3 @@ jobs:
           npm run check:business-closures
           npm run check:obvious
           npm run build
-
-      - name: Commit transformed repository
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'refactor: complete maintainability boundaries and services'
-          git push origin HEAD:refactor/maintainability-session-state-phase1
