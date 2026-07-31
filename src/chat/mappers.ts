@@ -1,11 +1,11 @@
-import type { ChatMessageDto, ChatSessionDto } from './dto';
+import type { ChatMessageDto, ChatSessionDto } from './dto.ts';
 import type {
   ChatMessage,
   ChatSession,
   MessageStatus,
   MessageType,
   SenderType,
-} from './types';
+} from './types.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
