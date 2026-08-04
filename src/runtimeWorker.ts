@@ -1,4 +1,5 @@
 export { ChatRoom } from './durable-objects/ChatRoom';
+import { createChatRoomBroadcastRequest, withConversationRoomAccess } from './durable-objects/ChatRoom';
 import { runLifecycle } from './sessionLifecycle';
 import { canSendMessage as canSendByState, isSessionEnded } from './domain/sessionState';
 import { DomainError } from './http/errors';
@@ -477,7 +478,7 @@ async function downloadAttachment(req: Request, env: Env, rawKey: string) {
 }
 async function broadcast(env: Env, room: string, payload: unknown) {
   if (!env.CHAT_ROOM) throw new Error('CHAT_ROOM Durable Object binding is missing. Check wrangler.toml and deployment config.');
-  await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room)).fetch('https://room/broadcast', { method: 'POST', body: JSON.stringify(payload) });
+  await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room)).fetch(createChatRoomBroadcastRequest(room, payload));
 }
 const notifyAdmins = (env: Env) => broadcast(env, 'admin-feed', { type: 'sessions:changed', ts: Date.now() });
 async function listSessions(env: Env, admin: Admin, includeDeleted: boolean) {
@@ -1141,7 +1142,28 @@ async function api(req: Request, env: Env) {
   if (path === '/api/ws/admin') { await requireAdmin(env, req); return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName('admin-feed')).fetch(req); }
   if (path === '/api/ws/staff') { await requireAdmin(env, req); return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName('staff')).fetch(req); }
   const ws = path.match(/^\/api\/ws\/conversations\/([^/]+)$/);
-  if (ws) { const session = await getSessionById(env, ws[1]); if (!session) return new Response('Not found', { status: 404 }); const admin = await currentAdmin(env, req); if (admin) { if (!canJoinConversationRoom(admin, session)) return new Response(ERR_NO_SESSION_ACCESS, { status: 403 }); } else if (!(await guestOwnsSession(env, req, session))) return new Response(ERR_NO_SESSION_ACCESS, { status: 403 }); return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(`conversation:${ws[1]}`)).fetch(req); }
+  if (ws) {
+    const session = await getSessionById(env, ws[1]);
+    if (!session) return new Response('Not found', { status: 404 });
+    const admin = await currentAdmin(env, req);
+    if (admin) {
+      if (!canJoinConversationRoom(admin, session)) return new Response(ERR_NO_SESSION_ACCESS, { status: 403 });
+      const authSessionId = await verifyToken(env, getCookie(req, ADMIN_COOKIE));
+      if (!authSessionId) return new Response(ERR_NO_SESSION_ACCESS, { status: 403 });
+      return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(`conversation:${ws[1]}`)).fetch(
+        withConversationRoomAccess(req, session.id, 'admin', admin.id, authSessionId),
+      );
+    }
+    const guest = await currentGuestSession(env, req);
+    if (!guest || guest.session.id !== session.id || guest.user.id !== session.user_id) {
+      return new Response(ERR_NO_SESSION_ACCESS, { status: 403 });
+    }
+    const authSessionId = await verifyToken(env, getCookie(req, GUEST_COOKIE));
+    if (!authSessionId) return new Response(ERR_NO_SESSION_ACCESS, { status: 403 });
+    return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(`conversation:${ws[1]}`)).fetch(
+      withConversationRoomAccess(req, session.id, 'guest', guest.user.id, authSessionId),
+    );
+  }
   return json({ error: 'Not found' }, { status: 404 });
 }
 
