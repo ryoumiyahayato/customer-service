@@ -115,7 +115,7 @@ function setupTokenKey() {
 function frontendSourceFiles() {
   return walkFiles(path.join(root, 'src')).filter((file) => {
     const name = rel(file);
-    if (name === 'src/worker.ts') return false;
+    if (name === 'src/worker.ts' || name === 'src/runtimeWorker.ts') return false;
     if (name.startsWith('src/durable-objects/')) return false;
     return /\.(?:tsx?|jsx?)$/.test(name);
   });
@@ -344,9 +344,9 @@ function checkLifecycleMigrationFields() {
 }
 
 function checkLifecycleScheduledHandler() {
-  const text = readTextIfExists(path.join(root, 'src/worker.ts'));
+  const text = readTextIfExists(path.join(root, 'src/runtimeWorker.ts'));
   if (text === null) {
-    result('lifecycle.scheduled_handler', 'fail', 'high', 'src/worker.ts is missing, so the scheduled handler could not be checked.', 'Restore the Worker entrypoint with a scheduled handler.');
+    result('lifecycle.scheduled_handler', 'fail', 'high', 'src/runtimeWorker.ts is missing, so the scheduled handler could not be checked.', 'Restore the Worker entrypoint with a scheduled handler.');
     return;
   }
 
@@ -366,9 +366,9 @@ function checkLifecycleAutomation() {
 }
 
 function checkSetupBackendApi() {
-  const text = readTextIfExists(path.join(root, 'src/worker.ts'));
+  const text = readTextIfExists(path.join(root, 'src/runtimeWorker.ts'));
   if (text === null) {
-    result('setup.backend_api', 'fail', 'high', 'src/worker.ts is missing, so setup API static checks could not run.', 'Restore the Worker entrypoint with the setup API implementation.');
+    result('setup.backend_api', 'fail', 'high', 'src/runtimeWorker.ts is missing, so setup API static checks could not run.', 'Restore the Worker entrypoint with the setup API implementation.');
     return;
   }
 

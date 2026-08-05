@@ -7,8 +7,11 @@
     "lifecycle:dry-run": "node scripts/lifecycle-dry-run.mjs",
     "lifecycle:ci-check": "node scripts/lifecycle-ci-check.mjs",
     "check-session-lifecycle": "node scripts/check-session-lifecycle.mjs",
+    "check-session-lifecycle-static": "node scripts/check-session-lifecycle.mjs",
     "check:lifecycle-boundaries": "node scripts/check-lifecycle-sql-boundaries.mjs",
     "check:business-closures": "node scripts/check-high-risk-business-closures.mjs && node scripts/check-lifecycle-sql-boundaries.mjs",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "node --experimental-strip-types --test tests/unit/*.test.mjs",
     "bootstrap:cloudflare": "node scripts/bootstrap-cloudflare.mjs",
     "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
     "build": "vite build && wrangler deploy --dry-run --outdir .wrangler-dry-run",
@@ -24,7 +27,9 @@
     "check:admin-race": "node scripts/check-admin-message-race-guard.mjs",
     "check:linux-deploy-security": "node scripts/check-linux-deploy-security.mjs",
     "check:android-shell-security": "node scripts/check-android-shell-security.mjs",
-    "deploy:safe": "node scripts/deploy-cloudflare-safe.mjs"
+    "deploy:safe": "node scripts/deploy-cloudflare-safe.mjs",
+    "check:static-contracts": "node scripts/check-session-lifecycle.mjs",
+    "test:integration": "node --experimental-sqlite --test tests/integration/*.test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",
@@ -33,12 +38,18 @@
     "vite": "^7.0.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260620.0",
+    "@cloudflare/workers-types": "5.20260731.1",
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-legacy": "^7.2.1",
     "terser": "^5.48.0",
     "typescript": "^5.8.3",
-    "wrangler": "4.104.0"
-  }
+    "wrangler": "4.116.0"
+  },
+  "overrides": {
+    "miniflare": {
+      "undici": "7.29.0"
+    }
+  },
+  "type": "module"
 }

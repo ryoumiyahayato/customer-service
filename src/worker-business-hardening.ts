@@ -1,6 +1,12 @@
 export { ChatRoom } from './worker-secure';
 import secureWorker from './worker-secure';
 import type { Env } from './worker';
+import { COOKIE_NAMES, readCookie } from './security/cookies';
+import { verifySignedValue } from './security/signing';
+import { hashSessionToken } from './security/sessionTokens';
+import { jsonResponse } from './security/responseHeaders';
+import { jsonObject, readJsonObjectWithinLimit } from './security/requestLimits';
+import { consumeRateLimit } from './security/rateLimit';
 
 type WorkerModule = {
   fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response>;
@@ -46,65 +52,18 @@ type AttachmentBinding = {
 };
 
 const inner = secureWorker as WorkerModule;
-const ADMIN_COOKIE = 'support_admin';
-const GUEST_COOKIE = 'guest_session';
+const ADMIN_COOKIE = COOKIE_NAMES.admin;
+const GUEST_COOKIE = COOKIE_NAMES.guest;
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 const JSON_REQUEST_MAX_BYTES = 64 * 1024;
 const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const ADMIN_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
-const enc = new TextEncoder();
 
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-      'X-Content-Type-Options': 'nosniff',
-      'Referrer-Policy': 'same-origin',
-      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
-      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-    },
-  });
-}
+function json(body: unknown, status = 200) { return jsonResponse(body, { status }); }
 
-function getCookie(req: Request, name: string) {
-  return (req.headers.get('cookie') || '')
-    .split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${name}=`))
-    ?.slice(name.length + 1);
-}
-
-async function hmac(secret: string, value: string) {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, enc.encode(value));
-  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function verifySignedId(env: Env, token?: string) {
-  if (!token) return null;
-  const parts = token.split('.');
-  if (parts.length !== 2) return null;
-  const [value, signature] = parts;
-  if (!value || !signature) return null;
-  const expected = await hmac(env.SESSION_SECRET, value);
-  if (signature.length !== expected.length) return null;
-  let diff = 0;
-  for (let index = 0; index < expected.length; index++) diff |= signature.charCodeAt(index) ^ expected.charCodeAt(index);
-  return diff === 0 ? value : null;
-}
-
-async function tokenHash(env: Env, value: string) {
-  return hmac(env.SESSION_SECRET, `session:${value}`);
-}
+const getCookie = readCookie;
+async function verifySignedId(env: Env, token?: string) { return verifySignedValue(env.SESSION_SECRET, token); }
+async function tokenHash(env: Env, value: string) { return hashSessionToken(env.SESSION_SECRET, value); }
 
 function sameOriginWrite(req: Request) {
   const requestUrl = new URL(req.url);
@@ -129,51 +88,8 @@ function isLocalDevHost(host: string) {
   return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '::1';
 }
 
-function requestBodyTooLarge(req: Request) {
-  const length = Number(req.headers.get('content-length') || '0');
-  return Number.isFinite(length) && length > JSON_REQUEST_MAX_BYTES;
-}
-
-function jsonObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-async function readJsonWithinLimit(req: Request): Promise<{ body: Record<string, unknown>; tooLarge: boolean }> {
-  if (requestBodyTooLarge(req)) return { body: {}, tooLarge: true };
-  const reader = req.clone().body?.getReader();
-  if (!reader) return { body: {}, tooLarge: false };
-
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
-      if (total > JSON_REQUEST_MAX_BYTES) {
-        await reader.cancel();
-        return { body: {}, tooLarge: true };
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return { body: {}, tooLarge: false };
-  }
-
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return { body: jsonObject(JSON.parse(new TextDecoder().decode(bytes))), tooLarge: false };
-  } catch {
-    return { body: {}, tooLarge: false };
-  }
+async function readJsonWithinLimit(req: Request) {
+  return readJsonObjectWithinLimit(req, JSON_REQUEST_MAX_BYTES);
 }
 
 function adminSessionExpired(session: AdminSessionRow, at = Date.now()) {
@@ -224,17 +140,8 @@ async function mutationRateLimit(env: Env, req: Request) {
   const ip = req.headers.get('cf-connecting-ip') || 'unknown';
   const path = new URL(req.url).pathname;
   const key = `hardening:${ip}:${path}`.slice(0, 240);
-  const nowMs = Date.now();
-  const resetAt = Math.floor(nowMs / 60000) * 60000 + 60000;
-  await env.DB.prepare('INSERT INTO rate_limits(key,count,reset_at) VALUES(?,0,?) ON CONFLICT(key) DO NOTHING')
-    .bind(key, resetAt).run();
-  const consumed = await env.DB.prepare(
-    `UPDATE rate_limits
-        SET count=CASE WHEN reset_at <= ? THEN 1 ELSE count+1 END,
-            reset_at=CASE WHEN reset_at <= ? THEN ? ELSE reset_at END
-      WHERE key=? AND (reset_at <= ? OR count < 20)`,
-  ).bind(nowMs, nowMs, resetAt, key, nowMs).run();
-  return Number(consumed?.meta?.changes || 0) > 0 ? null : json({ error: 'rate_limited' }, 429);
+  const retryAfter = await consumeRateLimit(env.DB, key, 20, 60 * 1000);
+  return retryAfter === null ? null : json({ error: 'rate_limited', retryAfter }, 429);
 }
 
 function auditId() {

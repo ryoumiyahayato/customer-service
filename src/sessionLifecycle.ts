@@ -1,4 +1,11 @@
-export type SessionBucket = 'active' | 'archived' | 'trash' | 'purged';
+import {
+  isSessionEnded,
+  sessionBucketOf,
+  type SessionBucket,
+  type SessionStateInput,
+} from './domain/sessionState';
+
+export type { SessionBucket } from './domain/sessionState';
 
 export interface LifecycleResult {
   archivedCount: number;
@@ -14,12 +21,6 @@ const now = () => new Date().toISOString();
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 
 type LifecycleEnv = { DB: D1Database; UPLOADS?: R2Bucket };
-type SessionState = {
-  status?: string | null;
-  archived_at?: string | null;
-  deleted_at?: string | null;
-  purged_at?: string | null;
-};
 type PurgeCandidate = {
   id: string;
   deleted_at: string | null;
@@ -27,16 +28,14 @@ type PurgeCandidate = {
   history_cleared_at: string | null;
 };
 
-export function normalizeSessionBucket(session?: SessionState | null): SessionBucket | null {
-  if (!session) return null;
-  if (session.purged_at) return 'purged';
-  if (session.deleted_at) return 'trash';
-  if (session.archived_at || session.status === 'ARCHIVED' || session.status === 'CLOSED') return 'archived';
-  return 'active';
+export function normalizeSessionBucket(
+  session?: SessionStateInput | null,
+): SessionBucket | null {
+  return sessionBucketOf(session);
 }
 
-export function sessionEnded(session?: SessionState | null): boolean {
-  return Boolean(!session || session.deleted_at || session.purged_at || session.status === 'CLOSED' || session.status === 'ARCHIVED');
+export function sessionEnded(session?: SessionStateInput | null): boolean {
+  return isSessionEnded(session);
 }
 
 export async function archiveSession(

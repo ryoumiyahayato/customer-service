@@ -8,8 +8,8 @@ import GuestMessageList from './GuestMessageList';
 import { NetworkNotice } from '../ui/Notice';
 import {
   fallbackDelay,
-  isMessageCreatedEvent,
   isSessionEnded,
+  parseChatRealtimeEvent,
   lastServerMessageTime,
   localMessageId,
   markMessageFailed,
@@ -40,20 +40,20 @@ const INIT_RETRY_DELAYS = [800, 1600, 3000];
 const isUnreadOperatorMessage = (msg: Message, sessionId?: string) =>
     msg?.id &&
     !String(msg.id).startsWith('local-') &&
-    (!sessionId || msg.session_id === sessionId) &&
-    msg.sender_type === 'OPERATOR' &&
-    !msg.is_read &&
+    (!sessionId || msg.sessionId === sessionId) &&
+    msg.senderType === 'OPERATOR' &&
+    !msg.isRead &&
     msg.status !== 'sending' &&
     msg.status !== 'failed' &&
     msg.status !== 'recalled' &&
-    !msg.deleted_at;
+    !msg.deletedAt;
 const unreadOperatorMessageIds = (messages: Message[], sessionId?: string) => messages
   .filter((msg) => isUnreadOperatorMessage(msg, sessionId))
   .map((msg) => String(msg.id));
 const markMessagesCustomerRead = (messages: Message[], messageIds: string[], readAt = new Date().toISOString()) => {
   const idSet = new Set(messageIds.map((id) => String(id)));
   return messages.map((msg) => idSet.has(String(msg.id))
-    ? { ...msg, is_read: 1, status: msg.status === 'sent' ? 'read' : msg.status, read_at: msg.read_at || readAt }
+    ? { ...msg, isRead: true, status: msg.status === 'sent' ? 'read' : msg.status, readAt: msg.readAt || readAt }
     : msg);
 };
 const isNotFoundStatus = (status?: number) => status === 401 || status === 403 || status === 404 || status === 410;
@@ -258,8 +258,9 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     ws.onclose = (e) => { console.debug('[chat_metric]', 'ws_close_code', e.code, { reason_length: e.reason?.length || 0 }); setOnline(false); if (sessionClosedRef.current) { setReconnecting(false); return; } setReconnecting(true); reconnectTimer.current = setTimeout(() => wsConnect(sid), 5000); };
     ws.onmessage = (e) => {
       try {
-        const d = JSON.parse(e.data);
-        if (isMessageCreatedEvent(d.type)) {
+        const d = parseChatRealtimeEvent(JSON.parse(e.data));
+        if (!d) return;
+        if (d.type === 'message:new' || d.type === 'message_created') {
           setMessages(prev => {
             const next = mergeMessage(prev, d.message);
             messagesRef.current = next;
@@ -270,7 +271,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
           }
         }
         else if (d.type === 'message:updated') { setMessages(prev => { const next = mergeMessage(prev, d.message); messagesRef.current = next; return next; }); }
-        else if (d.type === 'message:deleted') { setMessages(prev => { const next = prev.map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m); messagesRef.current = next; return next; }); }
+        else if (d.type === 'message:deleted') { setMessages(prev => { const next = prev.map(m => m.id === d.messageId ? { ...m, deletedAt: new Date().toISOString() } : m); messagesRef.current = next; return next; }); }
         else if (d.type === 'session:updated' && sessionUnavailable(d.session)) { showNotFound(); ws.close(); }
       } catch {}
     };
@@ -406,18 +407,21 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     const tempId = localMessageId(clientMessageId);
     const optimisticMessage: Message = {
       id: tempId,
-      session_id: sessionId,
-      sender_type: 'VISITOR',
-      sender_id: visitorId,
+      sessionId: sessionId,
+      senderType: 'VISITOR',
+      senderId: visitorId,
       content,
-      message_type: 'text',
-      image_path: null,
+      messageType: 'text',
+      imagePath: null,
       status: 'sending',
-      created_at: new Date().toISOString(),
-      read_at: null,
-      is_read: 0,
-      quote_message_id: currentQuote?.id || null,
-      client_message_id: clientMessageId
+      createdAt: new Date().toISOString(),
+      readAt: null,
+      isRead: false,
+      quoteMessageId: currentQuote?.id || null,
+      clientMessageId: clientMessageId,
+      recalledAt: null,
+      deletedAt: null,
+      imagePurgedAt: null
     };
     setMessages(prev => mergeMessage(prev, optimisticMessage));
     setText('');
@@ -442,7 +446,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       const fd = new FormData(); fd.append('file', file); fd.append('sessionId', sessionId);
       const res = await apiFetch<UploadResponse>(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST', body: fd });
       tempId = localMessageId(clientMessageId);
-      setMessages(prev => mergeMessage(prev, { id: tempId, session_id: sessionId, sender_type: 'VISITOR', sender_id: visitorId, content: '', message_type: 'image', image_path: res.path, status: 'sending', created_at: new Date().toISOString(), read_at: null, is_read: 0, quote_message_id: null, client_message_id: clientMessageId }));
+      setMessages(prev => mergeMessage(prev, { id: tempId, sessionId: sessionId, senderType: 'VISITOR', senderId: visitorId, content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: false, quoteMessageId: null, clientMessageId: clientMessageId, recalledAt: null, deletedAt: null, imagePurgedAt: null }));
       const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
       if (msgRes?.message) setMessages(prev => mergeMessage(prev, msgRes.message));
     } catch (error) { if (isSessionGoneError(error)) { showNotFound(); } else { if (tempId) setMessages(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); setNetworkBanner(true); } }
@@ -463,13 +467,13 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     e.target.addEventListener('touchend', clear, { once: true }); e.target.addEventListener('touchmove', clear, { once: true });
   }, []);
 
-  const isOwn = (m: Message) => m.sender_type === 'VISITOR';
+  const isOwn = (m: Message) => m.senderType === 'VISITOR';
   const copyMessageText = (content: string) => {
     copyText(content).then(() => showToast('已复制')).catch((error) => showToast(getErrorMessage(error, '复制失败')));
   };
   const menuItems = (msg: Message) => {
     const items: { label: string; action: () => void; disabled?: boolean }[] = [];
-    if (msg.status !== 'recalled' && msg.message_type !== 'image' && msg.content) {
+    if (msg.status !== 'recalled' && msg.messageType !== 'image' && msg.content) {
       items.push({
         label: '复制文本',
         action: () => {
@@ -487,13 +491,13 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     return (
       <div key={m.id} className={`msg-row${own ? ' own' : ''}`}>
         {!own && <div className="message-avatar agent-avatar" aria-hidden="true">客</div>}
-        {m.deleted_at ? (
+        {m.deletedAt ? (
           <div className={'msg ' + (own ? 'user' : 'agent')}><span className="recalled">消息已删除</span></div>
         ) : (
           <div className={'msg ' + (own ? 'user' : 'agent')} onContextMenu={(e) => handleContextMenu(e, m)}
-            onTouchStart={isMobile && !m.deleted_at ? handleLongPress(m) : undefined}>
-            {m.quote_message_id && <div className="quote-box">{[messages.find(x => x.id === m.quote_message_id)].map(q => q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : q.content || '[未知消息]') : '引用消息不可用').join('')}</div>}
-            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="图片" loading="lazy" /></a> : <ChatMessageText text={m.content || ''} />}
+            onTouchStart={isMobile && !m.deletedAt ? handleLongPress(m) : undefined}>
+            {m.quoteMessageId && <div className="quote-box">{[messages.find(x => x.id === m.quoteMessageId)].map(q => q ? (q.status === 'recalled' ? '消息已撤回' : q.messageType === 'image' ? '[图片]' : q.content || '[未知消息]') : '引用消息不可用').join('')}</div>}
+            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.messageType === 'image' && m.imagePath ? <a className="message-image-link" href={m.imagePath} target="_blank" rel="noreferrer"><img src={m.imagePath} alt="图片" loading="lazy" /></a> : <ChatMessageText text={m.content || ''} />}
             {(m.status === 'sending' || m.status === 'failed') && <div className={`time message-status ${m.status}`}>{m.status === 'sending' ? '发送中...' : '发送失败，请稍后重试'}</div>}
           </div>
         )}

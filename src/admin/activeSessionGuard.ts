@@ -14,8 +14,8 @@ export function getActiveAdminSessionId() {
 
 export function messageBelongsToActiveSession(message: unknown, activeSessionId = getActiveAdminSessionId()) {
   if (!activeSessionId) return true;
-  const item = message as { session_id?: unknown; sessionId?: unknown } | null | undefined;
-  const sessionId = String(item?.session_id || item?.sessionId || '');
+  const item = message as { sessionId?: unknown } | null | undefined;
+  const sessionId = String(item?.sessionId || '');
   return !sessionId || sessionId === activeSessionId;
 }
 

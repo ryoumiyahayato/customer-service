@@ -241,7 +241,7 @@ function checkHighRiskCommandsInDeployScripts() {
 }
 
 function checkSecurityLogicDegradation() {
-  const workerFile = path.join(root, 'src', 'worker.ts');
+  const workerFile = path.join(root, 'src', 'runtimeWorker.ts');
   let issueCount = 0;
 
   if (existsSync(workerFile)) {
@@ -300,7 +300,7 @@ function checkSecurityLogicDegradation() {
 }
 
 function checkSetupTokenFailClosed() {
-  const workerFile = path.join(root, 'src', 'worker.ts');
+  const workerFile = path.join(root, 'src', 'runtimeWorker.ts');
   if (!existsSync(workerFile)) return;
   const content = readFileSync(workerFile, 'utf8');
   let issueCount = 0;

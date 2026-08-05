@@ -11,8 +11,10 @@ import { InlineNotice } from '../ui/Notice';
 import { LoadingState, StatusBlock } from '../ui/StatusBlock';
 import {
   fallbackDelay,
-  isMessageCreatedEvent,
+  isArchivedSession,
   isSessionEnded,
+  parseChatRealtimeEvent,
+  sessionGroupOf,
   lastServerMessageTime,
   localMessageId,
   markMessageFailed,
@@ -50,16 +52,8 @@ const isUnauthorized = (error: unknown) => error instanceof ApiError && error.st
 
 const formatTime = (ts?: string) => (ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const sessionEnded = isSessionEnded;
-const isArchivedSession = (session?: Session | null) => Boolean(session?.archived_at || session?.status === 'ARCHIVED' || session?.status === 'CLOSED');
-const sessionGroupOf = (session?: Session | null): SessionGroup | null => {
-  if (!session) return null;
-  if (session.purged_at) return null;
-  if (session.deleted_at) return 'trash';
-  if (isArchivedSession(session)) return 'archived';
-  return 'active';
-};
 const fallbackCustomerName = (session?: Session | null) => {
-  const source = String(session?.visitor_key || session?.user_id || session?.id || '');
+  const source = String(session?.visitorKey || session?.userId || session?.id || '');
   if (!source) return '客户';
   let hash = 0;
   for (const ch of source) hash = (hash * 31 + ch.charCodeAt(0)) % 10000;
@@ -69,10 +63,17 @@ const applyReadReceipt = (messages: Message[], messageIds: string[] = [], readAt
   if (!messageIds.length) return messages;
   const ids = new Set(messageIds);
   return messages.map((message) => ids.has(message.id)
-    ? { ...message, is_read: 1, status: message.status === 'sent' ? 'read' : message.status, read_at: message.read_at || readAt || new Date().toISOString() }
+    ? { ...message, isRead: true, status: message.status === 'sent' ? 'read' : message.status, readAt: message.readAt || readAt || new Date().toISOString() }
     : message);
 };
-const eventSessionId = (event: ChatRealtimeEvent, fallbackSessionId: string) => String(event.session?.id || messageSessionId(event.message) || event.sessionId || fallbackSessionId || '');
+const eventSessionId = (event: ChatRealtimeEvent, fallbackSessionId: string) => {
+  if (event.type === 'message:new' || event.type === 'message_created' || event.type === 'message:updated') {
+    return event.message.sessionId || event.sessionId || fallbackSessionId;
+  }
+  if (event.type === 'session:updated') return event.session.id || event.sessionId || fallbackSessionId;
+  if (event.type === 'messages:read' || event.type === 'message:deleted') return event.sessionId || fallbackSessionId;
+  return fallbackSessionId;
+};
 
 /* ========== ADMIN DASHBOARD ========== */
 export default function AdminDashboard() {
@@ -119,9 +120,9 @@ export default function AdminDashboard() {
     trash: sessions.filter(s => sessionGroupOf(s) === 'trash').length,
   }), [sessions]);
   const visibleSessions = useMemo(() => sessions.filter(s => sessionGroupOf(s) === sessionGroup), [sessionGroup, sessions]);
-  const customerName = useCallback((session?: Session | null) => String(session?.customer_remark_name || '').trim() || fallbackCustomerName(session), []);
+  const customerName = useCallback((session?: Session | null) => String(session?.customerRemarkName || '').trim() || fallbackCustomerName(session), []);
   const customerAvatar = useCallback((session?: Session | null) => {
-    const remark = String(session?.customer_remark_name || '').trim();
+    const remark = String(session?.customerRemarkName || '').trim();
     if (remark) return remark.slice(0, 1);
     return customerName(session).replace(/\D/g, '').slice(-1) || '客';
   }, [customerName]);
@@ -193,7 +194,7 @@ export default function AdminDashboard() {
   useEffect(() => { selectedMsgsRef.current = selectedMsgs; }, [selectedMsgs]);
   useEffect(() => { curRef.current = cur; }, [cur]);
   useEffect(() => { convOnlineRef.current = convOnline; }, [convOnline]);
-  useEffect(() => { setRemarkDraft(String(cur?.customer_remark_name || '').slice(0, 40)); }, [cur?.id, cur?.customer_remark_name]);
+  useEffect(() => { setRemarkDraft(String(cur?.customerRemarkName || '').slice(0, 40)); }, [cur?.id, cur?.customerRemarkName]);
 
   const fetchAdmin = useCallback(async () => {
     try { const res = await apiFetch<AuthMeResponse>('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (error) { if (isUnauthorized(error)) resetAdminState(); else showToast(getErrorMessage(error, '获取管理员信息失败')); } setLoading(false);
@@ -213,7 +214,7 @@ export default function AdminDashboard() {
       if (!isLatestMessageLoad(sid, requestId)) return;
       const messages = filterMessagesForSession(res.messages || [], sid);
       setSelectedMsgs(mergeMessages([], messages));
-      setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s));
+      setSessions(prev => prev.map(s => s.id === sid ? { ...s, unreadCount: 0 } : s));
     } catch (error) {
       if (isUnauthorized(error)) handleAuthExpired();
     } finally {
@@ -233,7 +234,7 @@ export default function AdminDashboard() {
     const count = messages.length;
     recordChatMetric('fallback_fetch_ms', started, { merge_messages_count: count });
     if (count) setSelectedMsgs(prev => mergeMessages(filterMessagesForSession(prev, sid), messages));
-    setSessions(prev => prev.map(s => s.id === sid ? { ...s, unread_count: 0 } : s));
+    setSessions(prev => prev.map(s => s.id === sid ? { ...s, unreadCount: 0 } : s));
     return count;
   }, [filterMessagesForSession, isActiveAdminSession, isLatestMessageSync]);
 
@@ -258,7 +259,7 @@ export default function AdminDashboard() {
   const wsAdmin = useCallback(() => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/admin`);
-    ws.onmessage = (e) => { try { const d = JSON.parse(e.data); if (d.type === 'sessions:changed') fetchSessions(); } catch {} };
+    ws.onmessage = (e) => { try { const d = parseChatRealtimeEvent(JSON.parse(e.data)); if (d?.type === 'sessions:changed') fetchSessions(); } catch {} };
     ws.onclose = () => { reconnectTimers.current.admin = setTimeout(() => wsAdmin(), 5000); };
     wsRefs.current.admin = ws;
   }, []);
@@ -277,16 +278,39 @@ export default function AdminDashboard() {
     };
     ws.onmessage = (e) => {
       try {
-        const d = JSON.parse(e.data);
+        const d = parseChatRealtimeEvent(JSON.parse(e.data));
+        if (!d) return;
         const sidFromEvent = eventSessionId(d, sid);
-        if (sidFromEvent && sidFromEvent !== sid) { if (d.session) setSessions(prev => prev.map(s => s.id === d.session.id ? { ...s, ...d.session } : s)); return; }
-        if (!isActiveAdminSession(sid)) { if (d.session) setSessions(prev => prev.map(s => s.id === d.session.id ? { ...s, ...d.session } : s)); return; }
-        if ((isMessageCreatedEvent(d.type) || d.type === 'message:updated') && d.message && !messageBelongsToActiveSession(d.message, sid)) return;
-        if (isMessageCreatedEvent(d.type)) { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); if (d.session) { setCur(c => c?.id === d.session.id ? d.session : c); } }
-        else if (d.type === 'message:updated') { setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message)); }
-        else if (d.type === 'messages:read') { setSelectedMsgs(prev => applyReadReceipt(filterMessagesForSession(prev, sid), d.messageIds, d.readAt)); }
-        else if (d.type === 'message:deleted') { setSelectedMsgs(prev => filterMessagesForSession(prev, sid).map(m => m.id === d.messageId ? { ...m, deleted_at: new Date().toISOString() } : m)); }
-        else if (d.type === 'session:updated') { setCur(c => c?.id === d.session?.id ? { ...c, ...d.session } : c); }
+        const eventSession = d.type === 'session:updated'
+          ? d.session
+          : d.type === 'message:new' || d.type === 'message_created'
+            ? d.session
+            : undefined;
+        if (sidFromEvent && sidFromEvent !== sid) {
+          if (eventSession) setSessions(prev => prev.map(session => session.id === eventSession.id ? { ...session, ...eventSession } : session));
+          return;
+        }
+        if (!isActiveAdminSession(sid)) {
+          if (eventSession) setSessions(prev => prev.map(session => session.id === eventSession.id ? { ...session, ...eventSession } : session));
+          return;
+        }
+        if (d.type === 'message:new' || d.type === 'message_created') {
+          if (!messageBelongsToActiveSession(d.message, sid)) return;
+          setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message));
+          const sessionUpdate = d.session;
+          if (sessionUpdate) setCur(current => current?.id === sessionUpdate.id ? sessionUpdate : current);
+        } else if (d.type === 'message:updated') {
+          if (!messageBelongsToActiveSession(d.message, sid)) return;
+          setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), d.message));
+        } else if (d.type === 'messages:read') {
+          setSelectedMsgs(prev => applyReadReceipt(filterMessagesForSession(prev, sid), d.messageIds, d.readAt));
+        } else if (d.type === 'message:deleted') {
+          setSelectedMsgs(prev => filterMessagesForSession(prev, sid).map(message =>
+            message.id === d.messageId ? { ...message, deletedAt: new Date().toISOString() } : message
+          ));
+        } else if (d.type === 'session:updated') {
+          setCur(current => current?.id === d.session.id ? { ...current, ...d.session } : current);
+        }
       } catch {}
     };
     ws.onerror = () => ws.close();
@@ -357,18 +381,21 @@ export default function AdminDashboard() {
     const tempId = localMessageId(clientMessageId);
     const optimisticMessage: Message = {
       id: tempId,
-      session_id: sid,
-      sender_type: 'OPERATOR',
-      sender_id: admin?.id || '',
+      sessionId: sid,
+      senderType: 'OPERATOR',
+      senderId: admin?.id || '',
       content,
-      message_type: 'text',
-      image_path: null,
+      messageType: 'text',
+      imagePath: null,
       status: 'sending',
-      created_at: new Date().toISOString(),
-      read_at: null,
-      is_read: 0,
-      quote_message_id: currentQuote?.id || null,
-      client_message_id: clientMessageId
+      createdAt: new Date().toISOString(),
+      readAt: null,
+      isRead: false,
+      quoteMessageId: currentQuote?.id || null,
+      clientMessageId: clientMessageId,
+      recalledAt: null,
+      deletedAt: null,
+      imagePurgedAt: null
     };
     if (!isActiveAdminSession(sid)) return;
     setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), optimisticMessage));
@@ -398,7 +425,7 @@ export default function AdminDashboard() {
       const res = await apiFetch<UploadResponse>(`/api/upload?sessionId=${encodeURIComponent(sid)}`, { method: 'POST', body: fd });
       if (!isActiveAdminSession(sid)) return;
       tempId = localMessageId(clientMessageId);
-      setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), { id: tempId, session_id: sid, sender_type: 'OPERATOR', sender_id: admin?.id || '', content: '', message_type: 'image', image_path: res.path, status: 'sending', created_at: new Date().toISOString(), read_at: null, is_read: 0, quote_message_id: null, client_message_id: clientMessageId }));
+      setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), { id: tempId, sessionId: sid, senderType: 'OPERATOR', senderId: admin?.id || '', content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: false, quoteMessageId: null, clientMessageId: clientMessageId, recalledAt: null, deletedAt: null, imagePurgedAt: null }));
       const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId: sid, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'OPERATOR' }) });
       if (!isActiveAdminSession(sid)) return;
       if (msgRes?.message && messageBelongsToActiveSession(msgRes.message, sid)) setSelectedMsgs(prev => mergeMessage(filterMessagesForSession(prev, sid), msgRes.message));
@@ -424,7 +451,7 @@ export default function AdminDashboard() {
 
   const quoteText = (qid: string) => {
     const q = selectedMsgs.find(m => m.id === qid && (!cur?.id || messageSessionId(m) === cur.id || !messageSessionId(m)));
-    return q ? (q.status === 'recalled' ? '消息已撤回' : q.message_type === 'image' ? '[图片]' : (q.content || '').slice(0, 60)) : '引用消息不可用';
+    return q ? (q.status === 'recalled' ? '消息已撤回' : q.messageType === 'image' ? '[图片]' : (q.content || '').slice(0, 60)) : '引用消息不可用';
   };
 
   const handleContextMenu = (e: React.MouseEvent, msg: Message) => { e.preventDefault(); setContextMenu({ msg, x: e.clientX, y: e.clientY }); };
@@ -434,10 +461,10 @@ export default function AdminDashboard() {
     e.target.addEventListener('touchend', clear, { once: true }); e.target.addEventListener('touchmove', clear, { once: true });
   }, []);
 
-  const isOwnMsg = (m: Message) => m.sender_type === 'OPERATOR' && admin && m.sender_id === admin.id;
+  const isOwnMsg = (m: Message) => m.senderType === 'OPERATOR' && admin && m.senderId === admin.id;
   const adminMenuItems = (msg: Message) => {
     const items: { label: string; action: () => void; disabled?: boolean }[] = [];
-    if (msg.status !== 'recalled' && !msg.deleted_at && msg.message_type !== 'image' && msg.content) {
+    if (msg.status !== 'recalled' && !msg.deletedAt && msg.messageType !== 'image' && msg.content) {
       items.push({
         label: '复制文本',
         action: () => {
@@ -446,9 +473,9 @@ export default function AdminDashboard() {
         },
       });
     }
-    if (msg.status !== 'recalled' && !msg.deleted_at) items.push({ label: '引用', action: () => { setQuote(msg); setContextMenu(null); } });
-    if (isOwnMsg(msg) && msg.status !== 'recalled' && !msg.deleted_at) items.push({ label: '撤回', action: () => { doRecall(msg); setContextMenu(null); }, disabled: recallLoading === msg.id });
-    if (isOwnMsg(msg) && !msg.deleted_at) items.push({ label: '删除', action: () => { doDelete(msg); setContextMenu(null); }, disabled: deleteLoading === msg.id });
+    if (msg.status !== 'recalled' && !msg.deletedAt) items.push({ label: '引用', action: () => { setQuote(msg); setContextMenu(null); } });
+    if (isOwnMsg(msg) && msg.status !== 'recalled' && !msg.deletedAt) items.push({ label: '撤回', action: () => { doRecall(msg); setContextMenu(null); }, disabled: recallLoading === msg.id });
+    if (isOwnMsg(msg) && !msg.deletedAt) items.push({ label: '删除', action: () => { doDelete(msg); setContextMenu(null); }, disabled: deleteLoading === msg.id });
     return items;
   };
 
@@ -457,15 +484,15 @@ export default function AdminDashboard() {
     return (
       <div key={m.id} className={`msg-row${own ? ' own' : ''}`}>
         {!own && <div className="message-avatar customer-avatar" aria-hidden="true">{currentCustomerAvatar}</div>}
-        {m.deleted_at ? (
+        {m.deletedAt ? (
           <div className={'msg ' + (own ? 'me' : '')}><span className="recalled">消息已删除</span></div>
         ) : (
           <div className={'msg ' + (own ? 'me' : '')}
             onContextMenu={(e) => handleContextMenu(e, m)}
             onTouchStart={handleLongPress(m)}>
-            {m.quote_message_id && <div className="quote-box">{quoteText(m.quote_message_id)}</div>}
-            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.message_type === 'image' && m.image_path ? <a className="message-image-link" href={m.image_path} target="_blank" rel="noreferrer"><img src={m.image_path} alt="聊天图片" loading="lazy" /></a> : <ChatMessageText text={m.content || ''} />}
-            <div className={`time message-status${m.status === 'failed' ? ' failed' : m.status === 'sending' ? ' sending' : ''}`}>{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败，请稍后重试' : `${formatTime(m.created_at)} ${own ? (m.is_read ? '客户已读' : '未读') : ''}`}</div>
+            {m.quoteMessageId && <div className="quote-box">{quoteText(m.quoteMessageId)}</div>}
+            {m.status === 'recalled' ? <span className="recalled">消息已撤回</span> : m.messageType === 'image' && m.imagePath ? <a className="message-image-link" href={m.imagePath} target="_blank" rel="noreferrer"><img src={m.imagePath} alt="聊天图片" loading="lazy" /></a> : <ChatMessageText text={m.content || ''} />}
+            <div className={`time message-status${m.status === 'failed' ? ' failed' : m.status === 'sending' ? ' sending' : ''}`}>{m.status === 'sending' ? '发送中...' : m.status === 'failed' ? '发送失败，请稍后重试' : `${formatTime(m.createdAt)} ${own ? (m.isRead ? '客户已读' : '未读') : ''}`}</div>
           </div>
         )}
       </div>
@@ -484,7 +511,7 @@ export default function AdminDashboard() {
       await apiFetch(`/api/sessions/${s.id}/close`, { method: 'POST' });
       setQuote(null);
       await fetchSessions();
-      setCur((c: Session | null) => c?.id === s.id ? { ...c, status: 'ARCHIVED', archived_at: new Date().toISOString(), assigned_operator_id: null } : c);
+      setCur((c: Session | null) => c?.id === s.id ? { ...c, status: 'ARCHIVED', archivedAt: new Date().toISOString(), assignedOperatorId: null } : c);
       setSessionGroup('archived');
       showToast('会话已结束');
     } catch (error) {
@@ -501,7 +528,7 @@ export default function AdminDashboard() {
   }, []);
 
   const moveSessionToTrash = async (s: Session) => {
-    if (!s || sessionActionLoading || s.deleted_at || !isArchivedSession(s)) return;
+    if (!s || sessionActionLoading || s.deletedAt || !isArchivedSession(s)) return;
     setSessionActionLoading(`delete:${s.id}`);
     try {
       const res = await apiFetch<SessionMutationResponse>(`/api/sessions/${s.id}/delete`, { method: 'POST' });
@@ -517,7 +544,7 @@ export default function AdminDashboard() {
   };
 
   const restoreDeletedSession = async (s: Session) => {
-    if (!s || sessionActionLoading || !s.deleted_at) return;
+    if (!s || sessionActionLoading || !s.deletedAt) return;
     setSessionActionLoading(`restore:${s.id}`);
     try {
       const res = await apiFetch<SessionMutationResponse>(`/api/sessions/${s.id}/restore`, { method: 'POST' });
@@ -532,7 +559,7 @@ export default function AdminDashboard() {
     }
   };
 
-  const canClearHistorySession = (session?: Session | null) => Boolean(isSuper && session && !session.purged_at && (session.deleted_at || isArchivedSession(session)));
+  const canClearHistorySession = (session?: Session | null) => Boolean(isSuper && session && !session.purgedAt && (session.deletedAt || isArchivedSession(session)));
 
   const startClearHistory = async (session: Session) => {
     if (!canClearHistorySession(session) || clearHistoryLoading) return;
@@ -593,8 +620,8 @@ export default function AdminDashboard() {
   };
 
   const applyCustomerRemark = useCallback((sessionId: string, remarkName: string | null) => {
-    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, customer_remark_name: remarkName } : s));
-    setCur((c: Session | null) => c?.id === sessionId ? { ...c, customer_remark_name: remarkName } : c);
+    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, customerRemarkName: remarkName } : s));
+    setCur((c: Session | null) => c?.id === sessionId ? { ...c, customerRemarkName: remarkName } : c);
   }, []);
 
   const saveCustomerRemark = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -604,7 +631,7 @@ export default function AdminDashboard() {
     setRemarkSaving(true);
     try {
       const res = await apiFetch<SessionMutationResponse>(`/api/sessions/${cur.id}/customer-remark`, { method: 'PATCH', body: JSON.stringify({ remarkName }) });
-      const nextRemark = res?.session?.customer_remark_name || null;
+      const nextRemark = res?.session?.customerRemarkName || null;
       applyCustomerRemark(cur.id, nextRemark);
       setRemarkDraft(nextRemark || '');
       showToast(nextRemark ? '备注已保存' : '备注已清除');
@@ -618,7 +645,7 @@ export default function AdminDashboard() {
 
   const renderCustomerRemarkEditor = () => {
     if (!cur) return null;
-    const currentRemark = String(cur.customer_remark_name || '');
+    const currentRemark = String(cur.customerRemarkName || '');
     const changed = remarkDraft.trim() !== currentRemark;
     return (
       <form className="customer-remark-form" onSubmit={saveCustomerRemark} autoComplete="off">
@@ -822,7 +849,7 @@ export default function AdminDashboard() {
                     emptyText={currentSessionEnded ? '历史已清空' : '暂无消息，发送第一条回复开始沟通。'}
                   />
                   {currentSessionEnded ? <div className="session-ended-state">{sessionGroupOf(cur) === 'trash' ? '会话在回收站中。' : '会话已归档，消息输入已关闭。'}</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
-                    {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
+                    {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.messageType === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
                     <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
                     <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
                     <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
@@ -852,8 +879,8 @@ export default function AdminDashboard() {
                   <div className="operator-list">
                     {operators.length ? operators.map(op => (
                       <div className="operator-row" key={op.id}>
-                        <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
-                        {op.is_disabled ? <span className="muted">已禁用</span> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
+                        <div><b>{op.username}</b><span>{op.isDisabled ? '已禁用' : op.online ? '在线' : '离线'}{op.lastSeenAt ? ' · ' + new Date(op.lastSeenAt).toLocaleString() : ''}</span></div>
+                        {op.isDisabled ? <span className="muted">已禁用</span> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
                     )) : <StatusBlock>暂无客服账号，可先创建一个客服账号。</StatusBlock>}
                   </div>
@@ -865,7 +892,7 @@ export default function AdminDashboard() {
                 <section className="chat-panel" style={{ height: '100%' }}>
                   <div className="msgs">
                     {staffMsgs.length === 0 ? <StatusBlock>暂无内部消息，发送一条同步团队状态。</StatusBlock> : staffMsgs.map(m => (
-                      <div key={m.id} className={'msg ' + (m.sender_admin_id === admin?.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
+                      <div key={m.id} className={'msg ' + (m.senderAdminId === admin?.id ? 'me' : '')}><b>{m.senderName}</b><div>{m.content}</div><div className="time">{formatTime(m.createdAt)}</div></div>
                     ))}
                   </div>
                   <form className="composer staff-composer" autoComplete="off" onSubmit={sendStaff}>
@@ -891,12 +918,12 @@ export default function AdminDashboard() {
                     messages={selectedMsgs}
                     renderMessage={renderSelectedMessage}
                     loading={loadingMsgs === cur?.id}
-                    showEmpty={(!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deleted_at) || !cur}
+                    showEmpty={(!loadingMsgs && selectedMsgs.length === 0 && cur && !cur.deletedAt) || !cur}
                     emptyText={cur ? (currentSessionEnded ? '历史已清空' : '暂无消息，选中输入框即可开始回复。') : '请选择左侧会话查看沟通记录。'}
                   />
                   {cur && !currentSessionEnded ? (
                     <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
-                      {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.message_type === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button type="button" onClick={() => setQuote(null)}>取消</button></div> : null}
+                      {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.messageType === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button type="button" onClick={() => setQuote(null)}>取消</button></div> : null}
                       <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
                       <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
                       <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
@@ -926,8 +953,8 @@ export default function AdminDashboard() {
                   <div className="operator-list">
                     {operators.length ? operators.map(op => (
                       <div className="operator-row" key={op.id}>
-                        <div><b>{op.username}</b><span>{op.is_disabled ? '已禁用' : op.online ? '在线' : '离线'}{op.last_seen_at ? ' · ' + new Date(op.last_seen_at).toLocaleString() : ''}</span></div>
-                        {op.is_disabled ? <span className="muted">已禁用</span> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
+                        <div><b>{op.username}</b><span>{op.isDisabled ? '已禁用' : op.online ? '在线' : '离线'}{op.lastSeenAt ? ' · ' + new Date(op.lastSeenAt).toLocaleString() : ''}</span></div>
+                        {op.isDisabled ? <span className="muted">已禁用</span> : <button type="button" className="btn danger" onClick={() => disableOp(op)} disabled={!!disableOpLoading}>{disableOpLoading === '禁用中...' ? '禁用中...' : '禁用'}</button>}
                       </div>
                     )) : <StatusBlock>暂无客服账号，可先创建一个客服账号。</StatusBlock>}
                   </div>
@@ -939,7 +966,7 @@ export default function AdminDashboard() {
                 <section className="chat-panel">
                   <div className="msgs">
                     {staffMsgs.length === 0 ? <StatusBlock>暂无内部消息，发送一条同步团队状态。</StatusBlock> : staffMsgs.map(m => (
-                      <div key={m.id} className={'msg ' + (m.sender_admin_id === admin?.id ? 'me' : '')}><b>{m.sender_name}</b><div>{m.content}</div><div className="time">{formatTime(m.created_at)}</div></div>
+                      <div key={m.id} className={'msg ' + (m.senderAdminId === admin?.id ? 'me' : '')}><b>{m.senderName}</b><div>{m.content}</div><div className="time">{formatTime(m.createdAt)}</div></div>
                     ))}
                   </div>
                   <form className="composer staff-composer" autoComplete="off" onSubmit={sendStaff}>
