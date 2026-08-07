@@ -90,6 +90,9 @@ export function mapChatSessionDto(dto: ChatSessionDto): ChatSession {
     createdAt: optionalString(first(dto.created_at, dto.createdAt)),
     updatedAt: optionalString(first(dto.updated_at, dto.updatedAt)),
     unreadCount: Number(first(dto.unread_count, dto.unreadCount) || 0),
+    deviceLabel: nullableString(first(dto.device_label, dto.deviceLabel)),
+    approximateLocation: nullableString(first(dto.approximate_location, dto.approximateLocation)),
+    clientMetadataCapturedAt: nullableString(first(dto.client_metadata_captured_at, dto.clientMetadataCapturedAt)),
   };
 }
 
