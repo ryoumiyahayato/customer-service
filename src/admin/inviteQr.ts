@@ -205,13 +205,23 @@ function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, wi
   ctx.closePath();
 }
 
-export function renderInviteQr(canvas: HTMLCanvasElement, url: string, style: InviteQrStyle) {
-  const matrix = buildQrMatrix(url);
+function validMatrix(matrix: boolean[][] | null | undefined) {
+  return Boolean(matrix?.length && matrix.every(row => Array.isArray(row) && row.length === matrix.length));
+}
+
+export function renderInviteQr(
+  canvas: HTMLCanvasElement,
+  url: string,
+  style: InviteQrStyle,
+  matrixOverride?: boolean[][] | null,
+) {
+  const matrix = validMatrix(matrixOverride) ? matrixOverride! : url ? buildQrMatrix(url) : null;
   const quiet = 4;
   const modulePx = 8;
-  const qrPx = (matrix.length + quiet * 2) * modulePx;
-  const topHeight = style.topText.trim() ? 76 : 48;
-  const bottomHeight = style.bottomText.trim() ? 68 : 46;
+  const matrixSize = matrix?.length || SIZE;
+  const qrPx = (matrixSize + quiet * 2) * modulePx;
+  const topHeight = 78;
+  const bottomHeight = 72;
   const width = Math.max(400, qrPx + 56);
   const height = topHeight + qrPx + bottomHeight;
   canvas.width = width;
@@ -245,13 +255,21 @@ export function renderInviteQr(canvas: HTMLCanvasElement, url: string, style: In
 
   drawCenteredText(ctx, style.topText, topHeight / 2 + 4, width, textColorForBackground(background));
 
-  const startX = Math.floor((width - qrPx) / 2) + quiet * modulePx;
-  const startY = topHeight + quiet * modulePx;
-  ctx.fillStyle = '#000000';
-  for (let y = 0; y < matrix.length; y += 1) {
-    for (let x = 0; x < matrix.length; x += 1) {
-      if (matrix[y][x]) ctx.fillRect(startX + x * modulePx, startY + y * modulePx, modulePx, modulePx);
+  if (matrix) {
+    const startX = Math.floor((width - qrPx) / 2) + quiet * modulePx;
+    const startY = topHeight + quiet * modulePx;
+    ctx.fillStyle = '#000000';
+    for (let y = 0; y < matrix.length; y += 1) {
+      for (let x = 0; x < matrix.length; x += 1) {
+        if (matrix[y][x]) ctx.fillRect(startX + x * modulePx, startY + y * modulePx, modulePx, modulePx);
+      }
     }
+  } else {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '500 18px system-ui, sans-serif';
+    ctx.fillText('生成邀请后在这里显示二维码', width / 2, topHeight + qrPx / 2);
   }
 
   drawCenteredText(ctx, style.bottomText, bandTop + bottomHeight / 2 - 1, width, textColorForBackground(accent));
