@@ -7,6 +7,8 @@ export type OperatorPresentation = {
   qrBottomText: string;
 };
 
+export const QR_CARD_TEXT_MAX_LENGTH = 18;
+
 export const DEFAULT_OPERATOR_PRESENTATION: OperatorPresentation = {
   welcomeText: '您好，请问有什么可以帮您？',
   avatarKey: '',
@@ -45,7 +47,7 @@ export function normalizeOperatorPresentation(value: unknown): OperatorPresentat
     avatarKey: cleanAvatarKey(source.avatarKey),
     qrBackgroundColor: cleanColor(source.qrBackgroundColor, DEFAULT_OPERATOR_PRESENTATION.qrBackgroundColor),
     qrAccentColor: cleanColor(source.qrAccentColor, DEFAULT_OPERATOR_PRESENTATION.qrAccentColor),
-    qrTopText: cleanText(source.qrTopText, 80, DEFAULT_OPERATOR_PRESENTATION.qrTopText),
-    qrBottomText: cleanText(source.qrBottomText, 80, DEFAULT_OPERATOR_PRESENTATION.qrBottomText),
+    qrTopText: cleanText(source.qrTopText, QR_CARD_TEXT_MAX_LENGTH, DEFAULT_OPERATOR_PRESENTATION.qrTopText),
+    qrBottomText: cleanText(source.qrBottomText, QR_CARD_TEXT_MAX_LENGTH, DEFAULT_OPERATOR_PRESENTATION.qrBottomText),
   };
 }
