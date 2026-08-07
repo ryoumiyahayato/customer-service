@@ -6,6 +6,7 @@ const DESKTOP_QUERY = '(min-width: 821px)';
 export default function DesktopAdminPolish() {
   const [desktop, setDesktop] = useState(() => window.matchMedia(DESKTOP_QUERY).matches);
   const [hasSessionDetails, setHasSessionDetails] = useState(false);
+  const [sessionLabel, setSessionLabel] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   useEffect(() => {
@@ -21,13 +22,16 @@ export default function DesktopAdminPolish() {
 
   useEffect(() => {
     const sync = () => {
-      const exists = Boolean(document.querySelector('.admin:not(.is-narrow) .session-action-bar'));
+      const bar = document.querySelector('.admin:not(.is-narrow) .session-action-bar');
+      const exists = Boolean(bar);
+      const label = bar?.querySelector('div:first-child b')?.textContent?.trim() || '';
       setHasSessionDetails(exists);
+      setSessionLabel(label);
       if (!exists) setDetailsOpen(false);
     };
     sync();
     const observer = new MutationObserver(sync);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     return () => observer.disconnect();
   }, []);
 
@@ -55,7 +59,8 @@ export default function DesktopAdminPolish() {
         onClick={() => setDetailsOpen(true)}
         aria-expanded={detailsOpen}
       >
-        会话详情
+        <b>{sessionLabel || '当前会话'}</b>
+        <span>详情</span>
       </button>
       {detailsOpen ? (
         <>
