@@ -40,9 +40,9 @@ export type ChatSession = {
   createdAt: string;
   updatedAt: string;
   unreadCount: number;
-  deviceLabel: string | null;
-  approximateLocation: string | null;
-  clientMetadataCapturedAt: string | null;
+  deviceLabel?: string | null;
+  approximateLocation?: string | null;
+  clientMetadataCapturedAt?: string | null;
 };
 
 export type AdminIdentity = {
