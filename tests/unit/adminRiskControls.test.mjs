@@ -5,6 +5,7 @@ import test from 'node:test';
 const read = path => readFileSync(path, 'utf8');
 const workerEntry = read('src/worker-entry.ts');
 const workerFinal = read('src/worker-final.ts');
+const chatRoom = read('src/durable-objects/ChatRoom.ts');
 const mobileShell = read('src/admin/AdminMobileShell.tsx');
 const desktopShell = read('src/admin/DesktopAdminPolish.tsx');
 const invitePanel = read('src/admin/InviteLinkPanel.tsx');
@@ -18,6 +19,16 @@ test('ordinary operator risk controls are enforced in Worker source boundaries',
   assert.match(workerEntry, /operator_permission_denied/);
   assert.match(workerFinal, /\/api\/ws\/staff/);
   assert.match(workerFinal, /canUseStaffChat/);
+  assert.match(workerFinal, /withStaffRoomAccess/);
+});
+
+test('established staff sockets are revalidated against current session and capability on every staff broadcast', () => {
+  assert.match(chatRoom, /mode: 'staff'/);
+  assert.match(chatRoom, /CHAT_ROOM_STAFF_BROADCAST_HEADER/);
+  assert.match(chatRoom, /canReceiveStaff/);
+  assert.match(chatRoom, /auth\.revoked_at IS NULL/);
+  assert.match(chatRoom, /canUseStaffChat/);
+  assert.match(chatRoom, /Staff access revoked/);
 });
 
 test('risk center endpoints are super-admin gated and audited', () => {
