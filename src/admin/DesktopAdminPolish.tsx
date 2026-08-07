@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import './desktopAdminPolish.css';
+import './desktopAdminPolishPatch.css';
 
 const DESKTOP_QUERY = '(min-width: 821px)';
 
