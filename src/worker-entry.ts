@@ -576,8 +576,8 @@ export default {
     const policyBlocked = await enforceOperatorPolicy(req, env);
     if (policyBlocked) return policyBlocked;
 
-    const loginReq = url.pathname === '/api/auth/login' && method === 'POST' ? req.clone() : null;
-    const profileReq = url.pathname === '/api/admins/profile' && method === 'PATCH' ? req.clone() : null;
+    const loginReq = url.pathname === '/api/auth/login' && method === 'POST' ? req.clone() as unknown as Request : null;
+    const profileReq = url.pathname === '/api/admins/profile' && method === 'PATCH' ? req.clone() as unknown as Request : null;
     const response = await inner.fetch(req, env, ctx);
 
     if (loginReq) defer(ctx, logAdminLogin(req, env, response.clone(), loginReq));
