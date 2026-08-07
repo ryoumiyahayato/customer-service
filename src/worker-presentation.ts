@@ -1,6 +1,7 @@
 export { ChatRoom } from './worker-business-hardening';
 import businessWorker from './worker-business-hardening';
 import type { Env } from './worker';
+import { createChatRoomBroadcastRequest } from './durable-objects/ChatRoom';
 import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { hmacHex, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
@@ -42,6 +43,7 @@ const AVATAR_REQUEST_MAX_BYTES = 2 * 1024 * 1024 + 64 * 1024;
 const AVATAR_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const ADMIN_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const STAFF_CHAT_CLEAR_CONFIRMATION = 'CLEAR_STAFF_CHAT';
 
 function json(body: unknown, status = 200) { return jsonResponse(body, { status }); }
 const getCookie = readCookie;
@@ -242,6 +244,36 @@ async function handleInvitePresentation(env: Env, token: string) {
   return json({ presentation: publicPresentation(target, await readPresentation(env, target.id)) });
 }
 
+async function handleStaffChatClear(req: Request, env: Env) {
+  if (!sameOriginWrite(req)) return json({ error: 'forbidden' }, 403);
+  const admin = await currentAdmin(env, req);
+  if (!admin) return json({ error: 'unauthenticated' }, 401);
+  if (admin.role !== 'SUPER_ADMIN') return json({ error: 'forbidden' }, 403);
+
+  const ip = req.headers.get('cf-connecting-ip') || 'unknown';
+  const retryAfter = await consumeRateLimit(env.DB, `staff-clear:${admin.id}:${ip}`.slice(0, 240), 3, 10 * 60 * 1000);
+  if (retryAfter !== null) return json({ error: 'rate_limited', retryAfter }, 429);
+
+  const parsed = await readJsonObjectWithinLimit(req, JSON_MAX_BYTES);
+  if (parsed.tooLarge) return json({ error: 'request_too_large' }, 413);
+  if (parsed.body.confirm !== STAFF_CHAT_CLEAR_CONFIRMATION) return json({ error: 'invalid_confirmation' }, 400);
+
+  const countRow = await env.DB.prepare('SELECT COUNT(*) count FROM staff_messages').first<{ count: number }>();
+  const deleted = Number(countRow?.count || 0);
+  await env.DB.prepare('DELETE FROM staff_messages').run();
+  const clearedAt = new Date().toISOString();
+  try {
+    await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName('staff')).fetch(createChatRoomBroadcastRequest('staff', {
+      type: 'staff:cleared',
+      clearedAt,
+      clearedBy: admin.id,
+    }));
+  } catch (error) {
+    console.error('Failed to broadcast staff chat clear event', error);
+  }
+  return json({ ok: true, deleted, clearedAt });
+}
+
 export default {
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     await inner.scheduled?.(controller, env, ctx);
@@ -253,6 +285,7 @@ export default {
     if (url.pathname === '/api/admins/presentation' && req.method === 'PUT') return handlePresentationPut(req, env);
     if (url.pathname === '/api/admins/presentation/avatar' && req.method === 'POST') return handleAvatarUpload(req, env, ctx);
     if (url.pathname === '/api/admins/presentation/avatar' && req.method === 'DELETE') return handleAvatarDelete(req, env, ctx);
+    if (url.pathname === '/api/staff-chat' && req.method === 'DELETE') return handleStaffChatClear(req, env);
     const avatarMatch = url.pathname.match(/^\/api\/operator-avatar\/([^/]+)$/);
     if (avatarMatch && req.method === 'GET') return handlePublicAvatar(env, decodeURIComponent(avatarMatch[1]));
     const invitePresentationMatch = url.pathname.match(/^\/api\/invite-presentation\/([^/]+)$/);
