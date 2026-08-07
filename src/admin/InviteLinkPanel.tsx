@@ -23,6 +23,7 @@ type OperatorPresentation = {
   welcomeText: string;
   avatarUrl: string;
   qrBackgroundColor: string;
+  qrAccentColor: string;
   qrTopText: string;
   qrBottomText: string;
 };
@@ -33,6 +34,7 @@ const DEFAULT_PRESENTATION: OperatorPresentation = {
   welcomeText: '您好，请问有什么可以帮您？',
   avatarUrl: '',
   qrBackgroundColor: '#ffffff',
+  qrAccentColor: '#18b868',
   qrTopText: '扫码联系客服',
   qrBottomText: '',
 };
@@ -123,6 +125,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
     try {
       renderInviteQr(qrCanvasRef.current, inviteUrl, {
         backgroundColor: presentation.qrBackgroundColor,
+        accentColor: presentation.qrAccentColor,
         topText: presentation.qrTopText,
         bottomText: presentation.qrBottomText,
       });
@@ -130,7 +133,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
     } catch (err) {
       setQrError(getErrorMessage(err, '二维码生成失败'));
     }
-  }, [inviteUrl, presentation.qrBackgroundColor, presentation.qrTopText, presentation.qrBottomText, drawerOpen]);
+  }, [inviteUrl, presentation.qrBackgroundColor, presentation.qrAccentColor, presentation.qrTopText, presentation.qrBottomText, drawerOpen]);
 
   const savePresentation = async (showNotice = true) => {
     if (presentationSaving) return false;
@@ -142,6 +145,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
         body: JSON.stringify({
           welcomeText: presentation.welcomeText,
           qrBackgroundColor: presentation.qrBackgroundColor,
+          qrAccentColor: presentation.qrAccentColor,
           qrTopText: presentation.qrTopText,
           qrBottomText: presentation.qrBottomText,
         }),
@@ -304,19 +308,23 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
 
         <div className="qr-customization-grid">
           <label className="operator-setting-field compact">
-            <span>二维码背景</span>
+            <span>二维码内部背景</span>
             <input type="color" value={presentation.qrBackgroundColor} onChange={e => setPresentation(prev => ({ ...prev, qrBackgroundColor: e.target.value }))} />
+          </label>
+          <label className="operator-setting-field compact">
+            <span>边框 / 底栏颜色</span>
+            <input type="color" value={presentation.qrAccentColor} onChange={e => setPresentation(prev => ({ ...prev, qrAccentColor: e.target.value }))} />
           </label>
           <label className="operator-setting-field">
             <span>二维码上方文字</span>
             <input maxLength={80} value={presentation.qrTopText} onChange={e => setPresentation(prev => ({ ...prev, qrTopText: e.target.value }))} />
           </label>
           <label className="operator-setting-field">
-            <span>二维码下方文字</span>
+            <span>二维码底栏文字</span>
             <input maxLength={80} value={presentation.qrBottomText} onChange={e => setPresentation(prev => ({ ...prev, qrBottomText: e.target.value }))} />
           </label>
         </div>
-        <small className="qr-color-warning">二维码背景过深可能降低扫码识别率，建议使用浅色背景。</small>
+        <small className="qr-color-warning">二维码主体建议保持浅色背景；边框和底栏使用同一强调色，方便制作类似企业客服卡片的效果。</small>
         <button type="button" className="presentation-save-button" onClick={() => savePresentation()} disabled={presentationSaving || presentationLoading}>{presentationSaving ? '保存中...' : '保存设置'}</button>
       </div>
 
