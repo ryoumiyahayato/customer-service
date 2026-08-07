@@ -31,7 +31,7 @@ const checks = [
   ['archive guards active source state', block('archive', 'unarchive'), ['deleted_at IS NULL', 'purged_at IS NULL', 'archived_at IS NULL', "status IN ('PENDING','OPEN')"]],
   ['unarchive guards archived source state', block('unarchive', 'moveToTrash'), ['deleted_at IS NULL', 'purged_at IS NULL', 'archived_at IS NOT NULL', "status IN ('ARCHIVED','CLOSED')"]],
   ['moveToTrash guards archived source state', block('moveToTrash', 'restore'), ['deleted_at IS NULL', 'purged_at IS NULL', 'archived_at IS NOT NULL', "status IN ('ARCHIVED','CLOSED')"]],
-  ['restore guards trash source state', block('restore'), ['deleted_at IS NOT NULL', 'purged_at IS NULL']],
+  ['legacy repository restore remains state-guarded while service blocks product use', block('restore'), ['deleted_at IS NOT NULL', 'purged_at IS NULL']],
 ];
 
 let failed = 0;
@@ -43,11 +43,12 @@ for (const [name, source, required] of checks) {
 
 const behavioralChecks = [
   ['service converts zero-row writes to SESSION_STATE_CONFLICT', service.includes('Number(result.meta?.changes || 0) !== 1') && service.includes("new DomainError('SESSION_STATE_CONFLICT', 409)")],
+  ['service rejects restore as an unsupported product action', service.includes("action === 'restore'") && service.includes("new DomainError('RESTORE_NOT_SUPPORTED', 410)")],
   ['unknown states fail closed', state.includes("state.status === 'PENDING' || state.status === 'OPEN'") && state.includes("return 'archived';") && unit.includes('fails closed for unknown or missing stored statuses')],
   ['integration loads production repository and service source', integration.includes("from '../../src/repositories/sessionRepository.ts'") && integration.includes("from '../../src/services/sessionService.ts'") && integration.includes('tsExtensionLoader.mjs')],
   ['integration does not copy lifecycle SQL functions', !/function\s+(assign|archive|unarchive|moveToTrash|restore)\s*\(/.test(integration)],
   ['integration covers stale reads and duplicate conflicts', integration.includes('rejects stale assign and archive writes') && integration.includes('rejects stale moveToTrash') && integration.includes('duplicate archive and trash operations') && integration.includes('SESSION_STATE_CONFLICT')],
-  ['integration executes production purge race', integration.includes("'src/sessionLifecycle.ts'") && integration.includes('purgeTrashSessions') && integration.includes('production purge races by database state ownership')],
+  ['integration enforces irreversible trash through production purge', integration.includes("'../../src/sessionLifecycle.ts'") && integration.includes('purgeTrashSessions') && integration.includes('trash remains irreversible before and after production purge') && integration.includes('RESTORE_NOT_SUPPORTED')],
 ];
 for (const [name, ok] of behavioralChecks) {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`);
