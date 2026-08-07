@@ -17,6 +17,7 @@ const CLEAR_CONFIRMATION = 'CLEAR_STAFF_CHAT';
 
 export default function SuperAdminStaffClearControl() {
   const [isSuper, setIsSuper] = useState(false);
+  const [staffViewVisible, setStaffViewVisible] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState('');
 
@@ -32,7 +33,15 @@ export default function SuperAdminStaffClearControl() {
     return () => { active = false; };
   }, []);
 
-  if (!isSuper) return null;
+  useEffect(() => {
+    const sync = () => setStaffViewVisible(Boolean(document.querySelector('.admin .staff-composer')));
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
+  if (!isSuper || !staffViewVisible) return null;
 
   const clearStaffChat = async () => {
     if (clearing) return;
