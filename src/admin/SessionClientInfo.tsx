@@ -50,8 +50,9 @@ export default function SessionClientInfo() {
       <dl>
         <div><dt>设备</dt><dd>{session.deviceLabel || '未识别'}</dd></div>
         <div><dt>大致位置</dt><dd>{session.approximateLocation || '未提供'}</dd></div>
+        {session.ipAddress ? <div><dt>网络 IP</dt><dd>{session.ipAddress}</dd></div> : null}
       </dl>
-      <small>位置来自 Cloudflare 网络边缘的城市/地区级推测；不使用 GPS，也不向客服显示访客 IP。</small>
+      <small>{session.ipAddress ? 'IP 只在超级管理员响应中返回；普通客服无法通过会话列表 API 获取。' : '位置来自 Cloudflare 网络边缘的城市/地区级推测；普通客服不返回访客 IP。'}</small>
     </details>,
     target,
   );
