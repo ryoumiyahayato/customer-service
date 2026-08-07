@@ -31,6 +31,7 @@ function notifyStaffView(active: boolean) {
 
 export default function DesktopAdminPolish() {
   const [desktop, setDesktop] = useState(() => window.innerWidth > 820);
+  const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<RootMode>('messages');
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('profile');
   const [username, setUsername] = useState('');
@@ -39,12 +40,24 @@ export default function DesktopAdminPolish() {
   const [canCreateInvites, setCanCreateInvites] = useState(true);
   const [canUseStaffChat, setCanUseStaffChat] = useState(true);
   const [error, setError] = useState('');
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [sessionLabel, setSessionLabel] = useState('');
+  const [hasSession, setHasSession] = useState(false);
   const isSuper = role === 'SUPER_ADMIN';
 
   useEffect(() => {
     const onResize = () => setDesktop(window.innerWidth > 820);
     addEventListener('resize', onResize);
     return () => removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const exists = Boolean(document.querySelector('.admin:not(.is-narrow)'));
+      setReady(exists);
+      if (exists) window.clearInterval(timer);
+    }, 80);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -72,24 +85,35 @@ export default function DesktopAdminPolish() {
     buttonWithText('.side-nav button', label)?.click();
   }, []);
 
-  const setBodyMode = useCallback((nextMode: RootMode, nextSettingsPage: SettingsPage = settingsPage) => {
-    document.body.classList.toggle('desktop-admin-qr-mode', nextMode === 'qr');
-    document.body.classList.toggle('desktop-admin-settings-mode', nextMode === 'settings');
-    document.body.classList.toggle('desktop-admin-settings-legacy', nextMode === 'settings' && (nextSettingsPage === 'staff' || nextSettingsPage === 'operators'));
-  }, [settingsPage]);
+  useEffect(() => {
+    if (!desktop || !ready) return;
+    const onClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const row = target?.closest('.admin:not(.is-narrow) .conversation-item, .admin:not(.is-narrow) .session') as HTMLElement | null;
+      if (!row) return;
+      const label = row.querySelector('.session-main b')?.textContent?.trim()
+        || row.querySelector('b')?.textContent?.trim()
+        || '当前会话';
+      setSessionLabel(label);
+      setHasSession(true);
+      setDetailsOpen(false);
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [desktop, ready]);
 
   useEffect(() => {
-    if (!desktop) {
-      document.body.classList.remove('desktop-admin-qr-mode', 'desktop-admin-settings-mode', 'desktop-admin-settings-legacy');
-      return;
-    }
-    setBodyMode(mode, settingsPage);
-    return () => document.body.classList.remove('desktop-admin-qr-mode', 'desktop-admin-settings-mode', 'desktop-admin-settings-legacy');
-  }, [desktop, mode, settingsPage, setBodyMode]);
+    document.body.classList.toggle('desktop-admin-qr-mode', desktop && mode === 'qr');
+    document.body.classList.toggle('desktop-admin-settings-mode', desktop && mode === 'settings');
+    document.body.classList.toggle('desktop-admin-settings-legacy', desktop && mode === 'settings' && (settingsPage === 'staff' || settingsPage === 'operators'));
+    document.body.classList.toggle('desktop-admin-details-open', desktop && mode === 'messages' && detailsOpen);
+    return () => document.body.classList.remove('desktop-admin-qr-mode', 'desktop-admin-settings-mode', 'desktop-admin-settings-legacy', 'desktop-admin-details-open');
+  }, [desktop, mode, settingsPage, detailsOpen]);
 
   const goMessages = () => {
     setError('');
     setMode('messages');
+    setDetailsOpen(false);
     notifyStaffView(false);
     openLegacyView('会话');
   };
@@ -97,6 +121,7 @@ export default function DesktopAdminPolish() {
   const goQr = () => {
     setError('');
     setMode('qr');
+    setDetailsOpen(false);
     notifyStaffView(false);
     openLegacyView('会话');
     if (!canCreateInvites) setError('当前客服账号未被授予生成邀请二维码权限。');
@@ -106,6 +131,7 @@ export default function DesktopAdminPolish() {
     setError('');
     setMode('settings');
     setSettingsPage('profile');
+    setDetailsOpen(false);
     notifyStaffView(false);
     openLegacyView('会话');
   };
@@ -114,6 +140,7 @@ export default function DesktopAdminPolish() {
     setError('');
     setMode('settings');
     setSettingsPage(page);
+    setDetailsOpen(false);
     if (page === 'staff') {
       if (!canUseStaffChat) {
         setSettingsPage('profile');
@@ -142,11 +169,19 @@ export default function DesktopAdminPolish() {
     }
   };
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDetailsOpen(false);
+    };
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  }, []);
+
   useEffect(() => () => notifyStaffView(false), []);
 
-  if (!desktop || !document.querySelector('.admin:not(.is-narrow)')) return null;
+  if (!desktop || !ready) return null;
 
-  const ownOverlay = mode === 'qr' || (mode === 'settings' && (settingsPage === 'profile' || settingsPage === 'security'));
+  const ownSettingsOverlay = mode === 'settings' && (settingsPage === 'profile' || settingsPage === 'security');
 
   return (
     <>
@@ -156,6 +191,13 @@ export default function DesktopAdminPolish() {
         <button type="button" className={mode === 'qr' ? 'active' : ''} onClick={goQr}><RailIcon type="qr" /><span>二维码</span></button>
         <button type="button" className={mode === 'settings' ? 'active' : ''} onClick={goSettings}><RailIcon type="settings" /><span>设置</span></button>
       </nav>
+
+      {mode === 'messages' && hasSession ? (
+        <button type="button" className="desktop-session-details-button" onClick={() => setDetailsOpen(true)}><b>{sessionLabel}</b><span>详情</span></button>
+      ) : null}
+      {mode === 'messages' && detailsOpen ? (
+        <button type="button" className="desktop-session-details-backdrop" aria-label="关闭客户详情" onClick={() => setDetailsOpen(false)} />
+      ) : null}
 
       {mode === 'qr' ? (
         <div className="desktop-shell-overlay desktop-qr-overlay">
@@ -175,7 +217,7 @@ export default function DesktopAdminPolish() {
         </aside>
       ) : null}
 
-      {ownOverlay && mode === 'settings' ? (
+      {ownSettingsOverlay ? (
         <main className="desktop-settings-content">
           {settingsPage === 'profile' ? <OperatorProfileSettings username={username} role={role} /> : null}
           {settingsPage === 'security' && isSuper ? <AdminRiskCenter /> : null}
