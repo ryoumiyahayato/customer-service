@@ -5,6 +5,7 @@ import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { jsonResponse } from './security/responseHeaders';
+import { requestStreamExceeds } from './security/requestLimits';
 import { withStaffRoomAccess } from './durable-objects/ChatRoom';
 
 type WorkerModule = {
@@ -20,6 +21,7 @@ type StaffAdminContext = {
 };
 
 const inner = worker as WorkerModule;
+const ADMIN_CONTROL_JSON_MAX_BYTES = 16 * 1024;
 
 function isLocalDevHost(host: string) {
   let normalized = String(host || '').toLowerCase();
@@ -35,6 +37,11 @@ function isSameOriginWebSocket(req: Request) {
     try { return new URL(origin).origin === url.origin; } catch { return false; }
   }
   return isLocalDevHost(url.hostname) || isLocalDevHost(req.headers.get('host') || '');
+}
+
+function isBoundedAdminControlMutation(path: string, method: string) {
+  if (method === 'PUT' && /^\/api\/admin\/operator-policies\/[^/]+$/.test(path)) return true;
+  return method === 'POST' && /^\/api\/admin\/operators\/[^/]+\/reset-password$/.test(path);
 }
 
 async function currentStaffAdmin(env: Env, req: Request): Promise<StaffAdminContext | null> {
@@ -98,7 +105,11 @@ export default {
 
   async fetch(req: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(req.url);
+    const method = req.method.toUpperCase();
     if (url.pathname === '/api/ws/staff') return openStaffSocket(req, env);
+    if (isBoundedAdminControlMutation(url.pathname, method) && await requestStreamExceeds(req as unknown as Request, ADMIN_CONTROL_JSON_MAX_BYTES)) {
+      return jsonResponse({ error: 'request_too_large' }, { status: 413 });
+    }
     return inner.fetch(req, env, ctx);
   },
 };
