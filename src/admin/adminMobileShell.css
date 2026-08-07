@@ -123,8 +123,8 @@
   }
   .mobile-account-menu .mobile-account-logout>span{color:#ff7777}
 
-  /* The obsolete legacy invite overlay must never be the QR root page now. */
-  .admin.is-narrow .mobile-dir-overlay:has(.invite-mobile-panel){display:none!important}
+  /* The obsolete legacy invite panel is not a mobile root navigation surface anymore. */
+  .admin.is-narrow .invite-mobile-panel{display:none!important}
 
   /* Tap a bubble -> app action sheet. Browser text selection is disabled on bubbles. */
   .admin.is-narrow .mobile-chat-workspace .msg{
