@@ -22,6 +22,14 @@ test('ordinary operator risk controls are enforced in Worker source boundaries',
   assert.match(workerFinal, /withStaffRoomAccess/);
 });
 
+test('new super-admin control mutations have an outer request-size boundary', () => {
+  assert.match(workerFinal, /ADMIN_CONTROL_JSON_MAX_BYTES/);
+  assert.match(workerFinal, /requestStreamExceeds/);
+  assert.match(workerFinal, /operator-policies/);
+  assert.match(workerFinal, /reset-password/);
+  assert.match(workerFinal, /request_too_large/);
+});
+
 test('established staff sockets are revalidated against current session and capability on every staff broadcast', () => {
   assert.match(chatRoom, /mode: 'staff'/);
   assert.match(chatRoom, /CHAT_ROOM_STAFF_BROADCAST_HEADER/);
