@@ -1,7 +1,9 @@
 export { ChatRoom } from './worker-presentation';
 import presentationWorker from './worker-presentation';
 import type { Env } from './worker';
-import { hmacHex } from './security/signing';
+import { hmacHex, verifySignedValue } from './security/signing';
+import { hashSessionToken } from './security/sessionTokens';
+import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { jsonResponse } from './security/responseHeaders';
 import { normalizeOperatorPresentation, operatorPresentationKey } from './operatorPresentation';
 import {
@@ -32,6 +34,7 @@ type AdminRow = {
 type SettingsRow = { key?: string; value_json: string };
 type SessionListPayload = { sessions?: Array<Record<string, unknown>> };
 type PresentationPayload = { presentation?: Record<string, unknown> | null };
+type AdminAuditSessionRow = { admin_id: string };
 
 const inner = presentationWorker as WorkerModule;
 const json = (body: unknown, status = 200) => jsonResponse(body, { status });
@@ -182,6 +185,43 @@ async function cleanupPurgedSessionMetadata(env: Env) {
   ).run();
 }
 
+async function staffClearActorId(env: Env, req: Request) {
+  const signed = readCookie(req, COOKIE_NAMES.admin);
+  const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
+  if (!sessionId) return '';
+  const session = await env.DB.prepare(
+    `SELECT admin_id FROM admin_sessions
+      WHERE id=? AND token_hash=? AND revoked_at IS NULL LIMIT 1`,
+  ).bind(sessionId, await hashSessionToken(env.SESSION_SECRET, sessionId)).first<AdminAuditSessionRow>();
+  return String(session?.admin_id || '');
+}
+
+async function writeStaffClearAudit(env: Env, req: Request, response: Response) {
+  if (!response.ok) return;
+  const payload = await response.clone().json().catch(() => null) as { deleted?: unknown; clearedAt?: unknown } | null;
+  const actorId = await staffClearActorId(env, req);
+  if (!actorId) return;
+  const clearedAt = typeof payload?.clearedAt === 'string' ? payload.clearedAt : new Date().toISOString();
+  const deleted = Number(payload?.deleted || 0);
+  const message = JSON.stringify({
+    event: 'admin.staff_chat.clear',
+    resource: 'staff_messages',
+    path: '/api/staff-chat',
+    method: 'DELETE',
+    details: { deleted, clearedAt },
+  });
+  await env.DB.prepare(
+    'INSERT INTO system_logs(id,level,event,actor_id,message,created_at) VALUES(?,?,?,?,?,?)',
+  ).bind(
+    `log_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
+    'WARN',
+    'admin.staff_chat.clear',
+    actorId,
+    message,
+    clearedAt,
+  ).run();
+}
+
 function defer(ctx: ExecutionContext, promise: Promise<unknown>) {
   if (typeof ctx?.waitUntil === 'function') ctx.waitUntil(promise);
   else void promise.catch(() => {});
@@ -205,6 +245,14 @@ export default {
     }
 
     const response = await inner.fetch(req, env, ctx);
+
+    if (req.method === 'DELETE' && url.pathname === '/api/staff-chat' && response.ok) {
+      try {
+        await writeStaffClearAudit(env, req, response);
+      } catch (error) {
+        console.error('Failed to write staff chat clear audit', error);
+      }
+    }
 
     if (req.method === 'POST' && /^\/api\/guest\/[^/]+$/.test(url.pathname) && response.ok) {
       const payload = await response.clone().json().catch(() => null) as { session?: { id?: unknown } } | null;
