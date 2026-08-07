@@ -1,4 +1,4 @@
-import { QR_CARD_TEXT_MAX_LENGTH } from '../operatorPresentation';
+import { QR_CARD_TEXT_MAX_LENGTH } from '../operatorPresentation.ts';
 
 export type InviteQrStyle = {
   backgroundColor: string;
@@ -186,7 +186,7 @@ function drawCenteredText(ctx: CanvasRenderingContext2D, text: string, y: number
     if (ctx.measureText(value).width <= maxWidth) break;
     fontSize -= 1;
   } while (fontSize > 16);
-  ctx.fillText(value, width / 2, y);
+  ctx.fillText(value, width / 2, y, maxWidth);
 }
 
 function textColorForBackground(hex: string) {
