@@ -61,6 +61,7 @@ function insertAdmin(database, id, username, welcomeText) {
         welcomeText,
         avatarKey: '',
         qrBackgroundColor: '#ffffff',
+        qrAccentColor: '#18b868',
         qrTopText: '扫码联系客服',
         qrBottomText: '',
       }),
@@ -92,6 +93,7 @@ test('unassigned invite uses the creator presentation without assigning the sess
     assert.equal(body.presentation.operatorId, 'super-admin');
     assert.equal(body.presentation.displayName, 'ryouma');
     assert.equal(body.presentation.welcomeText, '欢迎来到客服系统');
+    assert.equal(body.presentation.qrAccentColor, '#18b868');
     const invite = database.prepare('SELECT source_operator_id FROM invite_links WHERE token_hash IS NOT NULL LIMIT 1').get();
     assert.equal(invite.source_operator_id, null);
   } finally {
@@ -123,4 +125,14 @@ test('assigned invite still prefers the selected operator presentation', async (
   } finally {
     database.close();
   }
+});
+
+test('trash restore endpoint is disabled at the outer worker boundary', async () => {
+  const response = await worker.fetch(
+    new Request('https://denglu.kefuxitong.net/api/sessions/session-1/restore', { method: 'POST' }),
+    {},
+    {},
+  );
+  assert.equal(response.status, 410);
+  assert.deepEqual(await response.json(), { error: 'restore_not_supported' });
 });
