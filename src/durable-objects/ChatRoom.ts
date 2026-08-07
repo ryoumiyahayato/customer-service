@@ -2,11 +2,18 @@ export const CHAT_ROOM_SESSION_HEADER = 'x-chat-room-session-id';
 export const CHAT_ROOM_PRINCIPAL_TYPE_HEADER = 'x-chat-room-principal-type';
 export const CHAT_ROOM_PRINCIPAL_ID_HEADER = 'x-chat-room-principal-id';
 export const CHAT_ROOM_AUTH_SESSION_HEADER = 'x-chat-room-auth-session-id';
+export const CHAT_ROOM_STAFF_PRINCIPAL_HEADER = 'x-chat-room-staff-principal-id';
+export const CHAT_ROOM_STAFF_AUTH_SESSION_HEADER = 'x-chat-room-staff-auth-session-id';
+export const CHAT_ROOM_STAFF_BROADCAST_HEADER = 'x-chat-room-staff-broadcast';
 
 type ConversationPrincipalType = 'admin' | 'guest';
 
 type ConnectionMeta = {
   mode: 'room';
+} | {
+  mode: 'staff';
+  principalId: string;
+  authSessionId: string;
 } | {
   mode: 'conversation';
   sessionId: string;
@@ -19,12 +26,24 @@ type ChatRoomEnv = {
   DB: D1Database;
 };
 
+type StaffAccessRow = {
+  role: string;
+  policy_json: string | null;
+};
+
 function headerValue(req: Request, name: string) {
   const value = req.headers.get(name)?.trim() || '';
   return value && value.length <= 200 ? value : '';
 }
 
 function connectionMeta(req: Request): ConnectionMeta | null {
+  const staffPrincipalId = headerValue(req, CHAT_ROOM_STAFF_PRINCIPAL_HEADER);
+  const staffAuthSessionId = headerValue(req, CHAT_ROOM_STAFF_AUTH_SESSION_HEADER);
+  if (staffPrincipalId || staffAuthSessionId) {
+    if (!staffPrincipalId || !staffAuthSessionId) return null;
+    return { mode: 'staff', principalId: staffPrincipalId, authSessionId: staffAuthSessionId };
+  }
+
   const sessionId = headerValue(req, CHAT_ROOM_SESSION_HEADER);
   if (!sessionId) return { mode: 'room' };
 
@@ -56,10 +75,18 @@ export function withConversationRoomAccess(
   return new Request(req, { headers });
 }
 
+export function withStaffRoomAccess(req: Request, principalId: string, authSessionId: string) {
+  const headers = new Headers(req.headers);
+  headers.set(CHAT_ROOM_STAFF_PRINCIPAL_HEADER, principalId);
+  headers.set(CHAT_ROOM_STAFF_AUTH_SESSION_HEADER, authSessionId);
+  return new Request(req, { headers });
+}
+
 export function createChatRoomBroadcastRequest(room: string, payload: unknown) {
   const headers = new Headers({ 'content-type': 'application/json' });
   const sessionId = conversationSessionId(room);
   if (sessionId) headers.set(CHAT_ROOM_SESSION_HEADER, sessionId);
+  if (room === 'staff') headers.set(CHAT_ROOM_STAFF_BROADCAST_HEADER, '1');
   return new Request('https://room/broadcast', {
     method: 'POST',
     headers,
@@ -78,7 +105,8 @@ export class ChatRoom {
       }
       const payload = await req.text();
       const protectedSessionId = headerValue(req, CHAT_ROOM_SESSION_HEADER);
-      await this.sendToSockets(payload, protectedSessionId);
+      const protectStaff = headerValue(req, CHAT_ROOM_STAFF_BROADCAST_HEADER) === '1';
+      await this.sendToSockets(payload, protectedSessionId, protectStaff);
       return new Response('ok');
     }
 
@@ -115,6 +143,33 @@ export class ChatRoom {
 
   async webSocketError() {}
 
+  private async canReceiveStaff(meta: ConnectionMeta | null) {
+    if (!meta || meta.mode !== 'staff') return false;
+    const row = await this.env.DB.prepare(
+      `SELECT a.role,
+              (SELECT value_json FROM settings WHERE key=('operator_policy:' || a.id) LIMIT 1) policy_json
+         FROM admins a
+         JOIN admin_sessions auth ON auth.id=? AND auth.admin_id=a.id
+        WHERE a.id=?
+          AND COALESCE(a.is_disabled,0)=0
+          AND auth.revoked_at IS NULL
+          AND datetime(auth.expires_at)>datetime('now')
+          AND datetime(auth.created_at)>datetime('now','-1 day')
+          AND datetime(COALESCE(auth.last_seen_at,auth.created_at))>datetime('now','-30 minutes')
+        LIMIT 1`,
+    ).bind(meta.authSessionId, meta.principalId).first<StaffAccessRow>();
+    if (!row) return false;
+    if (row.role === 'SUPER_ADMIN') return true;
+    if (row.role !== 'OPERATOR') return false;
+    if (!row.policy_json) return true;
+    try {
+      const policy = JSON.parse(row.policy_json) as { canUseStaffChat?: unknown };
+      return policy.canUseStaffChat !== false;
+    } catch {
+      return true;
+    }
+  }
+
   private async canReceive(meta: ConnectionMeta | null, sessionId: string) {
     if (!meta || meta.mode !== 'conversation' || meta.sessionId !== sessionId) return false;
 
@@ -150,15 +205,26 @@ export class ChatRoom {
     return Boolean(allowed?.allowed);
   }
 
-  private async sendToSockets(payload: string, protectedSessionId: string) {
+  private async sendToSockets(payload: string, protectedSessionId: string, protectStaff: boolean) {
     await Promise.all(this.state.getWebSockets().map(async (socket) => {
-      if (protectedSessionId) {
+      const meta = socket.deserializeAttachment() as ConnectionMeta | null;
+      if (protectStaff) {
         let allowed = false;
         try {
-          allowed = await this.canReceive(
-            socket.deserializeAttachment() as ConnectionMeta | null,
-            protectedSessionId,
-          );
+          allowed = await this.canReceiveStaff(meta);
+        } catch (error) {
+          console.error('Staff socket authorization failed', error);
+        }
+        if (!allowed) {
+          try {
+            socket.close(1008, 'Staff access revoked');
+          } catch {}
+          return;
+        }
+      } else if (protectedSessionId) {
+        let allowed = false;
+        try {
+          allowed = await this.canReceive(meta, protectedSessionId);
         } catch (error) {
           console.error('Conversation socket authorization failed', error);
         }
