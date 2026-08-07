@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
+const presentationWrapper = read('src/worker-presentation.ts');
 const wrapper = read('src/worker-business-hardening.ts');
 const secureWorker = read('src/worker-secure.ts');
 const runtimeWorker = read('src/runtimeWorker.ts');
@@ -23,7 +24,11 @@ const genericSetup = read('server-generic/src/setup.ts');
 const preflight = read('deploy/linux/preflight.sh');
 const adminDashboard = read('src/admin/AdminDashboard.tsx');
 
-assert.match(wrangler, /main\s*=\s*"src\/worker-business-hardening\.ts"/);
+assert.match(wrangler, /main\s*=\s*"src\/worker-presentation\.ts"/);
+assert.match(presentationWrapper, /import businessWorker from '\.\/worker-business-hardening'/);
+assert.match(presentationWrapper, /operatorPresentationKey/);
+assert.match(presentationWrapper, /invitePresentationMatch/);
+assert.match(presentationWrapper, /sameOriginWrite/);
 assert.match(wrapper, /operator_hard_delete_not_supported/);
 assert.match(wrapper, /UPDATE admin_sessions SET revoked_at=COALESCE\(revoked_at,\?\)/);
 assert.match(wrapper, /UPDATE sessions SET assigned_operator_id=NULL,updated_at=\?/);
