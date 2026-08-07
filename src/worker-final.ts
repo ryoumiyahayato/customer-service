@@ -53,7 +53,13 @@ async function currentStaffAdmin(env: Env, req: Request): Promise<StaffAdminCont
         AND a.role IN ('SUPER_ADMIN','OPERATOR')
       LIMIT 1`,
   ).bind(sessionId, await hashSessionToken(env.SESSION_SECRET, sessionId)).first<{ id: string; role: 'SUPER_ADMIN' | 'OPERATOR'; session_id: string }>();
-  return row?.id ? { id: row.id, role: row.role, sessionId: row.session_id } : null;
+  if (!row?.id) return null;
+  const seenAt = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL').bind(seenAt, sessionId),
+    env.DB.prepare('UPDATE admins SET last_seen_at=? WHERE id=? AND COALESCE(is_disabled,0)=0').bind(seenAt, row.id),
+  ]);
+  return { id: row.id, role: row.role, sessionId: row.session_id };
 }
 
 async function staffChatAllowed(env: Env, admin: StaffAdminContext) {
