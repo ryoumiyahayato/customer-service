@@ -57,4 +57,10 @@ export type ChatSessionDto = {
   updatedAt?: unknown;
   unread_count?: unknown;
   unreadCount?: unknown;
+  device_label?: unknown;
+  deviceLabel?: unknown;
+  approximate_location?: unknown;
+  approximateLocation?: unknown;
+  client_metadata_captured_at?: unknown;
+  clientMetadataCapturedAt?: unknown;
 };

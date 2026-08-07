@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ACTOR, T0, createContext, createDatabase, expectConflict, insertSession } from '../helpers/sessionTransitionHarness.mjs';
+import { DomainError } from '../../src/http/errors.ts';
+import { ACTOR, T0, createContext, createDatabase, insertSession } from '../helpers/sessionTransitionHarness.mjs';
+
+async function expectRestoreUnsupported(promise) {
+  await assert.rejects(promise, (error) => {
+    assert.ok(error instanceof DomainError);
+    assert.equal(error.code, 'RESTORE_NOT_SUPPORTED');
+    assert.equal(error.status, 410);
+    return true;
+  });
+}
 
 test('executes basic transitions through production SessionService and SessionRepository', async () => {
   const database = createDatabase();
@@ -24,14 +34,10 @@ test('executes basic transitions through production SessionService and SessionRe
     insertSession(database, { id: 'archive-trash', status: 'ARCHIVED', archivedAt: T0, closedAt: T0 });
     const trashed = await service.execute(ACTOR, 'archive-trash', 'delete', '2026-07-31T04:00:00.000Z');
     assert.ok(trashed.deleted_at);
-    const restored = await service.execute(ACTOR, 'archive-trash', 'restore', '2026-07-31T05:00:00.000Z');
-    assert.equal(restored.status, 'ARCHIVED');
-    assert.equal(restored.deleted_at, null);
-    assert.ok(restored.archived_at);
-    assert.ok(restored.closed_at);
+    await expectRestoreUnsupported(service.execute(ACTOR, 'archive-trash', 'restore', '2026-07-31T05:00:00.000Z'));
 
     insertSession(database, { id: 'purged-restore', status: 'ARCHIVED', archivedAt: T0, closedAt: T0, deletedAt: T0, purgedAt: T0 });
-    await expectConflict(service.execute(ACTOR, 'purged-restore', 'restore', '2026-07-31T05:00:00.000Z'));
+    await expectRestoreUnsupported(service.execute(ACTOR, 'purged-restore', 'restore', '2026-07-31T05:00:00.000Z'));
   } finally {
     database.close();
   }
