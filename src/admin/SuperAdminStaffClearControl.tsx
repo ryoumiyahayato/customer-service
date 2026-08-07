@@ -42,15 +42,13 @@ export default function SuperAdminStaffClearControl() {
     setClearing(true);
     setError('');
     try {
-      const response = await apiFetch<ClearResponse>('/api/staff-chat', {
+      await apiFetch<ClearResponse>('/api/staff-chat', {
         method: 'DELETE',
         body: JSON.stringify({ confirm: CLEAR_CONFIRMATION }),
       });
-      window.alert(`已清空 ${Number(response?.deleted || 0)} 条内部消息。`);
       window.location.reload();
     } catch (err) {
       setError(getErrorMessage(err, '清空内部消息失败'));
-    } finally {
       setClearing(false);
     }
   };
