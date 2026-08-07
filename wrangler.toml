@@ -1,5 +1,5 @@
 name = "support-chat-cloudflare"
-main = "src/worker-entry.ts"
+main = "src/worker-final.ts"
 compatibility_date = "2026-06-26"
 compatibility_flags = ["nodejs_compat"]
 
