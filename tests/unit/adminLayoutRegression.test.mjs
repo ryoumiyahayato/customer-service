@@ -25,7 +25,7 @@ test('desktop QR secondary pane stays inside the dedicated QR workspace', () => 
   assert.match(css, /invite-workspace-editor\{display:block;min-width:0/);
 });
 
-test('QR card text is bounded and exported with adaptive font sizing', () => {
+test('QR card text is bounded and exported with adaptive font sizing plus a hard canvas width cap', () => {
   const presentation = read('src/operatorPresentation.ts');
   const editor = read('src/admin/InviteLinkPanel.tsx');
   const qr = read('src/admin/inviteQr.ts');
@@ -36,6 +36,7 @@ test('QR card text is bounded and exported with adaptive font sizing', () => {
   assert.match(qr, /fontSize = 24/);
   assert.match(qr, /fontSize -= 1/);
   assert.match(qr, /fontSize > 16/);
+  assert.match(qr, /fillText\(value, width \/ 2, y, maxWidth\)/);
   assert.doesNotMatch(qr, /shown\.slice|shown !== value/);
 });
 
