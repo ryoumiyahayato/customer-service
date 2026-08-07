@@ -2,6 +2,7 @@ export type OperatorPresentation = {
   welcomeText: string;
   avatarKey: string;
   qrBackgroundColor: string;
+  qrAccentColor: string;
   qrTopText: string;
   qrBottomText: string;
 };
@@ -10,6 +11,7 @@ export const DEFAULT_OPERATOR_PRESENTATION: OperatorPresentation = {
   welcomeText: '您好，请问有什么可以帮您？',
   avatarKey: '',
   qrBackgroundColor: '#ffffff',
+  qrAccentColor: '#18b868',
   qrTopText: '扫码联系客服',
   qrBottomText: '',
 };
@@ -28,10 +30,10 @@ function cleanAvatarKey(value: unknown) {
   return /^operator-avatars\/[a-zA-Z0-9_-]+\/[a-f0-9]{32}\.(?:jpg|png|webp)$/.test(key) ? key : '';
 }
 
-function cleanColor(value: unknown) {
+function cleanColor(value: unknown, fallback: string) {
   return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)
     ? value.toLowerCase()
-    : DEFAULT_OPERATOR_PRESENTATION.qrBackgroundColor;
+    : fallback;
 }
 
 export function normalizeOperatorPresentation(value: unknown): OperatorPresentation {
@@ -41,7 +43,8 @@ export function normalizeOperatorPresentation(value: unknown): OperatorPresentat
   return {
     welcomeText: cleanText(source.welcomeText, 300, DEFAULT_OPERATOR_PRESENTATION.welcomeText),
     avatarKey: cleanAvatarKey(source.avatarKey),
-    qrBackgroundColor: cleanColor(source.qrBackgroundColor),
+    qrBackgroundColor: cleanColor(source.qrBackgroundColor, DEFAULT_OPERATOR_PRESENTATION.qrBackgroundColor),
+    qrAccentColor: cleanColor(source.qrAccentColor, DEFAULT_OPERATOR_PRESENTATION.qrAccentColor),
     qrTopText: cleanText(source.qrTopText, 80, DEFAULT_OPERATOR_PRESENTATION.qrTopText),
     qrBottomText: cleanText(source.qrBottomText, 80, DEFAULT_OPERATOR_PRESENTATION.qrBottomText),
   };
