@@ -1,5 +1,6 @@
 export type InviteQrStyle = {
   backgroundColor: string;
+  accentColor: string;
   topText: string;
   bottomText: string;
 };
@@ -162,8 +163,8 @@ export function buildQrMatrix(text: string) {
   return modules;
 }
 
-function normalizeColor(value: string) {
-  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : '#ffffff';
+function normalizeColor(value: string, fallback: string) {
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 function drawCenteredText(ctx: CanvasRenderingContext2D, text: string, y: number, width: number, color: string) {
@@ -173,7 +174,7 @@ function drawCenteredText(ctx: CanvasRenderingContext2D, text: string, y: number
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = color;
-  const maxWidth = width - 40;
+  const maxWidth = width - 56;
   let shown = value;
   while (shown.length > 1 && ctx.measureText(shown).width > maxWidth) shown = shown.slice(0, -1);
   if (shown !== value) shown = `${shown.slice(0, Math.max(1, shown.length - 1))}…`;
@@ -181,7 +182,7 @@ function drawCenteredText(ctx: CanvasRenderingContext2D, text: string, y: number
 }
 
 function textColorForBackground(hex: string) {
-  const value = normalizeColor(hex).slice(1);
+  const value = normalizeColor(hex, '#ffffff').slice(1);
   const r = Number.parseInt(value.slice(0, 2), 16);
   const g = Number.parseInt(value.slice(2, 4), 16);
   const b = Number.parseInt(value.slice(4, 6), 16);
@@ -189,24 +190,61 @@ function textColorForBackground(hex: string) {
   return luminance > 0.58 ? '#111827' : '#ffffff';
 }
 
+function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
 export function renderInviteQr(canvas: HTMLCanvasElement, url: string, style: InviteQrStyle) {
   const matrix = buildQrMatrix(url);
   const quiet = 4;
   const modulePx = 8;
   const qrPx = (matrix.length + quiet * 2) * modulePx;
-  const topHeight = style.topText.trim() ? 64 : 28;
-  const bottomHeight = style.bottomText.trim() ? 64 : 28;
-  const width = Math.max(360, qrPx + 40);
+  const topHeight = style.topText.trim() ? 76 : 48;
+  const bottomHeight = style.bottomText.trim() ? 68 : 46;
+  const width = Math.max(400, qrPx + 56);
   const height = topHeight + qrPx + bottomHeight;
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('浏览器不支持二维码画布');
-  const background = normalizeColor(style.backgroundColor);
+
+  const background = normalizeColor(style.backgroundColor, '#ffffff');
+  const accent = normalizeColor(style.accentColor, '#18b868');
+  const cardInset = 5;
+  const borderWidth = 8;
+  const radius = 28;
+  const bandTop = topHeight + qrPx;
+
+  ctx.clearRect(0, 0, width, height);
+  roundedRectPath(ctx, cardInset, cardInset, width - cardInset * 2, height - cardInset * 2, radius);
   ctx.fillStyle = background;
-  ctx.fillRect(0, 0, width, height);
-  const textColor = textColorForBackground(background);
-  drawCenteredText(ctx, style.topText, topHeight / 2, width, textColor);
+  ctx.fill();
+
+  ctx.save();
+  roundedRectPath(ctx, cardInset, cardInset, width - cardInset * 2, height - cardInset * 2, radius);
+  ctx.clip();
+  ctx.fillStyle = accent;
+  ctx.fillRect(cardInset, bandTop, width - cardInset * 2, height - bandTop - cardInset);
+  ctx.restore();
+
+  roundedRectPath(ctx, cardInset, cardInset, width - cardInset * 2, height - cardInset * 2, radius);
+  ctx.lineWidth = borderWidth;
+  ctx.strokeStyle = accent;
+  ctx.stroke();
+
+  drawCenteredText(ctx, style.topText, topHeight / 2 + 4, width, textColorForBackground(background));
+
   const startX = Math.floor((width - qrPx) / 2) + quiet * modulePx;
   const startY = topHeight + quiet * modulePx;
   ctx.fillStyle = '#000000';
@@ -215,5 +253,6 @@ export function renderInviteQr(canvas: HTMLCanvasElement, url: string, style: In
       if (matrix[y][x]) ctx.fillRect(startX + x * modulePx, startY + y * modulePx, modulePx, modulePx);
     }
   }
-  drawCenteredText(ctx, style.bottomText, topHeight + qrPx + bottomHeight / 2, width, textColor);
+
+  drawCenteredText(ctx, style.bottomText, bandTop + bottomHeight / 2 - 1, width, textColorForBackground(accent));
 }
