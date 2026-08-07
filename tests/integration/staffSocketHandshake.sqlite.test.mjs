@@ -25,7 +25,8 @@ function createDatabase() {
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL,
       role TEXT NOT NULL,
-      is_disabled INTEGER NOT NULL DEFAULT 0
+      is_disabled INTEGER NOT NULL DEFAULT 0,
+      last_seen_at TEXT
     );
     CREATE TABLE admin_sessions (
       id TEXT PRIMARY KEY,
@@ -46,7 +47,7 @@ function createDatabase() {
 }
 
 async function addAdmin(database, id, role = 'OPERATOR') {
-  database.prepare('INSERT INTO admins(id,username,role,is_disabled) VALUES(?,?,?,0)').run(id, id, role);
+  database.prepare('INSERT INTO admins(id,username,role,is_disabled,last_seen_at) VALUES(?,?,?,0,?)').run(id, id, role, NOW);
   const sessionId = `auth-${id}`;
   database.prepare('INSERT INTO admin_sessions(id,admin_id,token_hash,created_at,last_seen_at,expires_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)')
     .run(sessionId, id, await hashSessionToken(SECRET, sessionId), NOW, NOW, FUTURE);
@@ -90,12 +91,20 @@ test('production staff websocket binds authenticated admin and backend session i
   try {
     const forwarded = [];
     const operator = await addAdmin(database, 'operator-a');
+    database.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=?').run('2026-08-08T00:00:00.000Z', operator.sessionId);
+    database.prepare('UPDATE admins SET last_seen_at=? WHERE id=?').run('2026-08-08T00:00:00.000Z', 'operator-a');
+
     const response = await worker.fetch(staffRequest(operator.cookie), createEnv(database, forwarded), context());
     assert.equal(response.status, 200);
     assert.equal(forwarded.length, 1);
     assert.equal(forwarded[0].name, 'staff');
     assert.equal(forwarded[0].request.headers.get(CHAT_ROOM_STAFF_PRINCIPAL_HEADER), 'operator-a');
     assert.equal(forwarded[0].request.headers.get(CHAT_ROOM_STAFF_AUTH_SESSION_HEADER), operator.sessionId);
+
+    const authSeen = database.prepare('SELECT last_seen_at FROM admin_sessions WHERE id=?').get(operator.sessionId).last_seen_at;
+    const adminSeen = database.prepare('SELECT last_seen_at FROM admins WHERE id=?').get('operator-a').last_seen_at;
+    assert.notEqual(authSeen, '2026-08-08T00:00:00.000Z');
+    assert.notEqual(adminSeen, '2026-08-08T00:00:00.000Z');
   } finally {
     database.close();
   }
