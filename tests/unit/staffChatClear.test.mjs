@@ -5,7 +5,7 @@ import { registerTypeScriptHooks } from '../helpers/tsExtensionLoader.mjs';
 import { SqliteD1Adapter } from '../helpers/sqliteD1Adapter.mjs';
 
 registerTypeScriptHooks();
-const { default: worker } = await import('../../src/worker-presentation.ts');
+const { default: worker } = await import('../../src/worker-entry.ts');
 const { COOKIE_NAMES } = await import('../../src/security/cookies.ts');
 const { signValue } = await import('../../src/security/signing.ts');
 const { hashSessionToken } = await import('../../src/security/sessionTokens.ts');
@@ -43,6 +43,14 @@ function createDatabase() {
       count INTEGER NOT NULL,
       reset_at INTEGER NOT NULL
     );
+    CREATE TABLE system_logs (
+      id TEXT PRIMARY KEY,
+      level TEXT NOT NULL,
+      event TEXT NOT NULL,
+      actor_id TEXT,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
   return database;
 }
@@ -62,6 +70,10 @@ function insertMessages(database) {
 
 function staffCount(database) {
   return Number(database.prepare('SELECT COUNT(*) count FROM staff_messages').get().count || 0);
+}
+
+function auditRows(database) {
+  return database.prepare('SELECT event,actor_id,message FROM system_logs ORDER BY created_at').all();
 }
 
 function createEnv(database, broadcasts) {
@@ -106,6 +118,7 @@ test('operator cannot clear staff chat', async () => {
     assert.equal(response.status, 403);
     assert.equal(staffCount(database), 2);
     assert.deepEqual(broadcasts, []);
+    assert.deepEqual(auditRows(database), []);
   } finally {
     database.close();
   }
@@ -123,12 +136,13 @@ test('super admin must provide explicit destructive confirmation', async () => {
     assert.equal(response.status, 400);
     assert.equal(staffCount(database), 2);
     assert.deepEqual(broadcasts, []);
+    assert.deepEqual(auditRows(database), []);
   } finally {
     database.close();
   }
 });
 
-test('super admin can clear all staff messages and emits a clear event', async () => {
+test('super admin can clear all staff messages, emits a clear event, and writes an audit record without message bodies', async () => {
   const database = createDatabase();
   try {
     const broadcasts = [];
@@ -145,6 +159,15 @@ test('super admin can clear all staff messages and emits a clear event', async (
     assert.equal(broadcasts.length, 1);
     assert.equal(broadcasts[0].type, 'staff:cleared');
     assert.equal(broadcasts[0].clearedBy, 'super');
+
+    const audits = auditRows(database);
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].event, 'admin.staff_chat.clear');
+    assert.equal(audits[0].actor_id, 'super');
+    const auditMessage = JSON.parse(audits[0].message);
+    assert.equal(auditMessage.details.deleted, 2);
+    assert.equal(audits[0].message.includes('one'), false);
+    assert.equal(audits[0].message.includes('two'), false);
   } finally {
     database.close();
   }
