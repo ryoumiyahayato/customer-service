@@ -1,5 +1,7 @@
 # Security review — 2026-08-08
 
+> **PR #44 amendment:** the device/location privacy section below documents the PR #43 state. PR #44 intentionally changes that boundary after a new production requirement: the guest session metadata now also stores the source IP address, but the full IP field is returned only to authenticated `SUPER_ADMIN` session-list requests and is not returned to ordinary `OPERATOR` accounts. Raw User-Agent is still not persisted, GPS/postal-code collection is still not introduced, and the session-scoped network metadata is removed with session purge. The current stolen-operator threat model and retention/security implications are documented in `docs/admin-risk-controls-20260808.md`.
+
 Scope: current `customer-service` Cloudflare production path plus the user-facing changes in PR #43. This is a source-backed application security review and CI validation pass; it is not a live penetration test against the production deployment.
 
 ## Result
@@ -51,20 +53,22 @@ Two integrity / accountability gaps found during this review were corrected in P
 
 The customer detail metadata intentionally does **not** implement the full fingerprinting-style data visible in the supplied reference screenshot.
 
-Stored fields are limited to:
+Stored fields in the PR #43 state were limited to:
 
 - a derived device/browser label such as `iPhone · 微信 8.0.75`;
 - Cloudflare edge-provided city / region / country coarse location;
 - capture timestamp.
 
-The feature does not store or expose:
+In the PR #43 state, the feature did not store or expose:
 
 - GPS coordinates;
 - IP address in the customer metadata record;
 - postal code;
 - raw User-Agent string.
 
-Metadata is available only through the existing authorized admin session list path and is removed after the associated session reaches purge.
+PR #44 supersedes only the IP part of that list as described in the amendment at the top of this document. GPS, postal code, and raw User-Agent remain excluded.
+
+Metadata is available only through authorized admin session-list paths and is removed after the associated session reaches purge; PR #44 additionally filters the IP field to `SUPER_ADMIN` responses.
 
 ## Dependency and CI evidence
 

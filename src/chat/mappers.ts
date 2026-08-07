@@ -93,6 +93,7 @@ export function mapChatSessionDto(dto: ChatSessionDto): ChatSession {
     deviceLabel: nullableString(first(dto.device_label, dto.deviceLabel)),
     approximateLocation: nullableString(first(dto.approximate_location, dto.approximateLocation)),
     clientMetadataCapturedAt: nullableString(first(dto.client_metadata_captured_at, dto.clientMetadataCapturedAt)),
+    ipAddress: nullableString(first(dto.ip_address, dto.ipAddress)),
   };
 }
 
@@ -107,6 +108,7 @@ const knownKeyMap: Record<string, string> = {
   expires_at: 'expiresAt',
   created_at: 'createdAt',
   updated_at: 'updatedAt',
+  ip_address: 'ipAddress',
 };
 
 function looksLikeMessage(value: Record<string, unknown>) {

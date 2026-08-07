@@ -43,6 +43,7 @@ export type ChatSession = {
   deviceLabel?: string | null;
   approximateLocation?: string | null;
   clientMetadataCapturedAt?: string | null;
+  ipAddress?: string | null;
 };
 
 export type AdminIdentity = {

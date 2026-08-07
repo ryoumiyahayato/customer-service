@@ -13,6 +13,7 @@ type ClearResponse = {
   deleted?: number;
 };
 
+type StaffViewEvent = CustomEvent<{ active?: boolean }>;
 const CLEAR_CONFIRMATION = 'CLEAR_STAFF_CHAT';
 
 export default function SuperAdminStaffClearControl() {
@@ -24,7 +25,7 @@ export default function SuperAdminStaffClearControl() {
   useEffect(() => {
     let active = true;
     apiFetch<AuthMeResponse>('/api/auth/me', { retryGet: false })
-      .then((response) => {
+      .then(response => {
         if (active) setIsSuper(response?.admin?.role === 'SUPER_ADMIN');
       })
       .catch(() => {
@@ -34,11 +35,13 @@ export default function SuperAdminStaffClearControl() {
   }, []);
 
   useEffect(() => {
-    const sync = () => setStaffViewVisible(Boolean(document.querySelector('.admin .staff-composer')));
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    const onView = (event: Event) => {
+      const detail = (event as StaffViewEvent).detail;
+      setStaffViewVisible(Boolean(detail?.active));
+      if (!detail?.active) setError('');
+    };
+    window.addEventListener('admin-staff-view', onView);
+    return () => window.removeEventListener('admin-staff-view', onView);
   }, []);
 
   if (!isSuper || !staffViewVisible) return null;
@@ -55,6 +58,7 @@ export default function SuperAdminStaffClearControl() {
         method: 'DELETE',
         body: JSON.stringify({ confirm: CLEAR_CONFIRMATION }),
       });
+      window.dispatchEvent(new CustomEvent('admin-staff-cleared'));
       window.location.reload();
     } catch (err) {
       setError(getErrorMessage(err, '清空内部消息失败'));

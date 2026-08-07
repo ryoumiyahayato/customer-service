@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
+const finalWrapper = read('src/worker-final.ts');
 const entryWrapper = read('src/worker-entry.ts');
 const presentationWrapper = read('src/worker-presentation.ts');
 const wrapper = read('src/worker-business-hardening.ts');
@@ -25,7 +26,12 @@ const genericSetup = read('server-generic/src/setup.ts');
 const preflight = read('deploy/linux/preflight.sh');
 const adminDashboard = read('src/admin/AdminDashboard.tsx');
 
-assert.match(wrangler, /main\s*=\s*"src\/worker-entry\.ts"/);
+assert.match(wrangler, /main\s*=\s*"src\/worker-final\.ts"/);
+assert.match(finalWrapper, /export \{ ChatRoom \} from '\.\/worker-entry'/);
+assert.match(finalWrapper, /import worker from '\.\/worker-entry'/);
+assert.match(finalWrapper, /url\.pathname === '\/api\/ws\/staff'/);
+assert.match(finalWrapper, /operator_policy:/);
+assert.match(finalWrapper, /canUseStaffChat/);
 assert.match(entryWrapper, /import presentationWorker from '\.\/worker-presentation'/);
 assert.match(entryWrapper, /created_by_admin_id/);
 assert.match(entryWrapper, /source_operator_id \|\| invite\.created_by_admin_id/);
