@@ -70,6 +70,8 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [savedNotice, setSavedNotice] = useState('');
   const [qrError, setQrError] = useState('');
+  const [desktopMode, setDesktopMode] = useState(() => window.innerWidth > 820);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const inviteInputRef = useRef<HTMLInputElement>(null);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
   const isSuper = adminRole === 'SUPER_ADMIN';
@@ -77,6 +79,25 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
   const targetQuery = isSuper && sourceOperatorId
     ? `?operatorId=${encodeURIComponent(sourceOperatorId)}`
     : '';
+
+  useEffect(() => {
+    const onResize = () => {
+      const nextDesktop = window.innerWidth > 820;
+      setDesktopMode(nextDesktop);
+      if (!nextDesktop) setDrawerOpen(false);
+    };
+    addEventListener('resize', onResize);
+    return () => removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDrawerOpen(false);
+    };
+    addEventListener('keydown', onKeyDown);
+    return () => removeEventListener('keydown', onKeyDown);
+  }, [drawerOpen]);
 
   const loadPresentation = async () => {
     setPresentationLoading(true);
@@ -109,7 +130,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
     } catch (err) {
       setQrError(getErrorMessage(err, '二维码生成失败'));
     }
-  }, [inviteUrl, presentation.qrBackgroundColor, presentation.qrTopText, presentation.qrBottomText]);
+  }, [inviteUrl, presentation.qrBackgroundColor, presentation.qrTopText, presentation.qrBottomText, drawerOpen]);
 
   const savePresentation = async (showNotice = true) => {
     if (presentationSaving) return false;
@@ -229,7 +250,7 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
     link.click();
   };
 
-  return (
+  const panel = (
     <section className="invite-panel operator-entry-panel">
       <div className="invite-panel-head">
         <h3>{text.title}</h3>
@@ -314,5 +335,27 @@ export default function InviteLinkPanel({ adminRole, operators = [] }: InviteLin
       ) : null}
       {error ? <p className="form-error">{error}</p> : null}
     </section>
+  );
+
+  if (!desktopMode) return panel;
+
+  return (
+    <>
+      <button type="button" className="invite-settings-launcher" onClick={() => setDrawerOpen(true)}>
+        <b>邀请与访客设置</b>
+        <small>欢迎词 · 头像 · 一次性二维码</small>
+      </button>
+      {drawerOpen ? (
+        <div className="invite-settings-backdrop" onClick={() => setDrawerOpen(false)}>
+          <aside className="invite-settings-drawer" onClick={event => event.stopPropagation()}>
+            <div className="invite-settings-drawer-head">
+              <h2>邀请与访客设置</h2>
+              <button type="button" aria-label="关闭设置" onClick={() => setDrawerOpen(false)}>×</button>
+            </div>
+            {panel}
+          </aside>
+        </div>
+      ) : null}
+    </>
   );
 }
