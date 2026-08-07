@@ -4,6 +4,7 @@ import SuperAdminStaffClearControl from '../admin/SuperAdminStaffClearControl';
 import AdminMobileShell from '../admin/AdminMobileShell';
 import SessionClientInfo from '../admin/SessionClientInfo';
 import '../admin/mobileAdminPolish.css';
+import '../admin/adminShellFinal.css';
 
 export default function AdminApp() {
   return (
