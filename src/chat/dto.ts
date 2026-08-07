@@ -63,4 +63,6 @@ export type ChatSessionDto = {
   approximateLocation?: unknown;
   client_metadata_captured_at?: unknown;
   clientMetadataCapturedAt?: unknown;
+  ip_address?: unknown;
+  ipAddress?: unknown;
 };
