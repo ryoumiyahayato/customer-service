@@ -27,7 +27,7 @@ const adminDashboard = read('src/admin/AdminDashboard.tsx');
 assert.match(wrangler, /main\s*=\s*"src\/worker-presentation\.ts"/);
 assert.match(presentationWrapper, /import businessWorker from '\.\/worker-business-hardening'/);
 assert.match(presentationWrapper, /operatorPresentationKey/);
-assert.match(presentationWrapper, /\/api\/invite-presentation/);
+assert.match(presentationWrapper, /invitePresentationMatch/);
 assert.match(presentationWrapper, /sameOriginWrite/);
 assert.match(wrapper, /operator_hard_delete_not_supported/);
 assert.match(wrapper, /UPDATE admin_sessions SET revoked_at=COALESCE\(revoked_at,\?\)/);
