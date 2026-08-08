@@ -3,8 +3,10 @@ import worker from './worker-final';
 import type { Env } from './worker';
 import { hmacHex } from './security/signing';
 import {
+  DEFAULT_ADMIN_PUBLIC_HOST,
   DEFAULT_VISITOR_ROOT_DOMAIN,
   extractVisitorSubdomainToken,
+  isAdminSurfaceHost,
   isLocalDevelopmentHost,
   normalizePublicHost,
 } from './domainIsolation';
@@ -14,7 +16,11 @@ type WorkerModule = {
   scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>;
 };
 
-type DomainEnv = Env & { VISITOR_ROOT_DOMAIN?: string; VISITOR_PUBLIC_HOSTS?: string };
+type DomainEnv = Env & {
+  VISITOR_ROOT_DOMAIN?: string;
+  VISITOR_PUBLIC_HOSTS?: string;
+  ADMIN_PUBLIC_HOST?: string;
+};
 type InviteEntryRow = {
   expires_at: string;
   revoked_at: string | null;
@@ -27,6 +33,7 @@ const MESSAGE_LIST = /^\/api\/sessions\/[^/]+\/messages$/;
 const CUSTOMER_READ = /^\/api\/sessions\/[^/]+\/customer-read$/;
 const CONVERSATION_SOCKET = /^\/api\/ws\/conversations\/[^/]+$/;
 const ATTACHMENT = /^\/api\/attachments\/[^/]+$/;
+const ADMIN_LOGIN_RESPONSE_FLOOR_MS = 450;
 
 function visitorRoot(env: Env) {
   return normalizePublicHost((env as DomainEnv).VISITOR_ROOT_DOMAIN || DEFAULT_VISITOR_ROOT_DOMAIN) || DEFAULT_VISITOR_ROOT_DOMAIN;
@@ -37,6 +44,10 @@ function visitorRoots(env: Env) {
   return [...new Set(configured.split(',').map(normalizePublicHost).filter(Boolean))];
 }
 
+function adminHost(env: Env) {
+  return normalizePublicHost((env as DomainEnv).ADMIN_PUBLIC_HOST || DEFAULT_ADMIN_PUBLIC_HOST) || DEFAULT_ADMIN_PUBLIC_HOST;
+}
+
 function visitorHostContext(host: string, env: Env) {
   for (const root of visitorRoots(env)) {
     const token = extractVisitorSubdomainToken(host, root);
@@ -45,18 +56,49 @@ function visitorHostContext(host: string, env: Env) {
   return null;
 }
 
-function notFound() {
-  return new Response('Not found', {
+function securityHeaders(surface: 'admin' | 'visitor') {
+  const formAction = surface === 'visitor' ? "form-action 'none'" : "form-action 'self'";
+  return {
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'X-Robots-Tag': 'noindex, nofollow, noarchive',
+    'X-Permitted-Cross-Domain-Policies': 'none',
+    'Referrer-Policy': 'no-referrer',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    'Origin-Agent-Cluster': '?1',
+    'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; ${formAction}; frame-ancestors 'none'`,
+  } as const;
+}
+
+function hardenResponse(response: Response, surface: 'admin' | 'visitor') {
+  if ((response as Response & { webSocket?: unknown }).webSocket) return response;
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(securityHeaders(surface))) headers.set(name, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function notFound(surface: 'admin' | 'visitor' = 'visitor') {
+  return hardenResponse(new Response('Not found', {
     status: 404,
     headers: {
       'Cache-Control': 'no-store',
       'Content-Type': 'text/plain; charset=utf-8',
-      'Referrer-Policy': 'no-referrer',
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'X-Robots-Tag': 'noindex, nofollow, noarchive',
     },
-  });
+  }), surface);
+}
+
+function adminLegacyVisitorApi(path: string) {
+  return path === '/api/login'
+    || path === '/api/visitor'
+    || path === '/api/account'
+    || path.startsWith('/api/account/');
 }
 
 async function inviteAllowsInitialDocument(env: Env, token: string) {
@@ -100,6 +142,26 @@ function visitorDocumentRequest(req: Request) {
   });
 }
 
+function genericInvalidCredentials(response: Response) {
+  const headers = new Headers(response.headers);
+  headers.set('Content-Type', 'application/json; charset=utf-8');
+  headers.set('Cache-Control', 'no-store');
+  headers.delete('Content-Length');
+  return new Response(JSON.stringify({ error: 'invalid_credentials' }), {
+    status: 401,
+    headers,
+  });
+}
+
+async function finishAdminLogin(response: Response, startedAt: number) {
+  const normalized = response.status === 403 ? genericInvalidCredentials(response) : response;
+  if (normalized.status !== 429) {
+    const remaining = ADMIN_LOGIN_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
+    if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+  }
+  return normalized;
+}
+
 export default {
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     await inner.scheduled?.(controller, env, ctx);
@@ -111,33 +173,35 @@ export default {
     if (isLocalDevelopmentHost(host)) return inner.fetch(req, env, ctx);
 
     const visitor = visitorHostContext(host, env);
-    if (!visitor) return inner.fetch(req, env, ctx);
+    if (!visitor) {
+      if (!isAdminSurfaceHost(host, adminHost(env))) return hardenResponse(await inner.fetch(req, env, ctx), 'admin');
+      if (adminLegacyVisitorApi(url.pathname)) return notFound('admin');
+      const isLogin = req.method.toUpperCase() === 'POST' && url.pathname === '/api/auth/login';
+      const startedAt = Date.now();
+      let response = await inner.fetch(req, env, ctx);
+      if (isLogin) response = await finishAdminLogin(response, startedAt);
+      return hardenResponse(response, 'admin');
+    }
 
     const method = req.method.toUpperCase();
     if ((method === 'GET' || method === 'HEAD') && url.pathname === '/') {
-      if (!(await inviteAllowsInitialDocument(env, visitor.token))) return notFound();
+      if (!(await inviteAllowsInitialDocument(env, visitor.token))) return notFound('visitor');
       if (method === 'HEAD') {
-        return new Response(null, {
+        return hardenResponse(new Response(null, {
           status: 200,
-          headers: {
-            'Cache-Control': 'no-store',
-            'Referrer-Policy': 'no-referrer',
-            'X-Content-Type-Options': 'nosniff',
-            'X-Frame-Options': 'DENY',
-            'X-Robots-Tag': 'noindex, nofollow, noarchive',
-          },
-        });
+          headers: { 'Cache-Control': 'no-store' },
+        }), 'visitor');
       }
-      return inner.fetch(visitorDocumentRequest(req), env, ctx);
+      return hardenResponse(await inner.fetch(visitorDocumentRequest(req), env, ctx), 'visitor');
     }
     if (method === 'GET' && url.pathname.startsWith('/visitor/assets/')) {
-      return inner.fetch(req, env, ctx);
+      return hardenResponse(await inner.fetch(req, env, ctx), 'visitor');
     }
     if (url.pathname.startsWith('/api/')) {
-      if (!isAllowedVisitorApiRequest(req, visitor.token)) return notFound();
-      return inner.fetch(req, env, ctx);
+      if (!isAllowedVisitorApiRequest(req, visitor.token)) return notFound('visitor');
+      return hardenResponse(await inner.fetch(req, env, ctx), 'visitor');
     }
 
-    return notFound();
+    return notFound('visitor');
   },
 };
