@@ -22,6 +22,16 @@ CREATE TABLE IF NOT EXISTS operator_preset_messages (
 CREATE INDEX IF NOT EXISTS idx_operator_preset_messages_owner_position
   ON operator_preset_messages(admin_id,position,created_at,id);
 
+-- Applying a preset is a one-time conversation-creation action. This marker makes
+-- retries of a consumed invite idempotent even if the browser repeats bootstrap.
+CREATE TABLE IF NOT EXISTS operator_preset_applications (
+  session_id TEXT PRIMARY KEY,
+  owner_admin_id TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY(owner_admin_id) REFERENCES admins(id)
+);
+
 -- Preserve existing configured welcome text by converting it into the first real
 -- server-authored preset message. Runtime/UI code stops reading welcome_text after
 -- this migration; it remains only as migration history in operator_presentations.
