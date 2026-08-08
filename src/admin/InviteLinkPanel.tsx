@@ -6,8 +6,8 @@ import { QR_CARD_TEXT_MAX_LENGTH } from '../operatorPresentation';
 import {
   DEFAULT_VISITOR_ROOT_DOMAIN,
   buildVisitorInviteUrl,
+  extractVisitorSubdomainToken,
   isLocalDevelopmentHost,
-  isVisitorSurfaceHost,
   normalizePublicHost,
 } from '../domainIsolation';
 import { renderInviteQr } from './inviteQr';
@@ -67,10 +67,15 @@ const safeVisitorInviteUrl = (value: string) => {
     const url = new URL(candidate);
     const root = visitorRootDomain();
     const local = isLocalDevelopmentHost(url.hostname);
-    if (url.protocol !== 'https:' && !local) return '';
-    if (!local && !isVisitorSurfaceHost(url.hostname, root)) return '';
-    if (!/^\/g\/[A-Fa-f0-9]{40}$/.test(url.pathname.replace(/\/+$/, ''))) return '';
-    return url.toString();
+    if (local) {
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+      return url.toString();
+    }
+    if (url.protocol !== 'https:') return '';
+    const token = extractVisitorSubdomainToken(url.hostname, root);
+    if (!token) return '';
+    if (url.pathname !== '/' || url.search || url.hash) return '';
+    return `https://${token}.${root}/`;
   } catch {
     return '';
   }
