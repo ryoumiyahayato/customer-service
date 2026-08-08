@@ -25,6 +25,7 @@ function createDatabase() {
     CREATE TABLE admins (
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL,
+      display_name TEXT,
       role TEXT NOT NULL,
       is_disabled INTEGER NOT NULL DEFAULT 0,
       last_seen_at TEXT
@@ -47,8 +48,20 @@ function createDatabase() {
   return database;
 }
 
+function enabledPolicy(canUseStaffChat = true) {
+  return JSON.stringify({
+    canCreateInvites: true,
+    canUseStaffChat,
+    canUploadImages: true,
+  });
+}
+
 async function addAdmin(database, id, role = 'OPERATOR') {
-  database.prepare('INSERT INTO admins(id,username,role,is_disabled,last_seen_at) VALUES(?,?,?,0,?)').run(id, id, role, NOW);
+  database.prepare('INSERT INTO admins(id,username,display_name,role,is_disabled,last_seen_at) VALUES(?,?,?,?,0,?)').run(id, id, id, role, NOW);
+  if (role === 'OPERATOR') {
+    database.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)')
+      .run(`operator_policy:${id}`, enabledPolicy(true), NOW);
+  }
   const sessionId = `auth-${id}`;
   database.prepare('INSERT INTO admin_sessions(id,admin_id,token_hash,created_at,last_seen_at,expires_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)')
     .run(sessionId, id, await hashSessionToken(SECRET, sessionId), NOW, NOW, FUTURE);
@@ -118,13 +131,13 @@ test('production staff websocket rejects disabled capability, revoked login sess
     const operator = await addAdmin(database, 'operator-a');
     const env = createEnv(database, forwarded);
 
-    database.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)')
-      .run('operator_policy:operator-a', JSON.stringify({ canUseStaffChat: false }), NOW);
+    database.prepare('UPDATE settings SET value_json=?,updated_at=? WHERE key=?')
+      .run(enabledPolicy(false), NOW, 'operator_policy:operator-a');
     assert.equal((await worker.fetch(staffRequest(operator.cookie), env, context())).status, 403);
     assert.equal(forwarded.length, 0);
 
-    database.prepare('UPDATE settings SET value_json=? WHERE key=?')
-      .run(JSON.stringify({ canUseStaffChat: true }), 'operator_policy:operator-a');
+    database.prepare('UPDATE settings SET value_json=?,updated_at=? WHERE key=?')
+      .run(enabledPolicy(true), NOW, 'operator_policy:operator-a');
     assert.equal((await worker.fetch(staffRequest(operator.cookie, 'https://evil.example'), env, context())).status, 403);
     assert.equal(forwarded.length, 0);
 
