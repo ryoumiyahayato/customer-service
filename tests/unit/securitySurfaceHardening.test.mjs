@@ -69,7 +69,8 @@ test('read endpoints with side effects reject same-site sibling origins as well 
 });
 
 test('setup token mutation attempts are rate-limited before first-admin initialization', () => {
-  assert.match(productionBoundary, /async function adminSetupLimited\(req: Request, env: Env\)/);
+  assert.match(productionBoundary, /type WorkerRequest = Request<any, any>/);
+  assert.match(productionBoundary, /async function adminSetupLimited\(req: WorkerRequest, env: Env\)/);
   assert.match(productionBoundary, /pathname\.startsWith\('\/api\/setup\/'\)/);
   assert.match(productionBoundary, /limitedByIp\(req, env, 'admin-setup', 5, 10 \* 60 \* 1000\)/);
   assert.match(productionBoundary, /adminSetupLimited\(req, env\)/);

@@ -109,6 +109,14 @@
   top: calc(max(10px, env(safe-area-inset-top)) + 92px);
 }
 
+/* The visitor sees its optimistic bubble immediately. Keep failures visible, but do not
+ * expose an intermediate "sending" label or upload placeholder. Operator-side sending
+ * feedback is intentionally unchanged. */
+.personalized-visitor-shell .message-status.sending,
+.personalized-visitor-shell .sending-msg {
+  display: none !important;
+}
+
 /* LinkExpired is rendered synchronously by GuestChat when the session becomes unavailable.
  * Keep presentation overlays structurally hidden in that same render so a stale welcome/avatar
  * cannot flash for a frame while the presentation-clearing event is being processed. */

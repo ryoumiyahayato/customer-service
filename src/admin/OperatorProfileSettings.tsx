@@ -18,6 +18,8 @@ const DEFAULT_PRESENTATION: OperatorPresentation = {
   avatarUrl: '',
 };
 
+const LOGIN_USERNAME_RE = /^[A-Za-z0-9_.@-]{3,64}$/;
+
 export default function OperatorProfileSettings({ username, role }: { username: string; role: string }) {
   const [presentation, setPresentation] = useState(DEFAULT_PRESENTATION);
   const [loading, setLoading] = useState(true);
@@ -27,6 +29,9 @@ export default function OperatorProfileSettings({ username, role }: { username: 
   const [nameEditing, setNameEditing] = useState(false);
   const [nameSaving, setNameSaving] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
+  const [loginUsernameDraft, setLoginUsernameDraft] = useState(username);
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginUsernameSaving, setLoginUsernameSaving] = useState(false);
   const [password, setPassword] = useState('');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -45,6 +50,8 @@ export default function OperatorProfileSettings({ username, role }: { username: 
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [username]);
+
+  useEffect(() => { setLoginUsernameDraft(username); }, [username]);
 
   const flash = (message: string) => {
     setNotice(message);
@@ -76,11 +83,51 @@ export default function OperatorProfileSettings({ username, role }: { username: 
       setPresentation(prev => ({ ...prev, displayName: saved }));
       setNameDraft(saved);
       setNameEditing(false);
-      flash('名称已更新');
+      flash('显示名称已更新');
     } catch (err) {
-      setError(getErrorMessage(err, '修改名称失败'));
+      setError(getErrorMessage(err, '修改显示名称失败'));
     } finally {
       setNameSaving(false);
+    }
+  };
+
+  const saveAdminLoginUsername = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (role !== 'SUPER_ADMIN' || loginUsernameSaving) return;
+    const nextUsername = loginUsernameDraft.trim();
+    if (!LOGIN_USERNAME_RE.test(nextUsername)) {
+      setError('登录账号需为 3–64 位字母、数字或 . _ @ -');
+      return;
+    }
+    if (!loginPassword) {
+      setError('修改管理员登录账号前请输入当前密码');
+      return;
+    }
+    if (nextUsername === username) {
+      setError('新的登录账号与当前账号相同');
+      return;
+    }
+    setLoginUsernameSaving(true);
+    setError('');
+    try {
+      // Re-authenticate first so the sensitive identity change always runs on a fresh
+      // admin session. The production boundary makes this new session replace the old one.
+      await apiFetch('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password: loginPassword }),
+      });
+      const response = await apiFetch<ProfileResponse>('/api/admins/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({ username: nextUsername }),
+      });
+      setLoginUsernameDraft(response.profile?.username || nextUsername);
+      setLoginPassword('');
+      flash('管理员登录账号已更新');
+      setTimeout(() => window.location.reload(), 350);
+    } catch (err) {
+      setError(getErrorMessage(err, '修改管理员登录账号失败'));
+    } finally {
+      setLoginUsernameSaving(false);
     }
   };
 
@@ -172,7 +219,7 @@ export default function OperatorProfileSettings({ username, role }: { username: 
                 autoFocus
                 value={nameDraft}
                 maxLength={80}
-                aria-label="客服显示名称"
+                aria-label="显示名称"
                 onChange={event => setNameDraft(event.target.value)}
                 onKeyDown={event => {
                   if (event.key === 'Escape') {
@@ -184,7 +231,7 @@ export default function OperatorProfileSettings({ username, role }: { username: 
               <button type="submit" disabled={nameSaving || !nameDraft.trim()}>{nameSaving ? '保存中' : '确认'}</button>
             </form>
           ) : (
-            <button type="button" className="account-display-name-view" onClick={beginNameEdit} title="点击修改名称">
+            <button type="button" className="account-display-name-view" onClick={beginNameEdit} title="点击修改显示名称">
               <b>{displayName}</b><small>点击修改</small>
             </button>
           )}
@@ -215,6 +262,15 @@ export default function OperatorProfileSettings({ username, role }: { username: 
         </label>
         <button type="button" onClick={saveWelcome} disabled={saving || loading}>{saving ? '保存中…' : '保存欢迎词'}</button>
       </div>
+
+      {role === 'SUPER_ADMIN' ? (
+        <form className="account-setting-block account-login-name-form" onSubmit={saveAdminLoginUsername} autoComplete="off">
+          <div className="account-setting-title"><b>管理员登录账号</b><span>只影响后台登录，不改变对外显示名称</span></div>
+          <label><span>新的登录账号</span><input type="text" minLength={3} maxLength={64} autoComplete="off" value={loginUsernameDraft} onChange={event => setLoginUsernameDraft(event.target.value)} /></label>
+          <label><span>当前密码</span><input type="password" maxLength={128} autoComplete="current-password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="确认当前管理员密码" /></label>
+          <button type="submit" disabled={loginUsernameSaving || !loginPassword || !LOGIN_USERNAME_RE.test(loginUsernameDraft.trim())}>{loginUsernameSaving ? '修改中…' : '修改登录账号'}</button>
+        </form>
+      ) : null}
 
       <form className="account-setting-block account-password-form" onSubmit={changePassword} autoComplete="off">
         <label><span><b>登录密码</b><small>修改后撤销本账号的其他后台会话</small></span><input type="password" minLength={12} maxLength={128} autoComplete="new-password" value={password} onChange={event => setPassword(event.target.value)} placeholder="新密码（至少 12 位）" /></label>

@@ -77,8 +77,8 @@ test('QR editor exposes four presets and edits text directly on the preview', ()
   assert.match(invitePanel, /先看版式，生成后自动填入二维码/);
 });
 
-test('risk center provides forced logout, password reset and capability scheduling', () => {
-  assert.match(riskCenter, /踢出全部登录/);
+test('risk center provides single-session logout, password reset and capability scheduling', () => {
+  assert.match(riskCenter, /踢出当前登录/);
   assert.match(riskCenter, /重置密码/);
   assert.match(riskCenter, /生成邀请二维码/);
   assert.match(riskCenter, /使用内部消息/);

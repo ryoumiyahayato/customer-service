@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../api';
-import { getErrorMessage } from '../compat';
+import { copyText, getErrorMessage } from '../compat';
 import './adminRiskCenter.css';
 
 type RiskOverview = {
@@ -11,13 +11,17 @@ type RiskOverview = {
   totalOperators?: number;
 };
 
-type SecurityLog = {
+type ActiveAdminSession = {
   id: string;
-  level: string;
-  event: string;
-  actorId?: string | null;
+  adminId: string;
+  username: string;
+  role: 'SUPER_ADMIN' | 'OPERATOR';
   createdAt: string;
-  details?: Record<string, unknown>;
+  lastSeenAt?: string | null;
+  expiresAt?: string | null;
+  deviceLabel?: string;
+  approximateLocation?: string;
+  isCurrent?: boolean;
 };
 
 type OperatorPolicy = {
@@ -41,27 +45,36 @@ const DEFAULT_POLICY: OperatorPolicy = {
   canUploadImages: true,
 };
 
+const TEMP_PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+
+function generateTemporaryPassword(length = 16) {
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes, value => TEMP_PASSWORD_ALPHABET[value % TEMP_PASSWORD_ALPHABET.length]).join('');
+}
+
 export default function AdminRiskCenter() {
   const [overview, setOverview] = useState<RiskOverview>({});
-  const [logs, setLogs] = useState<SecurityLog[]>([]);
+  const [activeSessions, setActiveSessions] = useState<ActiveAdminSession[]>([]);
   const [operators, setOperators] = useState<OperatorPolicyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [resetTarget, setResetTarget] = useState<OperatorPolicyRow | null>(null);
   const [newPassword, setNewPassword] = useState('');
+  const [resetComplete, setResetComplete] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [overviewRes, logRes, policyRes] = await Promise.all([
+      const [overviewRes, sessionRes, policyRes] = await Promise.all([
         apiFetch<{ overview?: RiskOverview }>('/api/admin/security/overview', { retryGet: false }),
-        apiFetch<{ logs?: SecurityLog[] }>('/api/admin/security/logs?limit=60', { retryGet: false }),
+        apiFetch<{ sessions?: ActiveAdminSession[] }>('/api/admin/security/sessions', { retryGet: false }),
         apiFetch<{ operators?: OperatorPolicyRow[] }>('/api/admin/operator-policies', { retryGet: false }),
       ]);
       setOverview(overviewRes.overview || {});
-      setLogs(logRes.logs || []);
+      setActiveSessions(sessionRes.sessions || []);
       setOperators((policyRes.operators || []).map(row => ({ ...row, policy: { ...DEFAULT_POLICY, ...(row.policy || {}) } })));
     } catch (err) {
       setError(getErrorMessage(err, '读取风控数据失败'));
@@ -91,7 +104,7 @@ export default function AdminRiskCenter() {
   };
 
   const revokeSessions = async (operator: OperatorPolicyRow) => {
-    if (working || !window.confirm(`立即撤销 ${operator.username} 的全部后台登录会话？`)) return;
+    if (working || !window.confirm(`立即撤销 ${operator.username} 的当前后台登录？`)) return;
     setWorking(`revoke:${operator.id}`);
     setError('');
     try {
@@ -104,9 +117,16 @@ export default function AdminRiskCenter() {
     }
   };
 
+  const openPasswordReset = (operator: OperatorPolicyRow) => {
+    setResetTarget(operator);
+    setNewPassword(generateTemporaryPassword());
+    setResetComplete(false);
+    setError('');
+  };
+
   const resetPassword = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!resetTarget || newPassword.length < 12 || working) return;
+    if (!resetTarget || newPassword.length < 12 || working || resetComplete) return;
     setWorking(`password:${resetTarget.id}`);
     setError('');
     try {
@@ -114,8 +134,8 @@ export default function AdminRiskCenter() {
         method: 'POST',
         body: JSON.stringify({ password: newPassword }),
       });
-      setNewPassword('');
-      setResetTarget(null);
+      setResetComplete(true);
+      setNotice(`${resetTarget.username} 的密码已重置，原后台登录已撤销。`);
       await refresh();
     } catch (err) {
       setError(getErrorMessage(err, '重置客服密码失败'));
@@ -135,19 +155,19 @@ export default function AdminRiskCenter() {
   return (
     <section className="risk-center" aria-busy={loading}>
       <div className="risk-center-heading">
-        <div><h3>风控与安全</h3><p>面向“客服账号已被盗”的最小权限、会话撤销和异常访问审计。</p></div>
+        <div><h3>风控与安全</h3></div>
         <button type="button" onClick={refresh} disabled={loading}>刷新</button>
       </div>
 
       <div className="risk-metrics">
-        <article><span>风险级别</span><b>{anomalyLevel}</b><small>按最近 24 小时失败登录与警告事件粗略判断</small></article>
+        <article><span>风险级别</span><b>{anomalyLevel}</b></article>
         <article><span>后台失败登录</span><b>{overview.failedAdminLogins24h || 0}</b><small>最近 24 小时</small></article>
-        <article><span>活动后台会话</span><b>{overview.activeAdminSessions || 0}</b><small>仅统计未撤销且未过期会话</small></article>
-        <article><span>客服账号</span><b>{overview.totalOperators || 0}</b><small>其中禁用 {overview.disabledOperators || 0}</small></article>
+        <article><span>活动后台会话</span><b>{activeSessions.length}</b></article>
+        <article><span>客服账号</span><b>{overview.totalOperators || 0}</b><small>禁用 {overview.disabledOperators || 0}</small></article>
       </div>
 
       <div className="risk-section">
-        <div className="risk-section-title"><h4>客服最小权限</h4><span>前端隐藏不是安全边界；以下权限同时由 Worker 拦截。</span></div>
+        <div className="risk-section-title"><h4>客服权限</h4></div>
         <div className="risk-operator-list">
           {operators.map(operator => (
             <article key={operator.id} className="risk-operator-row">
@@ -158,8 +178,8 @@ export default function AdminRiskCenter() {
                 <label><input type="checkbox" checked={operator.policy.canUploadImages} disabled={!!working || operator.isDisabled} onChange={event => savePolicy(operator, { canUploadImages: event.target.checked })} /><span>向客户上传图片</span></label>
               </div>
               <div className="risk-operator-actions">
-                <button type="button" className="secondary" onClick={() => { setResetTarget(operator); setNewPassword(''); }} disabled={!!working || operator.isDisabled}>重置密码</button>
-                <button type="button" className="danger" onClick={() => revokeSessions(operator)} disabled={!!working || operator.isDisabled}>{working === `revoke:${operator.id}` ? '撤销中…' : '踢出全部登录'}</button>
+                <button type="button" className="secondary" onClick={() => openPasswordReset(operator)} disabled={!!working || operator.isDisabled}>重置密码</button>
+                <button type="button" className="danger" onClick={() => revokeSessions(operator)} disabled={!!working || operator.isDisabled}>{working === `revoke:${operator.id}` ? '撤销中…' : '踢出当前登录'}</button>
               </div>
             </article>
           ))}
@@ -168,29 +188,43 @@ export default function AdminRiskCenter() {
       </div>
 
       <div className="risk-section">
-        <div className="risk-section-title"><h4>最近安全日志</h4><span>仅超级管理员可读；不会返回密码、Cookie、会话令牌或聊天正文。</span></div>
-        <div className="risk-log-list">
-          {logs.map(log => (
-            <article key={log.id} className={`risk-log level-${String(log.level || '').toLowerCase()}`}>
-              <div><b>{log.event}</b><time>{new Date(log.createdAt).toLocaleString()}</time></div>
-              <p>{Object.entries(log.details || {}).map(([key, value]) => `${key}: ${String(value ?? '')}`).join(' · ') || '无额外详情'}</p>
+        <div className="risk-section-title"><h4>后台登录设备</h4></div>
+        <div className="risk-session-list">
+          {activeSessions.map(session => (
+            <article key={session.id} className="risk-session-row">
+              <div className="risk-session-identity">
+                <b>{session.username}</b>
+                <span>{session.role === 'SUPER_ADMIN' ? '超级管理员' : '客服'}{session.isCurrent ? ' · 当前设备' : ''}</span>
+              </div>
+              <dl>
+                <div><dt>设备</dt><dd>{session.deviceLabel || '未知'}</dd></div>
+                <div><dt>位置</dt><dd>{session.approximateLocation || '未知'}</dd></div>
+                <div><dt>最后活动</dt><dd>{session.lastSeenAt ? new Date(session.lastSeenAt).toLocaleString() : new Date(session.createdAt).toLocaleString()}</dd></div>
+              </dl>
             </article>
           ))}
-          {!logs.length && !loading ? <p className="risk-empty">暂无安全日志。</p> : null}
+          {!activeSessions.length && !loading ? <p className="risk-empty">当前没有活动后台会话。</p> : null}
         </div>
       </div>
 
       {resetTarget ? (
-        <div className="risk-modal-backdrop" onClick={() => setResetTarget(null)}>
+        <div className="risk-modal-backdrop" onClick={() => { if (!working) setResetTarget(null); }}>
           <form className="risk-modal" onSubmit={resetPassword} onClick={event => event.stopPropagation()}>
             <h4>重置 {resetTarget.username} 的密码</h4>
-            <p>保存后会立即撤销该客服的全部现有后台会话，并要求其使用新密码重新登录。</p>
-            <input type="password" minLength={12} maxLength={128} autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="新密码（至少 12 位）" autoFocus />
-            <div><button type="button" className="secondary" onClick={() => setResetTarget(null)}>取消</button><button type="submit" disabled={newPassword.length < 12 || !!working}>{working.startsWith('password:') ? '保存中…' : '确认重置'}</button></div>
+            <label className="risk-temp-password-label"><span>临时初始密码</span><input type="text" minLength={12} maxLength={128} autoComplete="off" value={newPassword} onChange={event => { setNewPassword(event.target.value); setResetComplete(false); }} autoFocus /></label>
+            <div className="risk-temp-password-actions">
+              <button type="button" className="secondary" onClick={() => setNewPassword(generateTemporaryPassword())} disabled={!!working || resetComplete}>重新生成</button>
+              <button type="button" className="secondary" onClick={() => copyText(newPassword).then(() => setNotice('临时密码已复制')).catch(() => setError('复制失败'))} disabled={!newPassword}>复制密码</button>
+            </div>
+            <div className="risk-modal-actions">
+              <button type="button" className="secondary" onClick={() => setResetTarget(null)} disabled={!!working}>{resetComplete ? '关闭' : '取消'}</button>
+              {!resetComplete ? <button type="submit" disabled={newPassword.length < 12 || !!working}>{working.startsWith('password:') ? '重置中…' : '确认重置'}</button> : null}
+            </div>
           </form>
         </div>
       ) : null}
 
+      {notice ? <p className="risk-notice">{notice}</p> : null}
       {error ? <p className="form-error">{error}</p> : null}
     </section>
   );
