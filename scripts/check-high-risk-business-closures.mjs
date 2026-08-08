@@ -132,7 +132,7 @@ assert.match(genericIndex, /createWebSocketHub\(db\)/);
 assert.match(genericConfig, /server-generic public exposure is blocked/);
 assert.match(genericConfig, /does not yet implement the production admin\/visitor bundle and token-subdomain isolation boundary/);
 assert.match(genericConfig, /requiredDomains\.some\(\(domain\) => !domain\.trim\(\)\)/);
-assert.match(preflight, /server-generic remains experimental/);
+assert.match(preflight, /server-generic public deployment is disabled until it implements the same separate admin bundle, visitor bundle, token-subdomain host capability, and visitor API boundary/);
 
 assert.equal(existsSync('lib/types.ts'), false, 'unused lib/types.ts must remain deleted');
 
