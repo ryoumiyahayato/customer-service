@@ -6,7 +6,9 @@ import { SqliteD1Adapter } from '../helpers/sqliteD1Adapter.mjs';
 
 registerTypeScriptHooks();
 const { default: worker } = await import('../../src/worker-production-boundary.ts');
-const { hmacHex } = await import('../../src/security/signing.ts');
+const { hmacHex, signValue } = await import('../../src/security/signing.ts');
+const { hashSessionToken } = await import('../../src/security/sessionTokens.ts');
+const { COOKIE_NAMES } = await import('../../src/security/cookies.ts');
 
 const SECRET = 'visitor-delivery-integration-secret';
 const VISITOR_ROOT = 'vx9qn7zr.org';
@@ -27,7 +29,20 @@ function createDatabase() {
       username TEXT NOT NULL,
       display_name TEXT,
       role TEXT NOT NULL,
-      is_disabled INTEGER NOT NULL DEFAULT 0
+      must_change_password INTEGER NOT NULL DEFAULT 0,
+      is_disabled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT,
+      updated_at TEXT,
+      last_seen_at TEXT
+    );
+    CREATE TABLE admin_sessions (
+      id TEXT PRIMARY KEY,
+      admin_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT
     );
     CREATE TABLE settings (
       key TEXT PRIMARY KEY,
@@ -120,8 +135,10 @@ function createDatabase() {
 
 async function seedInvite(database) {
   const now = new Date().toISOString();
-  database.prepare('INSERT INTO admins(id,username,display_name,role,is_disabled) VALUES(?,?,?,?,0)')
-    .run('admin-owner', 'owner', 'Owner', 'SUPER_ADMIN');
+  database.prepare(`
+    INSERT INTO admins(id,username,display_name,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at)
+    VALUES(?,?,?,?,0,0,?,?,?)
+  `).run('admin-owner', 'owner', 'Owner', 'SUPER_ADMIN', now, now, now);
   database.prepare(`
     INSERT INTO invite_links(
       id,token_hash,source_operator_id,created_by_admin_id,expires_at,revoked_at,consumed_at,consumed_session_id,created_at
@@ -134,6 +151,23 @@ async function seedInvite(database) {
     new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     now,
   );
+}
+
+async function seedAdminCookie(database) {
+  const sessionId = 'asess_delivery_admin';
+  const createdAt = new Date().toISOString();
+  database.prepare(`
+    INSERT INTO admin_sessions(id,admin_id,token_hash,created_at,last_seen_at,expires_at,revoked_at)
+    VALUES(?,?,?,?,?,?,NULL)
+  `).run(
+    sessionId,
+    'admin-owner',
+    await hashSessionToken(SECRET, sessionId),
+    createdAt,
+    createdAt,
+    new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  );
+  return `${COOKIE_NAMES.admin}=${await signValue(SECRET, sessionId)}`;
 }
 
 function fakeR2() {
@@ -200,7 +234,13 @@ function visitorRequest(path, init = {}) {
   return new Request(`https://${VISITOR_HOST}${path}`, { ...init, headers });
 }
 
-test('consumed visitor invite delivers text and image messages into the same backend session', async () => {
+function adminRequest(path, init = {}) {
+  const headers = new Headers(init.headers || {});
+  headers.set('Origin', `https://${ADMIN_HOST}`);
+  return new Request(`https://${ADMIN_HOST}${path}`, { ...init, headers });
+}
+
+test('consumed visitor invite delivers text and image messages into the same backend session and admin surface', async () => {
   const database = createDatabase();
   const uploads = fakeR2();
   const env = environment(database, uploads);
@@ -235,6 +275,7 @@ test('consumed visitor invite delivers text and image messages into the same bac
     const textPayload = await text.json();
     assert.equal(textPayload?.message?.content, '你好');
     assert.equal(textPayload?.message?.senderId, null);
+    assert.equal(textPayload?.message?.clientMessageId, 'visitor-text-1');
     const storedText = database.prepare(
       "SELECT content,sender_type FROM messages WHERE session_id=? AND client_message_id='visitor-text-1'",
     ).get(sessionId);
@@ -273,6 +314,7 @@ test('consumed visitor invite delivers text and image messages into the same bac
     const imagePayload = await image.json();
     assert.equal(imagePayload?.message?.messageType, 'image');
     assert.equal(imagePayload?.message?.senderId, null);
+    assert.equal(imagePayload?.message?.clientMessageId, 'visitor-image-1');
 
     const storedImage = database.prepare(`
       SELECT m.id,m.message_type,a.message_id,a.conversation_id,a.created_by_type
@@ -285,6 +327,21 @@ test('consumed visitor invite delivers text and image messages into the same bac
     assert.equal(storedImage?.conversation_id, sessionId);
     assert.equal(storedImage?.created_by_type, 'VISITOR');
     assert.equal(uploads.objects.size, 1);
+
+    const adminCookie = await seedAdminCookie(database);
+    const adminMessages = await worker.fetch(adminRequest(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: 'GET',
+      headers: { Cookie: adminCookie },
+    }), env, ctx);
+    assert.equal(adminMessages.status, 200);
+    const adminPayload = await adminMessages.json();
+    assert.equal(adminPayload?.messages?.length, 2);
+    const adminText = adminPayload.messages.find(message => message.clientMessageId === 'visitor-text-1' || message.client_message_id === 'visitor-text-1');
+    const adminImage = adminPayload.messages.find(message => message.clientMessageId === 'visitor-image-1' || message.client_message_id === 'visitor-image-1');
+    assert.equal(adminText?.content, '你好');
+    assert.equal(adminText?.senderType || adminText?.sender_type, 'VISITOR');
+    assert.equal(adminImage?.messageType || adminImage?.message_type, 'image');
+    assert.equal(adminImage?.senderType || adminImage?.sender_type, 'VISITOR');
 
     await Promise.allSettled(ctx.pending);
   } finally {
