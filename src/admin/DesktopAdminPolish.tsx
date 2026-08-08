@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import InviteLinkPanel from './InviteLinkPanel';
 import OperatorProfileSettings from './OperatorProfileSettings';
+import PresetMessageEditor from './PresetMessageEditor';
 import AdminRiskCenter from './AdminRiskCenter';
 import { useAdminWorkspace } from './AdminWorkspaceContext';
 import './desktopAdminPolish.css';
 import './qrComposer.css';
 
 type RootMode = 'messages' | 'qr' | 'settings';
-type SettingsPage = 'profile' | 'staff' | 'operators' | 'security';
+type SettingsPage = 'profile' | 'preset' | 'staff' | 'operators' | 'security';
 
 function RailIcon({ type }: { type: RootMode }) {
   if (type === 'messages') return <svg viewBox="0 0 24 24"><path d="M4 5h16v12H9l-5 3V5Z" /></svg>;
@@ -106,7 +107,7 @@ export default function DesktopAdminPolish() {
   };
 
   if (!desktop) return null;
-  const ownSettingsOverlay = mode === 'settings' && (settingsPage === 'profile' || settingsPage === 'security');
+  const ownSettingsOverlay = mode === 'settings' && (settingsPage === 'profile' || settingsPage === 'preset' || settingsPage === 'security');
 
   return (
     <>
@@ -136,7 +137,8 @@ export default function DesktopAdminPolish() {
       {mode === 'settings' ? (
         <aside className="desktop-settings-nav">
           <div className="desktop-settings-account"><b>{admin.username || '当前账号'}</b><span>{isSuper ? '超级管理员' : '客服'}</span></div>
-          <button type="button" className={settingsPage === 'profile' ? 'active' : ''} onClick={() => openSettingsPage('profile')}><b>我的</b><span>头像、欢迎词、密码</span></button>
+          <button type="button" className={settingsPage === 'profile' ? 'active' : ''} onClick={() => openSettingsPage('profile')}><b>我的</b><span>头像、显示名称与密码</span></button>
+          <button type="button" className={settingsPage === 'preset' ? 'active' : ''} onClick={() => openSettingsPage('preset')}><b>预设消息</b><span>访客进入后自动发送的聊天内容</span></button>
           <button type="button" className={settingsPage === 'staff' ? 'active' : ''} onClick={() => openSettingsPage('staff')} disabled={!capabilities.canUseStaffChat}><b>内部消息</b><span>{capabilities.canUseStaffChat ? '团队沟通' : '权限已关闭或暂不可用'}</span></button>
           {isSuper ? <button type="button" className={settingsPage === 'operators' ? 'active' : ''} onClick={() => openSettingsPage('operators')}><b>客服管理</b><span>账号与人员</span></button> : null}
           {isSuper ? <button type="button" className={settingsPage === 'security' ? 'active' : ''} onClick={() => openSettingsPage('security')}><b>风控与安全</b><span>异常访问、会话与权限</span></button> : null}
@@ -148,6 +150,7 @@ export default function DesktopAdminPolish() {
       {ownSettingsOverlay ? (
         <main className="desktop-settings-content">
           {settingsPage === 'profile' ? <OperatorProfileSettings username={admin.username} role={admin.role} /> : null}
+          {settingsPage === 'preset' ? <PresetMessageEditor /> : null}
           {settingsPage === 'security' && isSuper ? <AdminRiskCenter /> : null}
         </main>
       ) : null}
