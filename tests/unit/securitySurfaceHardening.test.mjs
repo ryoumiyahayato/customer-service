@@ -10,14 +10,18 @@ const genericAuth = readFileSync(new URL('../../server-generic/src/auth.ts', imp
 const genericCompat = readFileSync(new URL('../../server-generic/src/frontendCompat.ts', import.meta.url), 'utf8');
 const genericSocket = readFileSync(new URL('../../server-generic/src/websocket.ts', import.meta.url), 'utf8');
 const genericIndex = readFileSync(new URL('../../server-generic/src/index.ts', import.meta.url), 'utf8');
+const genericConfig = readFileSync(new URL('../../server-generic/src/config.ts', import.meta.url), 'utf8');
 
 test('production visitor and admin surfaces are restricted at the outermost worker boundary', () => {
   assert.match(wrangler, /main\s*=\s*"src\/worker-production-boundary\.ts"/);
   assert.match(productionBoundary, /productionDomains/);
+  assert.match(productionBoundary, /if \(!domains\) return hardenedPlain\(503/);
+  assert.match(productionBoundary, /if \(!visitor\) return hardenedPlain\(404/);
   assert.match(productionBoundary, /requestWithOnlyCookie\(req, COOKIE_NAMES\.admin\)/);
   assert.match(productionBoundary, /requestWithOnlyCookie\(req, COOKIE_NAMES\.guest\)/);
   assert.match(productionBoundary, /surface:visitor-entry/);
-  assert.match(productionBoundary, /workers_dev|preview_urls|hardenedPlain/);
+  assert.match(productionBoundary, /visitorAsset[\s\S]*?liveInvite/);
+  assert.match(productionBoundary, /crossSiteReadMutation/);
   assert.match(publicGate, /Content-Security-Policy/);
   assert.match(publicGate, /connect-src 'self'/);
   assert.match(publicGate, /form-action 'none'/);
@@ -72,4 +76,12 @@ test('self-host browser compatibility never treats visitorId as a bearer credent
 test('self-host CSRF protection targets state changes without requiring referrers on reads', () => {
   assert.match(genericIndex, /function isStateChangingMethod/);
   assert.match(genericIndex, /url\.pathname\.startsWith\('\/api\/'\) && isStateChangingMethod\(request\.method\)/);
+});
+
+test('self-host public deployment cannot bypass missing production surface isolation', () => {
+  const exposureFunction = genericConfig.match(/export function assertExperimentalPublicExposure[\s\S]*?\n}/)?.[0] || '';
+  assert.match(exposureFunction, /if \(env\.NODE_ENV !== 'production'\) return/);
+  assert.match(exposureFunction, /if \(allDomainsLocal\) return/);
+  assert.match(exposureFunction, /does not yet implement the production admin\/visitor bundle and token-subdomain isolation boundary/);
+  assert.doesNotMatch(exposureFunction, /experimentalPublicAcknowledged\) return/);
 });
