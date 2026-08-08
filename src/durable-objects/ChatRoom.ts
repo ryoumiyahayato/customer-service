@@ -60,6 +60,48 @@ function conversationSessionId(room: string) {
   return room.slice(prefix.length).trim();
 }
 
+function safeGuestMessage(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const source = value as Record<string, unknown>;
+  const safe: Record<string, unknown> = {};
+  const keys = [
+    'id', 'session_id', 'sessionId', 'sender_type', 'senderType', 'content', 'body',
+    'message_type', 'messageType', 'image_path', 'imagePath', 'status', 'created_at',
+    'createdAt', 'read_at', 'readAt', 'is_read', 'isRead', 'quote_message_id',
+    'quoteMessageId', 'recalled_at', 'recalledAt', 'deleted_at', 'deletedAt',
+    'image_purged_at', 'imagePurgedAt', 'client_message_id', 'clientMessageId',
+    'attachments', 'deduped',
+  ];
+  for (const key of keys) if (key in source) safe[key] = source[key];
+  if ('sender_id' in source) safe.sender_id = null;
+  if ('senderId' in source) safe.senderId = null;
+  return safe;
+}
+
+function safeGuestSession(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const source = value as Record<string, unknown>;
+  const safe: Record<string, unknown> = { unread_count: 0 };
+  for (const key of ['id', 'status', 'created_at', 'createdAt', 'updated_at', 'updatedAt', 'history_cleared_at', 'historyClearedAt']) {
+    if (key in source) safe[key] = source[key];
+  }
+  return safe;
+}
+
+export function sanitizeGuestSocketPayload(payload: string) {
+  try {
+    const value = JSON.parse(payload) as Record<string, unknown>;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return payload;
+    const safe = { ...value };
+    if ('message' in safe) safe.message = safeGuestMessage(safe.message);
+    if ('session' in safe) safe.session = safeGuestSession(safe.session);
+    if (Array.isArray(safe.messages)) safe.messages = safe.messages.map(safeGuestMessage);
+    return JSON.stringify(safe);
+  } catch {
+    return payload;
+  }
+}
+
 export function withConversationRoomAccess(
   req: Request,
   sessionId: string,
@@ -236,7 +278,10 @@ export class ChatRoom {
         }
       }
       try {
-        socket.send(payload);
+        const outgoing = meta?.mode === 'conversation' && meta.principalType === 'guest'
+          ? sanitizeGuestSocketPayload(payload)
+          : payload;
+        socket.send(outgoing);
       } catch {}
     }));
   }
