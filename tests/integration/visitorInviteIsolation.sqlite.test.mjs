@@ -11,9 +11,11 @@ const { hashSessionToken } = await import('../../src/security/sessionTokens.ts')
 const { COOKIE_NAMES } = await import('../../src/security/cookies.ts');
 
 const SECRET = 'visitor-invite-isolation-test-secret';
-const VISITOR_HOST = 'vx9qn7zr.org';
+const VISITOR_ROOT = 'vx9qn7zr.org';
 const ADMIN_HOST = 'denglu.kefuxitong.net';
 const TOKEN = 'a'.repeat(40);
+const OTHER_TOKEN = 'b'.repeat(40);
+const VISITOR_HOST = `${TOKEN}.${VISITOR_ROOT}`;
 
 function createDatabase() {
   const database = new DatabaseSync(':memory:');
@@ -77,7 +79,8 @@ function env(database) {
   return {
     DB: new SqliteD1Adapter(database),
     SESSION_SECRET: SECRET,
-    VISITOR_ROOT_DOMAIN: VISITOR_HOST,
+    VISITOR_ROOT_DOMAIN: VISITOR_ROOT,
+    VISITOR_PUBLIC_HOSTS: VISITOR_ROOT,
     ADMIN_PUBLIC_HOST: ADMIN_HOST,
   };
 }
@@ -86,7 +89,7 @@ function context() {
   return { waitUntil() {}, passThroughOnException() {} };
 }
 
-test('a consumed QR cannot be reopened even when the browser still has an old guest cookie', async () => {
+test('a consumed QR cannot be reopened even when the same token subdomain still has an old guest cookie', async () => {
   const database = createDatabase();
   try {
     await insertConsumedInvite(database);
@@ -108,7 +111,25 @@ test('a consumed QR cannot be reopened even when the browser still has an old gu
   }
 });
 
-test('visitor host cannot prefetch welcome/presentation from a token endpoint', async () => {
+test('token subdomain cannot consume a different invite token', async () => {
+  const database = createDatabase();
+  try {
+    const response = await worker.fetch(
+      new Request(`https://${VISITOR_HOST}/api/guest/${OTHER_TOKEN}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }),
+      env(database),
+      context(),
+    );
+    assert.equal(response.status, 404);
+  } finally {
+    database.close();
+  }
+});
+
+test('visitor token host cannot prefetch welcome/presentation from a token endpoint', async () => {
   const database = createDatabase();
   try {
     await insertConsumedInvite(database);
@@ -124,16 +145,13 @@ test('visitor host cannot prefetch welcome/presentation from a token endpoint', 
   }
 });
 
-test('admin hostname cannot serve a visitor invite entry', async () => {
+test('admin hostname and bare visitor root cannot serve a visitor invite entry', async () => {
   const database = createDatabase();
   try {
-    const response = await worker.fetch(
-      new Request(`https://${ADMIN_HOST}/g/${TOKEN}`),
-      env(database),
-      context(),
-    );
-    assert.equal(response.status, 404);
-    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const admin = await worker.fetch(new Request(`https://${ADMIN_HOST}/`), env(database), context());
+    assert.equal(admin.status, 404);
+    const bare = await worker.fetch(new Request(`https://${VISITOR_ROOT}/`), env(database), context());
+    assert.equal(bare.status, 404);
   } finally {
     database.close();
   }
