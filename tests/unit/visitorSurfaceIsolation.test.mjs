@@ -51,7 +51,7 @@ test('outer worker gates visitor and admin assets before application routing', (
 
 test('visitor presentation is published only from a successful one-time consume response', () => {
   const api = read('src/api.ts');
-  assert.match(api, /\^\\\/api\\\/guest\\\/[a-f0-9]\{40\}/i);
+  assert.ok(api.includes("if (!/^\\/api\\/guest\\/[a-f0-9]{40}$/i.test(path)) return;"));
   assert.match(api, /visitor:presentation/);
   assert.match(api, /publishVisitorPresentation\(path, data\)/);
 
