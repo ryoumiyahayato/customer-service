@@ -1,60 +1,98 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { apiFetch } from '../api';
+import { ApiError, apiFetch } from '../api';
+import { sessionGroupOf, type ChatSession } from '../chatModel';
 import './adminUnreadBadge.css';
 
-type SessionSummary = { unreadCount?: number };
-type SessionListResponse = { sessions?: SessionSummary[] };
+type SessionListResponse = { sessions?: ChatSession[] };
 
 function messageButtons() {
   return [
     ...document.querySelectorAll<HTMLButtonElement>('.desktop-tg-rail button, .mobile-bottom-nav button'),
-  ].filter(button => button.textContent?.trim() === '消息');
+  ].filter(button => [...button.children].some(child => (
+    child instanceof HTMLSpanElement
+    && !child.classList.contains('admin-unread-badge')
+    && child.textContent?.trim() === '消息'
+  )));
+}
+
+function sameTargets(left: HTMLButtonElement[], right: HTMLButtonElement[]) {
+  return left.length === right.length && left.every((target, index) => target === right[index]);
 }
 
 export default function AdminUnreadBadge() {
   const [count, setCount] = useState(0);
   const [targets, setTargets] = useState<HTMLButtonElement[]>([]);
+  const requestInFlightRef = useRef(false);
+  const authenticatedOnceRef = useRef(false);
+  const reloadingRef = useRef(false);
 
   const syncTargets = useCallback(() => {
-    setTargets(messageButtons());
+    const nextTargets = messageButtons();
+    setTargets(previous => sameTargets(previous, nextTargets) ? previous : nextTargets);
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!document.querySelector('.admin')) {
-      setCount(0);
-      return;
-    }
+    if (document.visibilityState !== 'visible' || requestInFlightRef.current || reloadingRef.current) return;
+    requestInFlightRef.current = true;
     try {
-      const response = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1', { retryGet: false });
-      const unread = (response.sessions || []).reduce((sum, session) => sum + Math.max(0, Number(session.unreadCount || 0)), 0);
-      setCount(unread);
-    } catch {
-      // Login transitions and replaced sessions are handled by the main admin surface.
+      const response = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1', {
+        retryGet: false,
+        timeoutMs: 5000,
+      });
+      authenticatedOnceRef.current = true;
+      const unread = (response.sessions || [])
+        .filter(session => sessionGroupOf(session) === 'active')
+        .reduce((sum, session) => sum + Math.max(0, Number(session.unreadCount || 0)), 0);
+      setCount(previous => previous === unread ? previous : unread);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setCount(0);
+        if (authenticatedOnceRef.current && !reloadingRef.current) {
+          reloadingRef.current = true;
+          window.location.reload();
+        }
+      }
+    } finally {
+      requestInFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     syncTargets();
-    const observer = new MutationObserver(syncTargets);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    const timer = window.setInterval(syncTargets, 1000);
+    const onResize = () => { syncTargets(); };
+    addEventListener('resize', onResize);
+    return () => {
+      window.clearInterval(timer);
+      removeEventListener('resize', onResize);
+    };
   }, [syncTargets]);
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh();
-    }, 1500);
-    const onFocus = () => { void refresh(); };
+    const timer = window.setInterval(() => { void refresh(); }, 2500);
+    const onFocus = () => { void refresh(); syncTargets(); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void refresh();
+        syncTargets();
+      }
+    };
     addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.clearInterval(timer);
       removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [refresh]);
+  }, [refresh, syncTargets]);
 
   if (!count || !targets.length) return null;
   const label = count > 99 ? '99+' : String(count);
-  return <>{targets.map((target, index) => createPortal(<span className="admin-unread-badge" aria-label={`${count} 条未读消息`}>{label}</span>, target, `${index}`))}</>;
+  return <>{targets.map(target => createPortal(
+    <span className="admin-unread-badge" aria-label={`${count} 条未读消息`}>{label}</span>,
+    target,
+    target.closest('.desktop-tg-rail') ? 'desktop-unread' : 'mobile-unread',
+  ))}</>;
 }

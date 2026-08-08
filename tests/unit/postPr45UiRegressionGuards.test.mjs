@@ -98,12 +98,17 @@ test('profile name remains an inline click-to-edit control', async () => {
   assert.match(source, /JSON\.stringify\(\{ displayName \}\)/);
 });
 
-test('unread navigation badge polls quickly and fallback polling stays below three seconds', async () => {
+test('unread badge cannot recursively observe its own portal and counts only active conversations', async () => {
   const badge = await read('src/admin/AdminUnreadBadge.tsx');
   const polling = await read('src/chat/polling.ts');
   assert.match(badge, /\/api\/sessions\?includeDeleted=1/);
-  assert.match(badge, /1500/);
+  assert.match(badge, /sessionGroupOf\(session\) === 'active'/);
+  assert.match(badge, /sameTargets/);
+  assert.match(badge, /2500/);
   assert.match(badge, /admin-unread-badge/);
+  assert.doesNotMatch(badge, /MutationObserver/);
+  assert.match(badge, /authenticatedOnceRef/);
+  assert.match(badge, /window\.location\.reload\(\)/);
   assert.match(polling, /800/);
   assert.match(polling, /1600/);
   assert.match(polling, /2500/);
