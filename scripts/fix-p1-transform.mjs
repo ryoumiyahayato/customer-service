@@ -22,7 +22,7 @@ if (!transformed) {
 {
   const path = 'src/admin/AdminDashboard.tsx';
   let s = read(path);
-  s = s.replace(/\n  const assignSession = async \(session: ChatSession\) => \{[\s\S]*?\n  \};\n/, '\n');
+  s = s.replace(/\n  const assignSession = async \(s: Session\) => \{[\s\S]*?\n  \};\n/, '\n');
   s = s.replace('const workspaceValue = { admin, sessions,', 'const workspaceValue = { admin: admin!, sessions,');
   write(path, s);
 }
@@ -40,20 +40,34 @@ if (!transformed) {
   write(path, s);
 }
 
-for (const path of ['src/worker-presentation.ts', 'src/worker-business-hardening.ts']) {
+{
+  const path = 'src/worker-presentation.ts';
   let s = read(path);
-  if (!s.includes("from './security/adminSession'")) continue;
-  s = s.replace(/type AdminSessionRow = \{[\s\S]*?\};\n\n/, '');
-  s = s.replace("import { COOKIE_NAMES, readCookie } from './security/cookies';\n", '');
-  s = s.replace("import { verifySignedValue } from './security/signing';\n", '');
-  s = s.replace("import { hashSessionToken } from './security/sessionTokens';\n", '');
-  s = s.replace("const ADMIN_COOKIE = COOKIE_NAMES.admin;\n", '');
-  s = s.replace("const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;\n", '');
-  s = s.replace("const ADMIN_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;\n", '');
-  s = s.replace("const getCookie = readCookie;\n", '');
-  s = s.replace(/async function verifySignedId\(env: Env,[^\n]*\n/, '');
-  s = s.replace(/async function tokenHash\(env: Env,[^\n]*\n/, '');
-  write(path, s);
+  if (s.includes("from './security/adminSession'")) {
+    s = s.replace(/type AdminSessionRow = \{[\s\S]*?\};\n\n/, '');
+    s = s.replace("import { COOKIE_NAMES, readCookie } from './security/cookies';\n", '');
+    s = s.replace("import { verifySignedValue } from './security/signing';\n", '');
+    s = s.replace("import { hashSessionToken } from './security/sessionTokens';\n", '');
+    s = s.replace("const ADMIN_COOKIE = COOKIE_NAMES.admin;\n", '');
+    s = s.replace("const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;\n", '');
+    s = s.replace("const ADMIN_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;\n", '');
+    s = s.replace("const getCookie = readCookie;\n", '');
+    s = s.replace(/async function verifySignedId\(env: Env,[^\n]*\n/, '');
+    s = s.replace(/async function tokenHash\(env: Env,[^\n]*\n/, '');
+    write(path, s);
+  }
+}
+
+{
+  const path = 'src/worker-business-hardening.ts';
+  let s = read(path);
+  if (s.includes("from './security/adminSession'")) {
+    s = s.replace(/type AdminSessionRow = \{[\s\S]*?\};\n\n/, '');
+    s = s.replace("const ADMIN_COOKIE = COOKIE_NAMES.admin;\n", '');
+    s = s.replace("const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;\n", '');
+    s = s.replace("const ADMIN_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;\n", '');
+    write(path, s);
+  }
 }
 
 {
