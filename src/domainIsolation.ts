@@ -1,5 +1,6 @@
 export const DEFAULT_ADMIN_PUBLIC_HOST = 'denglu.kefuxitong.net';
 export const DEFAULT_VISITOR_ROOT_DOMAIN = 'vx9qn7zr.org';
+const HEX_TOKEN_PATTERN = /^[a-f0-9]{40}$/i;
 
 export function normalizePublicHost(value: string | undefined | null) {
   const raw = String(value || '').trim().toLowerCase();
@@ -25,10 +26,17 @@ export function isLocalDevelopmentHost(value: string | undefined | null) {
     || host === '::1';
 }
 
-export function isVisitorSurfaceHost(hostname: string, visitorRootDomain = DEFAULT_VISITOR_ROOT_DOMAIN) {
+export function extractVisitorSubdomainToken(hostname: string, visitorRootDomain = DEFAULT_VISITOR_ROOT_DOMAIN) {
   const host = normalizePublicHost(hostname);
   const root = normalizePublicHost(visitorRootDomain);
-  return Boolean(host && root && host === root);
+  if (!host || !root || host === root || !host.endsWith(`.${root}`)) return '';
+  const label = host.slice(0, -(root.length + 1));
+  if (!label || label.includes('.') || !HEX_TOKEN_PATTERN.test(label)) return '';
+  return label.toLowerCase();
+}
+
+export function isVisitorSurfaceHost(hostname: string, visitorRootDomain = DEFAULT_VISITOR_ROOT_DOMAIN) {
+  return Boolean(extractVisitorSubdomainToken(hostname, visitorRootDomain));
 }
 
 export function isAdminSurfaceHost(hostname: string, adminPublicHost = DEFAULT_ADMIN_PUBLIC_HOST) {
@@ -39,8 +47,8 @@ export function isAdminSurfaceHost(hostname: string, adminPublicHost = DEFAULT_A
 
 export function buildVisitorInviteUrl(token: string, visitorRootDomain = DEFAULT_VISITOR_ROOT_DOMAIN) {
   const root = normalizePublicHost(visitorRootDomain);
-  const normalizedToken = String(token || '').trim();
+  const normalizedToken = String(token || '').trim().toLowerCase();
   if (!root) throw new Error('visitor_root_domain_missing');
-  if (!/^[a-f0-9]{40}$/i.test(normalizedToken)) throw new Error('invalid_invite_token');
-  return `https://${root}/g/${encodeURIComponent(normalizedToken)}`;
+  if (!HEX_TOKEN_PATTERN.test(normalizedToken)) throw new Error('invalid_invite_token');
+  return `https://${normalizedToken}.${root}/`;
 }
