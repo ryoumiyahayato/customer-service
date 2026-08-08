@@ -109,6 +109,14 @@
   top: calc(max(10px, env(safe-area-inset-top)) + 92px);
 }
 
+/* LinkExpired is rendered synchronously by GuestChat when the session becomes unavailable.
+ * Keep presentation overlays structurally hidden in that same render so a stale welcome/avatar
+ * cannot flash for a frame while the presentation-clearing event is being processed. */
+.personalized-visitor-shell:has(.link-expired-page) .operator-identity-overlay,
+.personalized-visitor-shell:has(.link-expired-page) .operator-welcome-overlay {
+  display: none !important;
+}
+
 .personalized-visitor-shell.has-welcome .chat-page .msgs {
   padding-top: 104px !important;
 }
