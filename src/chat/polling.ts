@@ -1,3 +1,5 @@
 export function fallbackDelay(misses: number) {
-  return misses < 3 ? 2000 : misses < 12 ? 5000 : 10000;
+  // WebSocket remains the primary transport. When it is unavailable, keep the HTTP
+  // fallback responsive enough that a new message is normally visible within 3 seconds.
+  return misses < 4 ? 800 : misses < 12 ? 1600 : 2500;
 }
