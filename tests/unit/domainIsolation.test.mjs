@@ -35,8 +35,8 @@ test('visitor invite URLs use token-first subdomains under the dedicated visitor
 });
 
 test('admin host rejects visitor entry routes before reaching application code', async () => {
-  const invite = await worker.fetch(new Request(`https://${DEFAULT_ADMIN_PUBLIC_HOST}/`), env, {});
-  assert.equal(invite.status, 404);
+  const legacyInvite = await worker.fetch(new Request(`https://${DEFAULT_ADMIN_PUBLIC_HOST}/g/${TOKEN}`), env, {});
+  assert.equal(legacyInvite.status, 404);
   const guest = await worker.fetch(new Request(`https://${DEFAULT_ADMIN_PUBLIC_HOST}/api/guest/${TOKEN}`, { method: 'POST' }), env, {});
   assert.equal(guest.status, 404);
 });
