@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { apiFetch } from '../api';
 import GuestChat from './GuestChat';
-import '../admin/operatorPresentation.css';
+import './visitorPresentation.css';
 
 type VisitorInviteLandingProps = {
   token: string;
@@ -16,23 +16,22 @@ type OperatorPresentation = {
 
 type PresentationResponse = { presentation?: OperatorPresentation | null };
 
-const presentationRequests = new Map<string, Promise<PresentationResponse>>();
-
 export default function VisitorInviteLanding({ token }: VisitorInviteLandingProps) {
   const [presentation, setPresentation] = useState<OperatorPresentation | null>(null);
 
   useEffect(() => {
-    if (!token) return;
-    let active = true;
-    let request = presentationRequests.get(token);
-    if (!request) {
-      request = apiFetch<PresentationResponse>(`/api/invite-presentation/${encodeURIComponent(token)}`, { retryGet: false });
-      presentationRequests.set(token, request);
+    if (!token) {
+      setPresentation(null);
+      return;
     }
-    request
+    let active = true;
+    apiFetch<PresentationResponse>(`/api/invite-presentation/${encodeURIComponent(token)}`, { retryGet: false })
       .then(res => { if (active) setPresentation(res?.presentation || null); })
       .catch(() => { if (active) setPresentation(null); });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      setPresentation(null);
+    };
   }, [token]);
 
   if (!token) return null;
