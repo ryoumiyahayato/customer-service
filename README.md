@@ -113,11 +113,11 @@ The guarded production flow requires a clean local `main` exactly matching `orig
 
 Do not use direct `wrangler deploy` / `npx wrangler deploy` for production.
 
-### Pull requests and production
+### Pull requests, Workers Builds, and production
 
-A PR/non-`main` branch is deliberately forbidden from becoming the production Worker. GitHub Productization validation still performs the full build/dry-run/test suite on PR code. If the Cloudflare Git integration attempts to classify a PR commit as a production build, the repository guard rejects it; a red Cloudflare production-deploy status on a PR is therefore expected security behavior, not evidence that the code cannot build.
+A PR/non-`main` branch may compile and upload a **non-production Worker version**, but it is not authorized to promote that version to production traffic. The repository build gate distinguishes preview/version builds from the `main` production path: only `main` performs the remote D1 migration readiness check used to authorize automatic production deployment.
 
-A live PR preview would require a separately configured staging Worker with separate staging D1/R2 and staging hostnames. Do not point PR preview traffic at production-only state merely to make the Cloudflare production check green.
+Cloudflare Workers Builds should keep `main` as the production branch and use its non-production branch deploy command (normally `wrangler versions upload`) for PR branches. A version upload is not a production deployment. Because this Worker uses a Durable Object, Cloudflare's ordinary Preview URL feature is currently unavailable for this project; a live isolated PR environment would therefore require a separate staging design rather than reusing production D1/R2/hostnames.
 
 After PR #52 is merged, production must apply pending migrations `0012`, `0013`, and `0014` in repository order (for whichever of them are not already applied) before the new Worker is deployed. The guarded `--apply-migrations` flow enforces that ordering.
 
