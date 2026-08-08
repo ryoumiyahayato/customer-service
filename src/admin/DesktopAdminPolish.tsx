@@ -49,7 +49,7 @@ export default function DesktopAdminPolish() {
   }, [desktop, mode, settingsPage, detailsOpen]);
 
   useEffect(() => {
-    if (!currentSession) setDetailsOpen(false);
+    setDetailsOpen(false);
   }, [currentSession?.id]);
 
   useEffect(() => {
