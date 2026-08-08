@@ -135,6 +135,20 @@ async function visitorEntryLimited(req: Request, env: Env) {
     : hardenedPlain(429, 'Too many requests', { 'Retry-After': String(retryAfter) });
 }
 
+async function visitorUploadLimited(req: Request, env: Env) {
+  const url = new URL(req.url);
+  if (req.method.toUpperCase() !== 'POST' || url.pathname !== '/api/upload') return null;
+  const retryAfter = await consumeRateLimit(
+    env.DB,
+    `surface:visitor-upload:${clientIp(req)}`.slice(0, 240),
+    20,
+    10 * 60 * 1000,
+  );
+  return retryAfter === null
+    ? null
+    : hardenedPlain(429, 'Too many requests', { 'Retry-After': String(retryAfter) });
+}
+
 async function liveInvite(env: Env, token: string) {
   const tokenHash = await hmacHex(env.SESSION_SECRET, `invite:${token.toLowerCase()}`);
   const row = await env.DB.prepare(
@@ -211,8 +225,10 @@ export default {
     const visitor = visitorContext(host, domains.visitorRoots);
     if (!visitor) return hardenedPlain(404, 'Not found');
 
-    const limited = await visitorEntryLimited(req, env);
-    if (limited) return limited;
+    const entryLimit = await visitorEntryLimited(req, env);
+    if (entryLimit) return entryLimit;
+    const uploadLimit = await visitorUploadLimited(req, env);
+    if (uploadLimit) return uploadLimit;
 
     const method = req.method.toUpperCase();
     const initialDocument = (method === 'GET' || method === 'HEAD') && url.pathname === '/';
