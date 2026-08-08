@@ -1,60 +1,59 @@
-import { useCallback, useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { apiFetch } from '../api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ApiError, apiFetch } from '../api';
+import { sessionGroupOf, type ChatSession } from '../chatModel';
 import './adminUnreadBadge.css';
 
-type SessionSummary = { unreadCount?: number };
-type SessionListResponse = { sessions?: SessionSummary[] };
+type SessionListResponse = { sessions?: ChatSession[] };
 
-function messageButtons() {
-  return [
-    ...document.querySelectorAll<HTMLButtonElement>('.desktop-tg-rail button, .mobile-bottom-nav button'),
-  ].filter(button => button.textContent?.trim() === '消息');
-}
-
-export default function AdminUnreadBadge() {
+export function useAdminUnreadCount(enabled: boolean) {
   const [count, setCount] = useState(0);
-  const [targets, setTargets] = useState<HTMLButtonElement[]>([]);
-
-  const syncTargets = useCallback(() => {
-    setTargets(messageButtons());
-  }, []);
+  const inFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (!document.querySelector('.admin')) {
+    if (!enabled || document.visibilityState !== 'visible' || inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      const response = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1', {
+        retryGet: false,
+        timeoutMs: 5000,
+      });
+      const unread = (response.sessions || [])
+        .filter(session => sessionGroupOf(session) === 'active')
+        .reduce((sum, session) => sum + Math.max(0, Number(session.unreadCount || 0)), 0);
+      setCount(previous => previous === unread ? previous : unread);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) setCount(0);
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) {
       setCount(0);
       return;
     }
-    try {
-      const response = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1', { retryGet: false });
-      const unread = (response.sessions || []).reduce((sum, session) => sum + Math.max(0, Number(session.unreadCount || 0)), 0);
-      setCount(unread);
-    } catch {
-      // Login transitions and replaced sessions are handled by the main admin surface.
-    }
-  }, []);
 
-  useEffect(() => {
-    syncTargets();
-    const observer = new MutationObserver(syncTargets);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [syncTargets]);
-
-  useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh();
-    }, 1500);
+    const timer = window.setInterval(() => { void refresh(); }, 2500);
     const onFocus = () => { void refresh(); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
     addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.clearInterval(timer);
       removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
-  if (!count || !targets.length) return null;
+  return count;
+}
+
+export function AdminUnreadBadge({ count }: { count: number }) {
+  if (!count) return null;
   const label = count > 99 ? '99+' : String(count);
-  return <>{targets.map((target, index) => createPortal(<span className="admin-unread-badge" aria-label={`${count} 条未读消息`}>{label}</span>, target, `${index}`))}</>;
+  return <span className="admin-unread-badge" aria-label={`${count} 条未读消息`}>{label}</span>;
 }
