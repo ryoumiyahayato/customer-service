@@ -2,7 +2,7 @@ export { ChatRoom } from './worker-entry';
 import worker from './worker-entry';
 import type { Env } from './worker';
 import { COOKIE_NAMES, readCookie } from './security/cookies';
-import { verifySignedValue } from './security/signing';
+import { hmacHex, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { jsonResponse } from './security/responseHeaders';
 import { requestStreamExceeds } from './security/requestLimits';
@@ -29,9 +29,15 @@ type StaffAdminContext = {
   sessionId: string;
 };
 type DomainEnv = Env & { ADMIN_PUBLIC_HOST?: string; VISITOR_ROOT_DOMAIN?: string };
+type InviteGateRow = {
+  expires_at: string;
+  revoked_at: string | null;
+  consumed_at: string | null;
+};
 
 const inner = worker as WorkerModule;
 const ADMIN_CONTROL_JSON_MAX_BYTES = 16 * 1024;
+const INVITE_PATH = /^\/g\/([a-f0-9]{40})\/?$/i;
 
 function isLocalDevHost(host: string) {
   return isLocalDevelopmentHost(host);
@@ -51,6 +57,8 @@ function notFound() {
     headers: {
       'Cache-Control': 'no-store',
       'Content-Type': 'text/plain; charset=utf-8',
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
       'X-Robots-Tag': 'noindex, nofollow, noarchive',
     },
   });
@@ -86,16 +94,68 @@ function domainBoundaryBlock(req: Request, env: Env) {
   const visitor = isVisitorSurfaceHost(host, visitorRootDomain(env));
   const admin = isAdminSurfaceHost(host, adminPublicHost(env));
 
+  if (!visitor && !admin) return notFound();
+
   if (admin) {
-    if (/^\/g\/[^/]+\/?$/.test(url.pathname) || url.pathname === '/chat' || isVisitorOnlyApi(url.pathname)) return notFound();
+    if (url.pathname.startsWith('/visitor/')
+      || url.pathname.startsWith('/g/')
+      || url.pathname === '/chat'
+      || isVisitorOnlyApi(url.pathname)) return notFound();
     return null;
   }
 
-  if (visitor) {
-    if (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/setup' || isAdminOnlyApi(url.pathname)) return notFound();
-    return null;
-  }
+  if (url.pathname === '/'
+    || url.pathname === '/admin'
+    || url.pathname === '/setup'
+    || url.pathname === '/chat'
+    || url.pathname.startsWith('/assets/')
+    || url.pathname.startsWith('/icons/')
+    || url.pathname === '/manifest.webmanifest'
+    || url.pathname === '/sw.js'
+    || isAdminOnlyApi(url.pathname)) return notFound();
 
+  if (url.pathname.startsWith('/g/') && !INVITE_PATH.test(url.pathname)) return notFound();
+
+  if (!url.pathname.startsWith('/api/')
+    && !url.pathname.startsWith('/visitor/')
+    && !INVITE_PATH.test(url.pathname)) return notFound();
+
+  return null;
+}
+
+async function serveVisitorAsset(req: Request, env: Env, pathname: string) {
+  const assetUrl = new URL(req.url);
+  assetUrl.pathname = pathname;
+  assetUrl.search = '';
+  const assetResponse = await env.ASSETS.fetch(new Request(assetUrl.toString(), { method: 'GET', headers: req.headers }));
+  const headers = new Headers(assetResponse.headers);
+  headers.set('Referrer-Policy', 'no-referrer');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  if (pathname.endsWith('.html')) headers.set('Cache-Control', 'no-store');
+  return new Response(assetResponse.body, {
+    status: assetResponse.status,
+    statusText: assetResponse.statusText,
+    headers,
+  });
+}
+
+async function unavailableConsumedInvite(req: Request, env: Env) {
+  if (req.method.toUpperCase() !== 'POST') return null;
+  const match = new URL(req.url).pathname.match(/^\/api\/guest\/([a-f0-9]{40})$/i);
+  if (!match) return null;
+  const token = match[1].toLowerCase();
+  const tokenHash = await hmacHex(env.SESSION_SECRET, `invite:${token}`);
+  const invite = await env.DB.prepare(
+    'SELECT expires_at,revoked_at,consumed_at FROM invite_links WHERE token_hash=? LIMIT 1',
+  ).bind(tokenHash).first<InviteGateRow>();
+  const now = new Date().toISOString();
+  if (!invite || invite.revoked_at || invite.expires_at <= now || invite.consumed_at) {
+    return jsonResponse({ error: 'invite_unavailable' }, {
+      status: 410,
+      headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' },
+    });
+  }
   return null;
 }
 
@@ -200,6 +260,18 @@ export default {
 
     const url = new URL(req.url);
     const method = req.method.toUpperCase();
+    const visitorHost = isVisitorSurfaceHost(url.hostname, visitorRootDomain(env));
+
+    if (visitorHost && method === 'GET' && INVITE_PATH.test(url.pathname)) {
+      return serveVisitorAsset(req, env, '/visitor/visitor.html');
+    }
+    if (visitorHost && method === 'GET' && url.pathname.startsWith('/visitor/')) {
+      return serveVisitorAsset(req, env, url.pathname);
+    }
+
+    const consumedInvite = await unavailableConsumedInvite(req, env);
+    if (consumedInvite) return consumedInvite;
+
     if (url.pathname === '/api/ws/staff') return openStaffSocket(req, env);
     if (isBoundedAdminControlMutation(url.pathname, method) && await requestStreamExceeds(req as unknown as Request, ADMIN_CONTROL_JSON_MAX_BYTES)) {
       return jsonResponse({ error: 'request_too_large' }, { status: 413 });
