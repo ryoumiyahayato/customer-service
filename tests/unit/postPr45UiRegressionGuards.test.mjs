@@ -48,12 +48,26 @@ test('super admin staff clear control is rendered directly without DOM observers
   assert.doesNotMatch(source, /MutationObserver|querySelector|admin-staff-view/);
 });
 
-test('expired visitor surface structurally hides stale presentation and sending state', async () => {
+test('expired visitor surface hides identity and no overlay welcome component remains', async () => {
   const css = await read('src/visitor/visitorPresentation.css');
+  const landing = await read('src/visitor/VisitorInviteLanding.tsx');
   assert.match(css, /:has\(\.link-expired-page\) \.operator-identity-overlay/);
-  assert.match(css, /:has\(\.link-expired-page\) \.operator-welcome-overlay/);
+  assert.doesNotMatch(css, /operator-welcome-overlay|has-welcome/);
+  assert.doesNotMatch(landing, /welcomeText|operator-welcome-overlay/);
   assert.match(css, /\.message-status\.sending/);
   assert.match(css, /\.sending-msg/);
+});
+
+test('preset welcome content is edited as a one-sided chat and supports images', async () => {
+  const editor = await read('src/admin/PresetMessageEditor.tsx');
+  const desktop = await read('src/admin/DesktopAdminPolish.tsx');
+  const mobile = await read('src/admin/AdminMobileShell.tsx');
+  assert.match(editor, /预设消息可视化编辑器/);
+  assert.match(editor, /\/api\/admins\/preset-messages\/image/);
+  assert.match(editor, /accept="image\/jpeg,image\/png,image\/webp"/);
+  assert.match(editor, /\/api\/admins\/preset-messages\/order/);
+  assert.match(desktop, /<PresetMessageEditor \/>/);
+  assert.match(mobile, /<PresetMessageEditor \/>/);
 });
 
 test('mobile QR editor exposes both text fields inside the bounded card', async () => {
