@@ -60,46 +60,67 @@ export default function DesktopAdminPolish() {
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    let active = true;
+  const refreshIdentity = useCallback(async () => {
+    try {
+      const auth = await apiFetch<AuthResponse>('/api/auth/me', { retryGet: false });
+      const nextRole = auth.admin?.role || '';
+      const nextUsername = auth.admin?.username || '';
+      setUsername(nextUsername);
+      setRole(nextRole);
 
-    apiFetch<AuthResponse>('/api/auth/me', { retryGet: false })
-      .then((auth) => {
-        if (!active) return;
-        const nextRole = auth.admin?.role || '';
-        setUsername(auth.admin?.username || '');
-        setRole(nextRole);
-        if (nextRole === 'SUPER_ADMIN') {
-          apiFetch<OperatorListResponse>('/api/admins/operators', { retryGet: false })
-            .then(response => { if (active) setOperators(response.operators || []); })
-            .catch(() => { if (active) setOperators([]); });
-        } else {
-          setOperators([]);
-        }
-      })
-      .catch(() => {
-        if (!active) return;
-        setUsername('');
-        setRole('');
+      if (!nextRole) {
         setOperators([]);
-        setError('当前账号身份读取失败，请刷新后重试。');
-      });
-
-    apiFetch<CapabilityResponse>('/api/admin/capabilities', { retryGet: false })
-      .then((capabilities) => {
-        if (!active) return;
-        setCanCreateInvites(capabilities.capabilities?.canCreateInvites === true);
-        setCanUseStaffChat(capabilities.capabilities?.canUseStaffChat === true);
-      })
-      .catch(() => {
-        if (!active) return;
         setCanCreateInvites(false);
         setCanUseStaffChat(false);
-        setError(current => current || '账号权限读取失败；高权限入口已保持关闭，请刷新后重试。');
-      });
+        return;
+      }
 
-    return () => { active = false; };
+      if (nextRole === 'SUPER_ADMIN') {
+        // SUPER_ADMIN capabilities are part of the authenticated role itself. Do not
+        // hide administrator navigation because an independent capability request races login.
+        setCanCreateInvites(true);
+        setCanUseStaffChat(true);
+        apiFetch<OperatorListResponse>('/api/admins/operators', { retryGet: false })
+          .then(response => setOperators(response.operators || []))
+          .catch(() => setOperators([]));
+        setError('');
+        return;
+      }
+
+      setOperators([]);
+      try {
+        const capabilities = await apiFetch<CapabilityResponse>('/api/admin/capabilities', { retryGet: false });
+        setCanCreateInvites(capabilities.capabilities?.canCreateInvites === true);
+        setCanUseStaffChat(capabilities.capabilities?.canUseStaffChat === true);
+        setError('');
+      } catch {
+        setCanCreateInvites(false);
+        setCanUseStaffChat(false);
+        setError('账号权限读取失败；高权限入口已保持关闭，请刷新后重试。');
+      }
+    } catch {
+      setUsername('');
+      setRole('');
+      setOperators([]);
+      setCanCreateInvites(false);
+      setCanUseStaffChat(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshIdentity();
+    const onFocus = () => { void refreshIdentity(); };
+    addEventListener('focus', onFocus);
+    return () => removeEventListener('focus', onFocus);
+  }, [refreshIdentity]);
+
+  // The polish shell mounts before the legacy login form. If the first auth read happens
+  // before login succeeds, retry only while identity is empty, then stop polling.
+  useEffect(() => {
+    if (role) return;
+    const timer = window.setInterval(() => { void refreshIdentity(); }, 1000);
+    return () => window.clearInterval(timer);
+  }, [refreshIdentity, role]);
 
   const openLegacyView = useCallback((label: '会话' | '内部消息' | '客服管理') => {
     buttonWithText('.side-nav button', label)?.click();
@@ -227,7 +248,7 @@ export default function DesktopAdminPolish() {
 
       {mode === 'settings' ? (
         <aside className="desktop-settings-nav">
-          <div className="desktop-settings-account"><b>{username || '当前账号'}</b><span>{isSuper ? '超级管理员' : role ? '客服' : '身份加载中'}</span></div>
+          <div className="desktop-settings-account"><b>{username || '当前账号'}</b><span>{isSuper ? '超级管理员' : role === 'OPERATOR' ? '客服' : '身份加载中'}</span></div>
           <button type="button" className={settingsPage === 'profile' ? 'active' : ''} onClick={() => openSettingsPage('profile')}><b>我的</b><span>头像、欢迎词、密码</span></button>
           <button type="button" className={settingsPage === 'staff' ? 'active' : ''} onClick={() => openSettingsPage('staff')} disabled={!canUseStaffChat}><b>内部消息</b><span>{canUseStaffChat ? '团队沟通' : '权限已关闭或暂不可用'}</span></button>
           {isSuper ? <button type="button" className={settingsPage === 'operators' ? 'active' : ''} onClick={() => openSettingsPage('operators')}><b>客服管理</b><span>账号与人员</span></button> : null}
