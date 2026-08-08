@@ -39,7 +39,9 @@ test('production boundary enforces one active backend session and exposes device
   assert.match(source, /error: 'session_replaced'/);
   assert.match(source, /url\.pathname === '\/api\/admin\/security\/sessions'/);
   assert.match(source, /clientMetadataFromRequest/);
-  assert.doesNotMatch(source, /admin_session_meta:[\s\S]*?cf-connecting-ip/);
+  const metadataWriter = source.match(/async function writeAdminSessionMetadata[\s\S]*?\n}/)?.[0] || '';
+  assert.match(metadataWriter, /clientMetadataFromRequest/);
+  assert.doesNotMatch(metadataWriter, /clientIp|cf-connecting-ip|x-forwarded-for/);
 });
 
 test('super admin staff clear control follows the actual staff chat surface', async () => {
