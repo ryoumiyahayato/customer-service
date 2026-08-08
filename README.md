@@ -9,6 +9,7 @@ This repository contains the current customer-support system. The Cloudflare pat
 - **Admin styling:** admin patch CSS previously split across `mobileAdminPolish.css`, `adminShellFinal.css`, `adminRegressionFixes.css`, and `adminUnreadBadge.css` is consolidated into `src/admin/adminWorkspace.css`, preserving the established cascade while giving the workspace one structural stylesheet authority.
 - **Visitor frontend:** a separate Vite visitor entry imports `src/visitor/visitorApi.ts` directly. The build no longer rewrites `GuestChat` source text to swap API imports.
 - **Visitor entry:** the supported public entry is only the root of a valid 40-hex token subdomain on the configured visitor root. The legacy `/g/<token>` path model is not a valid visitor entry; the admin/public gate rejects legacy visitor paths before they can reach inner runtime code.
+- **Preset messages:** welcome content is not presentation chrome. Each admin/operator owns an ordered preset message sequence. On the first successful invite consume, the server copies that sequence into the new conversation as ordinary `OPERATOR` text/image messages, with normal D1 history and R2-backed conversation attachments. The old visitor welcome overlay is removed.
 - **Realtime:** Durable Objects + WebSocket in `src/durable-objects/ChatRoom.ts`; staff and conversation access is revalidated against current D1 state.
 - **Attachments:** R2 bucket `customer-chat-uploads`; metadata and ownership remain in D1.
 - **Sessions:** signed HttpOnly cookies backed by D1 `admin_sessions` and `visitor_sessions`.
@@ -25,7 +26,14 @@ Migration `0013_structured_runtime_state.sql` moves the previous overloaded runt
 - `admin_session_metadata`
 - `admin_active_sessions`
 
-Migration `0012_enforce_operator_policy_invariant.sql` first repairs the legacy policy state and makes operator identity stable; `0013` then migrates it to the typed authority and removes the migrated `settings:*` keys. Missing operator policy remains fail-closed in runtime code.
+Migration `0014_operator_preset_messages.sql` adds:
+
+- `operator_preset_messages`
+- `operator_preset_applications`
+
+`0014` converts any existing configured welcome text into the first real preset text message. Runtime presentation no longer exposes or renders `welcomeText`; future preset text and images are edited through the dedicated “预设消息” chat-style editor.
+
+Migration `0012_enforce_operator_policy_invariant.sql` first repairs the legacy policy state and makes operator identity stable; `0013` then migrates dynamic runtime state to typed authority and removes migrated `settings:*` keys; `0014` establishes the real preset-message delivery model. Missing operator policy remains fail-closed in runtime code.
 
 ## Security boundaries
 
@@ -52,6 +60,8 @@ The visitor root domain itself fails closed. Invalid token hosts, multilevel vis
 - Separate administrator login name and public display name.
 - Super-admin operator management, capability control, password reset, and active-login controls.
 - Conversation lifecycle, history, unread/read status, remark/customer information, internal staff chat, and image attachments.
+- Per-admin/operator preset message editor under “我的”, presented as a one-sided chat board and supporting ordered text plus JPG/PNG/WebP images.
+- Preset content becomes real server-authored conversation history on first invite consume; repeated/consumed invite requests cannot duplicate the sequence.
 - WebSocket realtime with HTTP synchronization fallback when the admin feed is unavailable.
 - Operator capability refresh while logged in; revoked image/staff/invite controls are not offered as usable UI actions.
 
@@ -109,7 +119,7 @@ A PR/non-`main` branch is deliberately forbidden from becoming the production Wo
 
 A live PR preview would require a separately configured staging Worker with separate staging D1/R2 and staging hostnames. Do not point PR preview traffic at production-only state merely to make the Cloudflare production check green.
 
-After PR #52 is merged, production must apply both pending migrations (`0012` and `0013`, if not already applied) before the new Worker is deployed. The guarded `--apply-migrations` flow enforces that ordering.
+After PR #52 is merged, production must apply pending migrations `0012`, `0013`, and `0014` in repository order (for whichever of them are not already applied) before the new Worker is deployed. The guarded `--apply-migrations` flow enforces that ordering.
 
 ## Self-hosting track
 
@@ -127,6 +137,8 @@ Self-hosting work lives under `server-generic/` and `deploy/linux/` and is separ
 - Visitor source imports only `visitorApi`; no Vite source-string rewrite is required.
 - No inner Worker accepts `/g/<token>` as a visitor entry.
 - Dynamic operator/session metadata is not written back to `settings:*` prefixes.
+- Visitor welcome content is never rendered as a floating overlay; preset text/images are ordinary persisted `OPERATOR` messages.
+- Applying a preset sequence is idempotent per conversation and a consumed invite cannot replay it.
 
 ## Security and secrets
 
