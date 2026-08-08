@@ -72,19 +72,28 @@ For the PR #52 architecture transition, production must apply migrations `0012`,
 dynamic operator/session runtime state out of overloaded `settings:*` JSON keys
 into structured tables. `0014` creates the operator preset-message/application
 tables and migrates any existing configured welcome text into a real first
-preset chat message. The Worker that depends on these tables must not be deployed
-before the migrations are verified as applied.
+preset chat message. The Worker that depends on these tables must not be promoted
+to production before the migrations are verified as applied.
 
-## Pull requests
+## Pull requests and non-production Worker versions
 
-A PR/non-`main` branch must not become the production Worker. GitHub CI still
-builds and tests PR code, including Cloudflare dry-run validation. If the
-Cloudflare Git integration attempts a production build for a PR commit, the
-repository build guard rejects it intentionally.
+A PR/non-`main` branch must not become the production Worker, but it is allowed
+to compile and upload a non-production Worker version. In Workers Builds, keep
+`main` as the production branch and enable non-production branch builds. The
+non-production branch deploy command should be the version-upload path
+(`npx wrangler versions upload`, which is also the Cloudflare default), not
+`wrangler deploy`.
 
-Do not disable that guard merely to obtain a green Cloudflare production badge.
-A real live PR preview requires a separate staging Worker, staging D1/R2, and
-staging hostnames. Production D1/R2 must not be used as mutable preview state.
+The repository build guard therefore behaves differently by branch:
+
+- `main`: remote D1 migration state is mandatory and can block production build/deploy;
+- non-`main`: build/version upload is allowed, but no production promotion is authorized by the repository gate.
+
+A version upload does not change active production traffic. This project uses a
+Durable Object, so Cloudflare's ordinary version Preview URL feature is currently
+not available for this Worker. If interactive PR testing is later required,
+create an isolated staging design rather than pointing PR traffic at production
+D1/R2 merely to obtain a preview URL.
 
 ## Secrets
 
