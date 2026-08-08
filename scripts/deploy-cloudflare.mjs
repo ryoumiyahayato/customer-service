@@ -49,8 +49,18 @@ if (applyMigrations && !deployRequested) {
   fail('--apply-migrations is valid only together with --deploy.');
 }
 
-// Preserve the documented dry-run contract. These checks may read Cloudflare state
-// through existing preflight commands, but this phase never invokes a real deploy.
+// A real deploy delegates immediately, before any local build can modify tracked dist/.
+// The guarded deploy is the single production authority and owns validation, migration
+// checks, build, deploy, cleanup, and the post-deploy online smoke check.
+if (deployRequested) {
+  const safeScript = path.join(process.cwd(), 'scripts', 'deploy-cloudflare-safe.mjs');
+  const forwarded = applyMigrations ? ['--apply-migrations'] : [];
+  run(process.execPath, [safeScript, ...forwarded]);
+  process.exit(0);
+}
+
+// Preserve the documented no-argument preflight contract. These checks can generate
+// local build output, but this path never invokes a production deployment.
 for (const args of [
   ['run', 'doctor'],
   ['run', 'bootstrap:cloudflare'],
@@ -60,13 +70,4 @@ for (const args of [
   run(npmBin, args);
 }
 
-if (!deployRequested) {
-  console.log('Cloudflare preflight completed. No production deployment was started.');
-  process.exit(0);
-}
-
-// Real deployment has exactly one repository-native authority. The legacy wrapper
-// may opt into it, but cannot invoke Wrangler deployment directly.
-const safeScript = path.join(process.cwd(), 'scripts', 'deploy-cloudflare-safe.mjs');
-const forwarded = applyMigrations ? ['--apply-migrations'] : [];
-run(process.execPath, [safeScript, ...forwarded]);
+console.log('Cloudflare preflight completed. No production deployment was started.');
