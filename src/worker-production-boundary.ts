@@ -15,8 +15,10 @@ import {
   normalizePublicHost,
 } from './domainIsolation';
 
+type WorkerRequest = Request<any, any>;
+
 type WorkerModule = {
-  fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response>;
+  fetch(req: WorkerRequest, env: Env, ctx: ExecutionContext): Promise<Response>;
   scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>;
 };
 
@@ -132,7 +134,7 @@ function visitorContext(host: string, roots: string[]) {
   return null;
 }
 
-function requestWithOnlyCookie(req: Request, cookieName: string) {
+function requestWithOnlyCookie(req: WorkerRequest, cookieName: string) {
   const headers = new Headers(req.headers);
   const value = readCookie(req, cookieName);
   if (value) headers.set('cookie', `${cookieName}=${value}`);
@@ -141,7 +143,7 @@ function requestWithOnlyCookie(req: Request, cookieName: string) {
   return new Request(req, { headers });
 }
 
-function clientIp(req: Request) {
+function clientIp(req: WorkerRequest) {
   return String(req.headers.get('cf-connecting-ip') || 'unknown').trim().slice(0, 80);
 }
 
@@ -163,7 +165,7 @@ function responseCookieValue(response: Response, cookieName: string) {
   return match?.[1]?.trim() || '';
 }
 
-function sameOriginWrite(req: Request) {
+function sameOriginWrite(req: WorkerRequest) {
   const url = new URL(req.url);
   const origin = req.headers.get('origin');
   if (origin) return origin === url.origin;
@@ -174,7 +176,7 @@ function sameOriginWrite(req: Request) {
   return false;
 }
 
-async function limitedByIp(req: Request, env: Env, key: string, limit: number, windowMs: number) {
+async function limitedByIp(req: WorkerRequest, env: Env, key: string, limit: number, windowMs: number) {
   const retryAfter = await consumeRateLimit(
     env.DB,
     `surface:${key}:${clientIp(req)}`.slice(0, 240),
@@ -186,13 +188,13 @@ async function limitedByIp(req: Request, env: Env, key: string, limit: number, w
     : hardenedPlain(429, 'Too many requests', { 'Retry-After': String(retryAfter) });
 }
 
-async function adminSetupLimited(req: Request, env: Env) {
+async function adminSetupLimited(req: WorkerRequest, env: Env) {
   const url = new URL(req.url);
   if (req.method.toUpperCase() === 'GET' || !url.pathname.startsWith('/api/setup/')) return null;
   return limitedByIp(req, env, 'admin-setup', 5, 10 * 60 * 1000);
 }
 
-async function visitorEntryLimited(req: Request, env: Env) {
+async function visitorEntryLimited(req: WorkerRequest, env: Env) {
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
   const entry = (method === 'GET' || method === 'HEAD') && url.pathname === '/';
@@ -201,7 +203,7 @@ async function visitorEntryLimited(req: Request, env: Env) {
   return limitedByIp(req, env, 'visitor-entry', 60, 5 * 60 * 1000);
 }
 
-async function visitorUploadLimited(req: Request, env: Env) {
+async function visitorUploadLimited(req: WorkerRequest, env: Env) {
   const url = new URL(req.url);
   if (req.method.toUpperCase() !== 'POST' || url.pathname !== '/api/upload') return null;
   return limitedByIp(req, env, 'visitor-upload', 20, 10 * 60 * 1000);
@@ -219,7 +221,7 @@ async function liveInvite(env: Env, token: string) {
   return row.expires_at > new Date().toISOString();
 }
 
-function crossSiteReadMutation(req: Request) {
+function crossSiteReadMutation(req: WorkerRequest) {
   if (req.method.toUpperCase() !== 'GET') return false;
   if (!ADMIN_MESSAGE_READ.test(new URL(req.url).pathname)) return false;
   const site = String(req.headers.get('sec-fetch-site') || '').toLowerCase();
@@ -231,7 +233,13 @@ function crossSiteReadMutation(req: Request) {
   return false;
 }
 
-async function sensitiveIdentityMutation(req: Request) {
+function sensitiveIdentityPath(pathname: string, method: string) {
+  if (method === 'POST' && pathname === '/api/admins') return true;
+  if (method === 'POST' && OPERATOR_PASSWORD_RESET.test(pathname)) return true;
+  return method === 'PATCH' && pathname === '/api/admins/profile';
+}
+
+async function sensitiveIdentityMutation(req: WorkerRequest) {
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
   if (method === 'POST' && url.pathname === '/api/admins') return true;
@@ -245,7 +253,7 @@ async function sensitiveIdentityMutation(req: Request) {
   return Boolean(username || password);
 }
 
-async function recentAdminSession(env: Env, req: Request) {
+async function recentAdminSession(env: Env, req: WorkerRequest) {
   const signed = readCookie(req, COOKIE_NAMES.admin);
   const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
   if (!sessionId) return false;
@@ -263,7 +271,7 @@ async function recentAdminSession(env: Env, req: Request) {
   return Boolean(row?.id);
 }
 
-async function activeAdminContext(env: Env, req: Request): Promise<ActiveAdminContext | null> {
+async function activeAdminContext(env: Env, req: WorkerRequest): Promise<ActiveAdminContext | null> {
   const signed = readCookie(req, COOKIE_NAMES.admin);
   const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
   if (!sessionId) return null;
@@ -288,7 +296,7 @@ async function activeAdminContext(env: Env, req: Request): Promise<ActiveAdminCo
   return { sessionId: row.session_id, adminId: row.admin_id, username: row.username, role: row.role };
 }
 
-async function writeAdminSessionMetadata(env: Env, req: Request, sessionId: string, timestamp = new Date().toISOString()) {
+async function writeAdminSessionMetadata(env: Env, req: WorkerRequest, sessionId: string, timestamp = new Date().toISOString()) {
   const metadata = clientMetadataFromRequest(req, timestamp);
   await env.DB.prepare(
     `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
@@ -296,7 +304,7 @@ async function writeAdminSessionMetadata(env: Env, req: Request, sessionId: stri
   ).bind(adminSessionMetaKey(sessionId), JSON.stringify(metadata), timestamp).run();
 }
 
-async function activateLoginSession(req: Request, env: Env, response: Response) {
+async function activateLoginSession(req: WorkerRequest, env: Env, response: Response) {
   if (!response.ok) return response;
   const signed = responseCookieValue(response, COOKIE_NAMES.admin);
   const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
@@ -329,7 +337,7 @@ async function activateLoginSession(req: Request, env: Env, response: Response) 
   }
 }
 
-async function enforceSingleAdminSession(req: Request, env: Env) {
+async function enforceSingleAdminSession(req: WorkerRequest, env: Env) {
   const context = await activeAdminContext(env, req);
   if (!context) return null;
   const key = activeAdminSessionKey(context.adminId);
@@ -355,7 +363,7 @@ async function enforceSingleAdminSession(req: Request, env: Env) {
   return hardenedJson(401, { error: 'session_replaced' }, { 'Set-Cookie': clearSessionCookie(COOKIE_NAMES.admin) });
 }
 
-async function handleActiveAdminSessions(req: Request, env: Env) {
+async function handleActiveAdminSessions(req: WorkerRequest, env: Env) {
   const current = await activeAdminContext(env, req);
   if (!current) return hardenedJson(401, { error: 'unauthenticated' });
   if (current.role !== 'SUPER_ADMIN') return hardenedJson(403, { error: 'forbidden' });
@@ -387,7 +395,7 @@ async function handleActiveAdminSessions(req: Request, env: Env) {
       }
     }
     sessions.push({
-      id: row.id,
+      id: row.admin_id,
       adminId: row.admin_id,
       username: row.username,
       role: row.role,
@@ -402,7 +410,7 @@ async function handleActiveAdminSessions(req: Request, env: Env) {
   return hardenedJson(200, { sessions });
 }
 
-async function loginNameSnapshot(req: Request, env: Env, profileReq: Request): Promise<LoginNameSnapshot | null> {
+async function loginNameSnapshot(req: WorkerRequest, env: Env, profileReq: WorkerRequest): Promise<LoginNameSnapshot | null> {
   const parsed = await profileReq.clone().json().catch(() => null) as { username?: unknown } | null;
   const username = typeof parsed?.username === 'string' ? parsed.username.trim() : '';
   if (!username) return null;
@@ -421,7 +429,7 @@ async function restoreDisplayNameAfterLoginNameChange(env: Env, response: Respon
   return response;
 }
 
-async function maybeHandleDisplayNameProfile(req: Request, env: Env) {
+async function maybeHandleDisplayNameProfile(req: WorkerRequest, env: Env) {
   const url = new URL(req.url);
   if (url.pathname !== '/api/admins/profile' || req.method.toUpperCase() !== 'PATCH') return null;
   const parsed = await readJsonObjectWithinLimit(req.clone(), SENSITIVE_PROFILE_MAX_BYTES);
@@ -441,15 +449,21 @@ async function maybeHandleDisplayNameProfile(req: Request, env: Env) {
   return hardenedJson(200, { profile: { username: current.username, displayName } });
 }
 
-async function handleAdminHost(req: Request, env: Env, ctx: ExecutionContext) {
+async function handleAdminHost(req: WorkerRequest, env: Env, ctx: ExecutionContext) {
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
-  const adminReq = requestWithOnlyCookie(req, COOKIE_NAMES.admin);
   const isLogin = url.pathname === '/api/auth/login' && method === 'POST';
 
   const setupLimit = await adminSetupLimited(req, env);
   if (setupLimit) return setupLimit;
   if (crossSiteReadMutation(req)) return hardenedPlain(403, 'Forbidden');
+
+  // RequestWithOnlyCookie constructs a new Request from the original and therefore takes
+  // ownership of a streaming body in undici/workerd. Any clones needed for profile/security
+  // inspection must be made first; ordinary message/upload requests take no unnecessary clone.
+  const sensitiveReq = sensitiveIdentityPath(url.pathname, method) ? req.clone() : null;
+  const profileReq = url.pathname === '/api/admins/profile' && method === 'PATCH' ? req.clone() : null;
+  const adminReq = requestWithOnlyCookie(req, COOKIE_NAMES.admin);
 
   if (!isLogin) {
     const replaced = await enforceSingleAdminSession(adminReq, env);
@@ -463,7 +477,7 @@ async function handleAdminHost(req: Request, env: Env, ctx: ExecutionContext) {
   const displayNameResponse = await maybeHandleDisplayNameProfile(adminReq, env);
   if (displayNameResponse) return displayNameResponse;
 
-  if (await sensitiveIdentityMutation(req.clone()) && !(await recentAdminSession(env, adminReq))) {
+  if (sensitiveReq && await sensitiveIdentityMutation(sensitiveReq) && !(await recentAdminSession(env, adminReq))) {
     return hardenedJson(403, { error: 'reauthentication_required' });
   }
 
@@ -472,9 +486,6 @@ async function handleAdminHost(req: Request, env: Env, ctx: ExecutionContext) {
     return activateLoginSession(req, env, response);
   }
 
-  const profileReq = url.pathname === '/api/admins/profile' && method === 'PATCH'
-    ? req.clone() as unknown as Request
-    : null;
   let snapshot: LoginNameSnapshot | null = null;
   if (profileReq) {
     try {
@@ -493,7 +504,7 @@ export default {
     await inner.scheduled?.(controller, env, ctx);
   },
 
-  async fetch(req: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(req: WorkerRequest, env: Env, ctx: ExecutionContext) {
     const url = new URL(req.url);
     const host = normalizePublicHost(url.hostname);
     if (isLocalDevelopmentHost(host)) return inner.fetch(req, env, ctx);
