@@ -51,7 +51,6 @@ type ActiveAdminSessionRow = {
   expires_at: string;
 };
 
-type SettingsRow = { value_json: string };
 type LoginNameSnapshot = { adminId: string; displayName: string | null };
 
 const inner = worker as WorkerModule;
@@ -59,8 +58,6 @@ const ADMIN_MESSAGE_READ = /^\/api\/sessions\/[^/]+\/messages$/;
 const INVITE_CONSUME = /^\/api\/guest\/[a-f0-9]{40}$/i;
 const OPERATOR_PASSWORD_RESET = /^\/api\/admin\/operators\/[^/]+\/reset-password$/;
 const SENSITIVE_PROFILE_MAX_BYTES = 16 * 1024;
-const ACTIVE_ADMIN_SESSION_PREFIX = 'admin_active_session:';
-const ADMIN_SESSION_META_PREFIX = 'admin_session_meta:';
 const LOGIN_USERNAME_RE = /^[A-Za-z0-9_.@-]{3,64}$/;
 
 function hardenedPlain(status: number, body: string, extraHeaders: Record<string, string> = {}) {
@@ -145,14 +142,6 @@ function requestWithOnlyCookie(req: WorkerRequest, cookieName: string) {
 
 function clientIp(req: WorkerRequest) {
   return String(req.headers.get('cf-connecting-ip') || 'unknown').trim().slice(0, 80);
-}
-
-function activeAdminSessionKey(adminId: string) {
-  return `${ACTIVE_ADMIN_SESSION_PREFIX}${adminId}`;
-}
-
-function adminSessionMetaKey(sessionId: string) {
-  return `${ADMIN_SESSION_META_PREFIX}${sessionId}`;
 }
 
 function escapeRegExp(value: string) {
@@ -299,9 +288,13 @@ async function activeAdminContext(env: Env, req: WorkerRequest): Promise<ActiveA
 async function writeAdminSessionMetadata(env: Env, req: WorkerRequest, sessionId: string, timestamp = new Date().toISOString()) {
   const metadata = clientMetadataFromRequest(req, timestamp);
   await env.DB.prepare(
-    `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-  ).bind(adminSessionMetaKey(sessionId), JSON.stringify(metadata), timestamp).run();
+    `INSERT INTO admin_session_metadata(session_id,device_label,approximate_location,captured_at)
+     VALUES(?,?,?,?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       device_label=excluded.device_label,
+       approximate_location=excluded.approximate_location,
+       captured_at=excluded.captured_at`,
+  ).bind(sessionId, metadata.deviceLabel, metadata.approximateLocation, timestamp).run();
 }
 
 async function activateLoginSession(req: WorkerRequest, env: Env, response: Response) {
@@ -323,9 +316,9 @@ async function activateLoginSession(req: WorkerRequest, env: Env, response: Resp
         'UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE admin_id=? AND id<>? AND revoked_at IS NULL',
       ).bind(timestamp, session.admin_id, sessionId),
       env.DB.prepare(
-        `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-          ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-      ).bind(activeAdminSessionKey(session.admin_id), sessionId, timestamp),
+        `INSERT INTO admin_active_sessions(admin_id,session_id,updated_at) VALUES(?,?,?)
+          ON CONFLICT(admin_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at`,
+      ).bind(session.admin_id, sessionId, timestamp),
     ]);
     await writeAdminSessionMetadata(env, req, sessionId, timestamp);
     return response;
@@ -340,16 +333,15 @@ async function activateLoginSession(req: WorkerRequest, env: Env, response: Resp
 async function enforceSingleAdminSession(req: WorkerRequest, env: Env) {
   const context = await activeAdminContext(env, req);
   if (!context) return null;
-  const key = activeAdminSessionKey(context.adminId);
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(key).first<SettingsRow>();
+  const row = await env.DB.prepare('SELECT session_id FROM admin_active_sessions WHERE admin_id=? LIMIT 1')
+    .bind(context.adminId).first<{ session_id: string }>();
   const timestamp = new Date().toISOString();
-  if (!row?.value_json) {
+  if (!row?.session_id) {
     await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-          ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-      ).bind(key, context.sessionId, timestamp),
+        `INSERT INTO admin_active_sessions(admin_id,session_id,updated_at) VALUES(?,?,?)
+          ON CONFLICT(admin_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at`,
+      ).bind(context.adminId, context.sessionId, timestamp),
       env.DB.prepare(
         'UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE admin_id=? AND id<>? AND revoked_at IS NULL',
       ).bind(timestamp, context.adminId, context.sessionId),
@@ -357,7 +349,7 @@ async function enforceSingleAdminSession(req: WorkerRequest, env: Env) {
     await writeAdminSessionMetadata(env, req, context.sessionId, timestamp).catch(() => {});
     return null;
   }
-  if (row.value_json === context.sessionId) return null;
+  if (row.session_id === context.sessionId) return null;
   await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=? AND revoked_at IS NULL')
     .bind(timestamp, context.sessionId).run().catch(() => {});
   return hardenedJson(401, { error: 'session_replaced' }, { 'Set-Cookie': clearSessionCookie(COOKIE_NAMES.admin) });
@@ -368,46 +360,32 @@ async function handleActiveAdminSessions(req: WorkerRequest, env: Env) {
   if (!current) return hardenedJson(401, { error: 'unauthenticated' });
   if (current.role !== 'SUPER_ADMIN') return hardenedJson(403, { error: 'forbidden' });
   const rows = await env.DB.prepare(
-    `SELECT s.id,a.id admin_id,a.username,a.role,s.created_at,s.last_seen_at,s.expires_at
+    `SELECT s.id,a.id admin_id,a.username,a.role,s.created_at,s.last_seen_at,s.expires_at,
+            COALESCE(meta.device_label,'') device_label,
+            COALESCE(meta.approximate_location,'') approximate_location
        FROM admin_sessions s
        JOIN admins a ON a.id=s.admin_id
-       JOIN settings active ON active.key=('admin_active_session:' || a.id) AND active.value_json=s.id
+       JOIN admin_active_sessions active ON active.admin_id=a.id AND active.session_id=s.id
+       LEFT JOIN admin_session_metadata meta ON meta.session_id=s.id
       WHERE s.revoked_at IS NULL
         AND datetime(s.expires_at)>datetime('now')
         AND datetime(s.created_at)>datetime('now','-1 day')
         AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
         AND COALESCE(a.is_disabled,0)=0
       ORDER BY datetime(COALESCE(s.last_seen_at,s.created_at)) DESC`,
-  ).all<ActiveAdminSessionRow>();
-  const sessions = [];
-  for (const row of rows.results || []) {
-    let deviceLabel = '';
-    let approximateLocation = '';
-    const meta = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-      .bind(adminSessionMetaKey(row.id)).first<SettingsRow>();
-    if (meta?.value_json) {
-      try {
-        const parsed = JSON.parse(meta.value_json) as { deviceLabel?: unknown; approximateLocation?: unknown };
-        deviceLabel = typeof parsed.deviceLabel === 'string' ? parsed.deviceLabel : '';
-        approximateLocation = typeof parsed.approximateLocation === 'string' ? parsed.approximateLocation : '';
-      } catch {
-        // Unknown metadata stays unknown; do not infer device or location.
-      }
-    }
-    sessions.push({
-      id: row.admin_id,
-      adminId: row.admin_id,
-      username: row.username,
-      role: row.role,
-      createdAt: row.created_at,
-      lastSeenAt: row.last_seen_at,
-      expiresAt: row.expires_at,
-      deviceLabel,
-      approximateLocation,
-      isCurrent: row.id === current.sessionId,
-    });
-  }
-  return hardenedJson(200, { sessions });
+  ).all<ActiveAdminSessionRow & { device_label: string; approximate_location: string }>();
+  return hardenedJson(200, { sessions: (rows.results || []).map(row => ({
+    id: row.admin_id,
+    adminId: row.admin_id,
+    username: row.username,
+    role: row.role,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+    expiresAt: row.expires_at,
+    deviceLabel: row.device_label || '',
+    approximateLocation: row.approximate_location || '',
+    isCurrent: row.id === current.sessionId,
+  })) });
 }
 
 async function loginNameSnapshot(req: WorkerRequest, env: Env, profileReq: WorkerRequest): Promise<LoginNameSnapshot | null> {

@@ -56,7 +56,8 @@ test('production deploy aliases use the guarded deploy while deploy:cloudflare p
 
   const wrapper = await readFile(new URL('../../scripts/deploy-cloudflare.mjs', import.meta.url), 'utf8');
   assert.match(wrapper, /deployRequested/);
-  assert.match(wrapper, /if \(!deployRequested\)/);
+  assert.match(wrapper, /if \(deployRequested\)/);
+  assert.ok(wrapper.indexOf('if (deployRequested)') < wrapper.indexOf("['run', 'build']"));
   assert.match(wrapper, /No production deployment was started/);
   assert.match(wrapper, /deploy-cloudflare-safe\.mjs/);
   assert.doesNotMatch(wrapper, /['"]wrangler['"]\s*,\s*['"]deploy['"]/);

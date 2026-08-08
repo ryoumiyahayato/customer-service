@@ -435,7 +435,7 @@ export default {
     const visitor = visitorHostContext(host, env);
     if (!visitor) {
       if (!isAdminSurfaceHost(host, adminHost(env))) return hardenResponse(await inner.fetch(req, env, ctx), 'admin');
-      if (adminLegacyVisitorApi(url.pathname)) return notFound('admin');
+      if (url.pathname === '/g' || url.pathname.startsWith('/g/') || adminLegacyVisitorApi(url.pathname)) return notFound('admin');
 
       if (req.method.toUpperCase() === 'PATCH' && url.pathname === '/api/admins/profile') {
         return hardenResponse(await handleOwnProfilePatch(req, env), 'admin');

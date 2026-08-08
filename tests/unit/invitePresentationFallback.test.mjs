@@ -7,7 +7,6 @@ import { SqliteD1Adapter } from '../helpers/sqliteD1Adapter.mjs';
 registerTypeScriptHooks();
 const { default: worker } = await import('../../src/worker-entry.ts');
 const { hmacHex } = await import('../../src/security/signing.ts');
-const { operatorPresentationKey } = await import('../../src/operatorPresentation.ts');
 
 const SECRET = 'invite-presentation-fallback-test-secret';
 
@@ -20,9 +19,14 @@ function createDatabase() {
       display_name TEXT,
       is_disabled INTEGER NOT NULL DEFAULT 0
     );
-    CREATE TABLE settings (
-      key TEXT PRIMARY KEY,
-      value_json TEXT NOT NULL,
+    CREATE TABLE operator_presentations (
+      admin_id TEXT PRIMARY KEY,
+      welcome_text TEXT NOT NULL,
+      avatar_key TEXT NOT NULL,
+      qr_background_color TEXT NOT NULL,
+      qr_accent_color TEXT NOT NULL,
+      qr_top_text TEXT NOT NULL,
+      qr_bottom_text TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE invite_links (
@@ -54,19 +58,10 @@ async function insertInvite(database, { token, sourceOperatorId = null, createdB
 function insertAdmin(database, id, username, welcomeText) {
   database.prepare('INSERT INTO admins(id,username,display_name,is_disabled) VALUES(?,?,?,0)')
     .run(id, username, username);
-  database.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)')
-    .run(
-      operatorPresentationKey(id),
-      JSON.stringify({
-        welcomeText,
-        avatarKey: '',
-        qrBackgroundColor: '#ffffff',
-        qrAccentColor: '#18b868',
-        qrTopText: '扫码联系客服',
-        qrBottomText: '',
-      }),
-      new Date().toISOString(),
-    );
+  database.prepare(`INSERT INTO operator_presentations(
+      admin_id,welcome_text,avatar_key,qr_background_color,qr_accent_color,qr_top_text,qr_bottom_text,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?)`)
+    .run(id, welcomeText, '', '#ffffff', '#18b868', '扫码联系客服', '', new Date().toISOString());
 }
 
 function env(database) {

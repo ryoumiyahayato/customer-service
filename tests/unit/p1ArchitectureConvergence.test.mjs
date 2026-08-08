@@ -10,7 +10,8 @@ test('operator authorization fails closed in HTTP and websocket paths', async ()
   const finalWorker = await read('src/worker-final.ts');
   const room = await read('src/durable-objects/ChatRoom.ts');
   assert.match(policy, /DENY_OPERATOR_POLICY/);
-  assert.match(policy, /parseStoredOperatorPolicy/);
+  assert.match(policy, /FROM operator_policies WHERE admin_id=\?/);
+  assert.doesNotMatch(policy, /parseStoredOperatorPolicy|operator_policy:/);
   assert.doesNotMatch(finalWorker, /policy_json\) return true|catch \{\s*return true/);
   assert.doesNotMatch(room, /policy_json\) return true|catch \{\s*return true/);
   assert.match(entry, /readPolicy\(env\.DB/);

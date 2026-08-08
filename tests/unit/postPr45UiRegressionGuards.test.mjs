@@ -30,7 +30,8 @@ test('super admin login username is a separate reauthenticated control', async (
 
 test('production boundary enforces one active backend session and exposes device-only active sessions', async () => {
   const source = await read('src/worker-production-boundary.ts');
-  assert.match(source, /ACTIVE_ADMIN_SESSION_PREFIX = 'admin_active_session:'/);
+  assert.match(source, /FROM admin_active_sessions WHERE admin_id=\?/);
+  assert.doesNotMatch(source, /admin_active_session:/);
   assert.match(source, /UPDATE admin_sessions SET revoked_at=COALESCE\(revoked_at,\?\) WHERE admin_id=\? AND id<>\?/);
   assert.match(source, /error: 'session_replaced'/);
   assert.match(source, /url\.pathname === '\/api\/admin\/security\/sessions'/);
@@ -67,7 +68,7 @@ test('mobile QR editor exposes both text fields inside the bounded card', async 
 });
 
 test('desktop settings secondary pane and customer details use deterministic top-aligned geometry', async () => {
-  const css = await read('src/admin/adminRegressionFixes.css');
+  const css = await read('src/admin/adminWorkspace.css');
   assert.match(css, /\.desktop-settings-nav\{[^}]*left:72px;width:288px/);
   assert.match(css, /\.desktop-settings-content\{left:360px/);
   assert.match(css, /grid-template-columns:360px minmax\(0,1fr\)/);

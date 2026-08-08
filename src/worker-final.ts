@@ -10,7 +10,7 @@ import { readOperatorPolicy } from './security/operatorPolicy';
 import { isSameOriginWebSocket as sameOriginWebSocket } from './security/requestOrigin';
 import { requestStreamExceeds } from './security/requestLimits';
 import { withStaffRoomAccess } from './durable-objects/ChatRoom';
-import { normalizeOperatorPresentation, operatorPresentationKey } from './operatorPresentation';
+import { readOperatorPresentation } from './operatorPresentation';
 import {
   DEFAULT_ADMIN_PUBLIC_HOST,
   DEFAULT_VISITOR_ROOT_DOMAIN,
@@ -26,7 +26,6 @@ type WorkerModule = {
   scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>;
 };
 
-type SettingsRow = { value_json: string };
 type StaffAdminContext = {
   id: string;
   role: 'SUPER_ADMIN' | 'OPERATOR';
@@ -53,7 +52,6 @@ type GuestConversationRow = { id: string; purged_at: string | null };
 
 const inner = worker as WorkerModule;
 const ADMIN_CONTROL_JSON_MAX_BYTES = 16 * 1024;
-const INVITE_PATH = /^\/g\/([a-f0-9]{40})\/?$/i;
 const GUEST_CONSUME_PATH = /^\/api\/guest\/([a-f0-9]{40})$/i;
 
 function isLocalDevHost(host: string) {
@@ -122,7 +120,6 @@ function domainBoundaryBlock(req: Request, env: Env) {
 
   if (admin) {
     if (url.pathname.startsWith('/visitor/')
-      || url.pathname.startsWith('/g/')
       || url.pathname === '/chat'
       || isVisitorOnlyApi(url.pathname)) return notFound();
     return null;
@@ -140,11 +137,8 @@ function domainBoundaryBlock(req: Request, env: Env) {
     || isAdminOnlyApi(url.pathname)) return notFound();
 
   if (url.pathname.startsWith('/visitor/') && !allowedVisitorAssetPath(url.pathname)) return notFound();
-  if (url.pathname.startsWith('/g/') && !INVITE_PATH.test(url.pathname)) return notFound();
-
   if (!url.pathname.startsWith('/api/')
-    && !allowedVisitorAssetPath(url.pathname)
-    && !INVITE_PATH.test(url.pathname)) return notFound();
+    && !allowedVisitorAssetPath(url.pathname)) return notFound();
 
   return null;
 }
@@ -196,10 +190,7 @@ async function consumedInviteBlock(req: Request, env: Env) {
 }
 
 async function readPresentation(env: Env, adminId: string) {
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(operatorPresentationKey(adminId)).first<SettingsRow>();
-  if (!row?.value_json) return normalizeOperatorPresentation(null);
-  try { return normalizeOperatorPresentation(JSON.parse(row.value_json)); } catch { return normalizeOperatorPresentation(null); }
+  return readOperatorPresentation(env.DB, adminId);
 }
 
 async function publicPresentationForInvite(env: Env, token: string) {
@@ -354,9 +345,6 @@ export default {
     const method = req.method.toUpperCase();
     const visitorHost = isVisitorSurfaceHost(url.hostname, visitorRootDomain(env));
 
-    if (visitorHost && method === 'GET' && INVITE_PATH.test(url.pathname)) {
-      return serveVisitorAsset(req, env, '/visitor/visitor.html');
-    }
     if (visitorHost && method === 'GET' && allowedVisitorAssetPath(url.pathname)) {
       return serveVisitorAsset(req, env, url.pathname);
     }

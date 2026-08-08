@@ -13,7 +13,8 @@ const invitePanel = read('src/admin/InviteLinkPanel.tsx');
 const riskCenter = read('src/admin/AdminRiskCenter.tsx');
 
 test('ordinary operator risk controls are enforced through the centralized fail-closed policy boundary', () => {
-  assert.match(operatorPolicy, /operator_policy:/);
+  assert.match(operatorPolicy, /FROM operator_policies WHERE admin_id=\?/);
+  assert.doesNotMatch(operatorPolicy, /operator_policy:/);
   assert.match(operatorPolicy, /DENY_OPERATOR_POLICY/);
   assert.match(operatorPolicy, /canCreateInvites/);
   assert.match(operatorPolicy, /canUseStaffChat/);
@@ -38,7 +39,7 @@ test('established staff sockets are revalidated against current session and capa
   assert.match(chatRoom, /CHAT_ROOM_STAFF_BROADCAST_HEADER/);
   assert.match(chatRoom, /canReceiveStaff/);
   assert.match(chatRoom, /auth\.revoked_at IS NULL/);
-  assert.match(chatRoom, /canUseStaffChat/);
+  assert.match(chatRoom, /can_use_staff_chat/);
   assert.match(chatRoom, /Staff access revoked/);
 });
 

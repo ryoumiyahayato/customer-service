@@ -140,6 +140,8 @@ export default function AdminDashboard() {
   const selectedMsgsRef = useRef<Message[]>([]);
   const curRef = useRef<Session | null>(null);
   const convOnlineRef = useRef(false);
+  const adminFeedOnlineRef = useRef(false);
+  const lastCapabilityRefreshRef = useRef(0);
   const activeSessionIdRef = useRef('');
   const messageLoadRequestIdRef = useRef(0);
   const messageSyncRequestIdRef = useRef(0);
@@ -207,50 +209,55 @@ export default function AdminDashboard() {
   }, [resetAdminState, showToast]);
   useEffect(() => { fetchAdmin(); }, [fetchAdmin]);
 
-  useEffect(() => {
-    let active = true;
-    if (!admin) {
-      setCapabilities({ canCreateInvites: false, canUseStaffChat: false, canUploadImages: false });
-      return () => { active = false; };
-    }
+  const refreshCapabilities = useCallback(async (force = false) => {
+    if (!admin) return;
     if (admin.role === 'SUPER_ADMIN') {
       setCapabilities({ canCreateInvites: true, canUseStaffChat: true, canUploadImages: true });
-      return () => { active = false; };
+      lastCapabilityRefreshRef.current = Date.now();
+      return;
     }
-    apiFetch<{ capabilities?: Partial<AdminCapabilities> }>('/api/admin/capabilities', { retryGet: false })
-      .then(response => {
-        if (!active) return;
-        setCapabilities({
-          canCreateInvites: response.capabilities?.canCreateInvites === true,
-          canUseStaffChat: response.capabilities?.canUseStaffChat === true,
-          canUploadImages: response.capabilities?.canUploadImages === true,
-        });
-      })
-      .catch(() => { if (active) setCapabilities({ canCreateInvites: false, canUseStaffChat: false, canUploadImages: false }); });
-    return () => { active = false; };
-  }, [admin?.id, admin?.role]);
+    if (!force && Date.now() - lastCapabilityRefreshRef.current < 10000) return;
+    try {
+      const result = await apiFetch<{ capabilities?: Partial<AdminCapabilities> }>('/api/admin/capabilities', { retryGet: false });
+      const value = result.capabilities || {};
+      setCapabilities({
+        canCreateInvites: value.canCreateInvites === true,
+        canUseStaffChat: value.canUseStaffChat === true,
+        canUploadImages: value.canUploadImages === true,
+      });
+      lastCapabilityRefreshRef.current = Date.now();
+    } catch (error) {
+      if (isUnauthorized(error)) handleAuthExpired();
+      else setCapabilities({ canCreateInvites: false, canUseStaffChat: false, canUploadImages: false });
+    }
+  }, [admin?.id, admin?.role, handleAuthExpired]);
+
+  useEffect(() => { void refreshCapabilities(true); }, [refreshCapabilities]);
 
   useEffect(() => {
     if (!admin) return;
-    let inFlight = false;
-    const heartbeat = async () => {
-      if (document.visibilityState !== 'visible' || inFlight) return;
-      inFlight = true;
+    let active = true;
+    const heartbeat = async (forceCapabilities = false) => {
       try {
-        await apiFetch<AuthMeResponse>('/api/auth/me', { retryGet: false, timeoutMs: 5000 });
+        const auth = await apiFetch<AuthMeResponse>('/api/auth/me', { retryGet: false, timeoutMs: 5000 });
+        if (!active) return;
+        if (!auth.admin) { handleAuthExpired(); return; }
+        if (forceCapabilities || Date.now() - lastCapabilityRefreshRef.current >= 10000) await refreshCapabilities(true);
+        if (!adminFeedOnlineRef.current) {
+          const list = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1', { retryGet: false, timeoutMs: 5000 });
+          if (active) setSessions(Array.isArray(list.sessions) ? list.sessions : []);
+        }
       } catch (error) {
         if (isUnauthorized(error)) handleAuthExpired();
-      } finally {
-        inFlight = false;
       }
     };
-    const timer = window.setInterval(() => { void heartbeat(); }, 2500);
-    const onFocus = () => { void heartbeat(); };
-    const onVisible = () => { if (document.visibilityState === 'visible') void heartbeat(); };
-    addEventListener('focus', onFocus);
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void heartbeat(false); }, 2500);
+    const onVisible = () => { if (document.visibilityState === 'visible') void heartbeat(true); };
+    addEventListener('focus', onVisible);
     document.addEventListener('visibilitychange', onVisible);
-    return () => { window.clearInterval(timer); removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onVisible); };
-  }, [admin?.id, handleAuthExpired]);
+    void heartbeat(true);
+    return () => { active = false; clearInterval(timer); removeEventListener('focus', onVisible); document.removeEventListener('visibilitychange', onVisible); };
+  }, [admin?.id, handleAuthExpired, refreshCapabilities]);
 
   const fetchSessions = async () => {
     try { const res = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1'); setSessions(res.sessions || []); } catch (error) { if (isUnauthorized(error)) handleAuthExpired(); }
@@ -308,12 +315,19 @@ export default function AdminDashboard() {
   };
 
   const wsAdmin = useCallback(() => {
+    if (!admin) return;
+    if (wsRefs.current.admin) wsRefs.current.admin.close();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/admin`);
-    ws.onmessage = (e) => { try { const d = parseChatRealtimeEvent(JSON.parse(e.data)); if (d?.type === 'sessions:changed') fetchSessions(); } catch {} };
-    ws.onclose = () => { reconnectTimers.current.admin = setTimeout(() => wsAdmin(), 5000); };
+    ws.onopen = () => { adminFeedOnlineRef.current = true; };
+    ws.onmessage = () => { fetchSessions(); };
+    ws.onerror = () => { adminFeedOnlineRef.current = false; ws.close(); };
+    ws.onclose = () => {
+      adminFeedOnlineRef.current = false;
+      if (admin) setTimeout(wsAdmin, 5000);
+    };
     wsRefs.current.admin = ws;
-  }, []);
+  }, [admin, fetchSessions]);
 
   const wsConv = useCallback((sid: string) => {
     if (!sid) return;
@@ -465,9 +479,11 @@ export default function AdminDashboard() {
     } catch (error) { if (isActiveAdminSession(sid)) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); }
   };
 
+  const sessionId = cur?.id || '';
   const upload = async (file: File) => {
-    if (sending === 'image' || !cur || currentSessionEnded) return;
-    const sid = cur.id;
+    if (!capabilities.canUploadImages) { showToast('当前客服账号未被授予图片上传权限'); return; }
+    if (!sessionId || !isActiveAdminSession(sessionId)) return;
+    const sid = sessionId;
     let tempId = '';
     sendingRef.current = true; setSending('image');
     try {
@@ -852,7 +868,7 @@ export default function AdminDashboard() {
                   />
                   {currentSessionEnded ? <div className="session-ended-state">{sessionGroupOf(cur) === 'trash' ? '会话在回收站中。' : '会话已归档，消息输入已关闭。'}</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.messageType === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
-                    <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+                    {capabilities.canUploadImages ? <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label> : null}
                     <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
                     <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                   </form>}
@@ -922,7 +938,7 @@ export default function AdminDashboard() {
                   {cur && !currentSessionEnded ? (
                     <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                       {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.messageType === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button type="button" onClick={() => setQuote(null)}>取消</button></div> : null}
-                      <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+                      {capabilities.canUploadImages ? <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label> : null}
                       <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
                       <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                     </form>

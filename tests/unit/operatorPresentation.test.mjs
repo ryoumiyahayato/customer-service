@@ -5,12 +5,8 @@ import {
   DEFAULT_OPERATOR_PRESENTATION,
   QR_CARD_TEXT_MAX_LENGTH,
   normalizeOperatorPresentation,
-  operatorPresentationKey,
 } from '../../src/operatorPresentation.ts';
 
-test('operator presentation uses a stable settings key', () => {
-  assert.equal(operatorPresentationKey('admin_1'), 'operator_presentation:admin_1');
-});
 
 test('operator presentation normalizes editable fields', () => {
   const normalized = normalizeOperatorPresentation({

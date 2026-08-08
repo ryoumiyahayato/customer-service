@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="客服系统图标">
+  <rect width="512" height="512" fill="#2563eb"/>
+  <circle cx="256" cy="256" r="190" fill="#1d4ed8"/>
+  <path d="M140 180c0-36 29-65 65-65h102c36 0 65 29 65 65v70c0 36-29 65-65 65h-45l-90 78v-78c-19-2-32-10-43-22-12-12-19-28-19-45z" fill="#fff"/>
+  <circle cx="212" cy="214" r="17" fill="#2563eb"/>
+  <circle cx="256" cy="214" r="17" fill="#2563eb"/>
+  <circle cx="300" cy="214" r="17" fill="#2563eb"/>
+</svg>
