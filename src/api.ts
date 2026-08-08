@@ -55,6 +55,15 @@ function messageForStatus(status: number, data: unknown, path: string) {
   return backend || '网络不稳定，请重试';
 }
 
+function publishVisitorPresentation(path: string, data: unknown) {
+  if (!/^\/api\/guest\/[a-f0-9]{40}$/i.test(path)) return;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+  const presentation = (data as Record<string, unknown>).presentation;
+  window.dispatchEvent(new CustomEvent('visitor:presentation', {
+    detail: presentation && typeof presentation === 'object' ? presentation : null,
+  }));
+}
+
 async function fetchOnce(input: RequestInfo | URL, options: ApiFetchOptions) {
   const timeoutMs = options.timeoutMs ?? 10000;
   const controller = isAbortControllerSupported() ? new AbortController() : null;
@@ -74,8 +83,11 @@ async function fetchOnce(input: RequestInfo | URL, options: ApiFetchOptions) {
   try {
     const response = await Promise.race([request, timeout]);
     const rawData = await parseBody(response);
-    if (!response.ok) throw new ApiError(messageForStatus(response.status, rawData, pathFromInput(input)), response.status, rawData);
-    return normalizeApiPayload(rawData);
+    const path = pathFromInput(input);
+    if (!response.ok) throw new ApiError(messageForStatus(response.status, rawData, path), response.status, rawData);
+    const data = normalizeApiPayload(rawData);
+    publishVisitorPresentation(path, data);
+    return data;
   } catch (error) {
     if (isAbortError(error)) throw new ApiError('请求超时，请检查网络后重试', 408);
     if (error instanceof ApiError) throw error;
