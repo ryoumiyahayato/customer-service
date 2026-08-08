@@ -232,10 +232,6 @@ export default function OperatorProfileSettings({ username, role }: { username: 
         <small>JPG / PNG / WebP，最大 2MB。</small>
       </div>
 
-      <div className="account-setting-block">
-        <div className="account-setting-title"><b>预设欢迎内容</b><span>已移至“预设消息”，服务器会把预设内容作为真实聊天消息发送。</span></div>
-      </div>
-
       {role === 'SUPER_ADMIN' ? (
         <form className="account-setting-block account-login-name-form" onSubmit={saveAdminLoginUsername} autoComplete="off">
           <div className="account-setting-title"><b>管理员登录账号</b><span>只影响后台登录，不改变对外显示名称</span></div>
