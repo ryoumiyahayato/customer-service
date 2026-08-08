@@ -46,6 +46,7 @@ if (!transformed) {
   if (s.includes("from './security/adminSession'")) {
     s = s.replace(/type AdminSessionRow = \{[\s\S]*?\};\n\n/, '');
     s = s.replace("import { COOKIE_NAMES, readCookie } from './security/cookies';\n", '');
+    s = s.replace("import { hmacHex, verifySignedValue } from './security/signing';\n", "import { hmacHex } from './security/signing';\n");
     s = s.replace("import { verifySignedValue } from './security/signing';\n", '');
     s = s.replace("import { hashSessionToken } from './security/sessionTokens';\n", '');
     s = s.replace("const ADMIN_COOKIE = COOKIE_NAMES.admin;\n", '');
