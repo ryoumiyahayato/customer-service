@@ -1,0 +1,55 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { readFileSync } from 'node:fs';
+
+const publicGate = readFileSync(new URL('../../src/worker-public-gate.ts', import.meta.url), 'utf8');
+const chatRoom = readFileSync(new URL('../../src/durable-objects/ChatRoom.ts', import.meta.url), 'utf8');
+const wrangler = readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8');
+const genericAuth = readFileSync(new URL('../../server-generic/src/auth.ts', import.meta.url), 'utf8');
+const genericCompat = readFileSync(new URL('../../server-generic/src/frontendCompat.ts', import.meta.url), 'utf8');
+const genericSocket = readFileSync(new URL('../../server-generic/src/websocket.ts', import.meta.url), 'utf8');
+const genericIndex = readFileSync(new URL('../../server-generic/src/index.ts', import.meta.url), 'utf8');
+
+test('production visitor and admin surfaces are restricted at the outermost worker boundary', () => {
+  assert.match(publicGate, /Content-Security-Policy/);
+  assert.match(publicGate, /connect-src 'self'/);
+  assert.match(publicGate, /form-action 'none'/);
+  assert.match(publicGate, /adminLegacyVisitorApi/);
+  assert.match(publicGate, /path\.startsWith\('\/api\/account\/'\)/);
+  assert.match(publicGate, /Referrer-Policy': 'no-referrer'/);
+  assert.match(wrangler, /workers_dev\s*=\s*false/);
+  assert.match(wrangler, /preview_urls\s*=\s*false/);
+});
+
+test('visitor HTTP and websocket payloads are minimized independently from admin payloads', () => {
+  assert.match(publicGate, /function safeVisitorMessage/);
+  assert.match(publicGate, /senderId:\s*null/);
+  assert.match(publicGate, /function safeVisitorSession/);
+  assert.match(publicGate, /async function minimizeVisitorJson/);
+  assert.match(publicGate, /minimizeVisitorJson\(req, response\)/);
+  assert.doesNotMatch(publicGate.match(/function safeVisitorSession[\s\S]*?\n}/)?.[0] || '', /userId|visitorKey|assignedOperatorId|ipAddress|deviceLabel/);
+  assert.match(chatRoom, /sanitizeGuestSocketPayload/);
+  assert.match(chatRoom, /meta\.principalType === 'guest'[\s\S]*?sanitizeGuestSocketPayload/);
+});
+
+test('self-host authentication and websocket access fail closed after login', () => {
+  assert.match(genericAuth, /DUMMY_ADMIN_PASSWORD_HASH/);
+  assert.match(genericAuth, /verifyPassword\(password, admin\?\.password_hash \|\| DUMMY_ADMIN_PASSWORD_HASH\)/);
+  assert.match(genericAuth, /!admin \|\| admin\.is_disabled \|\| !valid/);
+  assert.match(genericSocket, /async function remainsAuthorized/);
+  assert.match(genericSocket, /requireCurrentAdmin\(db, state\.auth\.token\)/);
+  assert.match(genericSocket, /requireVisitorSession\(db, state\.auth\.sessionId, state\.auth\.token\)/);
+  assert.match(genericSocket, /remainsAuthorized\(state\)[\s\S]*?closeRevoked/);
+});
+
+test('self-host browser compatibility never treats visitorId as a bearer credential', () => {
+  const credentialFunction = genericCompat.match(/function visitorTokenFromRequest[\s\S]*?\n}/)?.[0] || '';
+  assert.match(credentialFunction, /support_visitor|VISITOR_COOKIE_NAME/);
+  assert.doesNotMatch(credentialFunction, /visitorId|visitor_id/);
+  assert.doesNotMatch(genericCompat, /visitorId:\s*consumed\.visitorToken/);
+});
+
+test('self-host CSRF protection targets state changes without requiring referrers on reads', () => {
+  assert.match(genericIndex, /function isStateChangingMethod/);
+  assert.match(genericIndex, /url\.pathname\.startsWith\('\/api\/'\) && isStateChangingMethod\(request\.method\)/);
+});
