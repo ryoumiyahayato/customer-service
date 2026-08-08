@@ -147,7 +147,7 @@ test('a consumed QR cannot reopen its visitor HTML or consume again even with an
       context(),
     );
     assert.equal(response.status, 410);
-    assert.deepEqual(await response.json(), { error: 'invite_unavailable' });
+    assert.deepEqual(await response.json(), { error: 'unavailable' });
     assert.equal(response.headers.get('cache-control'), 'no-store');
   } finally {
     database.close();
