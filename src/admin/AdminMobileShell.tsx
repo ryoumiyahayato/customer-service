@@ -1,37 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
-import { apiFetch } from '../api';
-import { getErrorMessage } from '../compat';
-import type { OperatorSummary } from '../chatModel';
+import { useEffect, useState } from 'react';
 import InviteLinkPanel from './InviteLinkPanel';
 import OperatorProfileSettings from './OperatorProfileSettings';
 import AdminRiskCenter from './AdminRiskCenter';
+import { useAdminWorkspace } from './AdminWorkspaceContext';
 import './adminMobileShell.css';
 import './qrComposer.css';
 
-type AuthResponse = {
-  admin?: {
-    username?: string;
-    role?: string;
-  } | null;
-};
-
-type CapabilityResponse = {
-  capabilities?: {
-    canCreateInvites?: boolean;
-    canUseStaffChat?: boolean;
-    canUploadImages?: boolean;
-    canViewRiskCenter?: boolean;
-  };
-};
-
-type OperatorListResponse = { operators?: OperatorSummary[] };
 type RootTab = 'messages' | 'qr' | 'me';
-type NestedPage = 'chat' | 'staff' | 'operators' | 'security' | '';
-
-function buttonWithText(selector: string, label: string) {
-  return [...document.querySelectorAll<HTMLButtonElement>(selector)]
-    .find(button => button.textContent?.trim() === label) || null;
-}
+type NestedPage = 'staff' | 'operators' | 'security' | '';
 
 function TabIcon({ type }: { type: RootTab }) {
   if (type === 'messages') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v11H9l-5 3v-14Z" /></svg>;
@@ -39,23 +15,24 @@ function TabIcon({ type }: { type: RootTab }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8c.7-4 3.1-6 7-6s6.3 2 7 6H5Z" /></svg>;
 }
 
-function notifyStaffView(active: boolean) {
-  window.dispatchEvent(new CustomEvent('admin-staff-view', { detail: { active } }));
-}
-
 export default function AdminMobileShell() {
+  const {
+    admin,
+    operators,
+    capabilities,
+    unreadCount,
+    view,
+    mobileView,
+    openView,
+    logout,
+    logoutLoading,
+  } = useAdminWorkspace();
   const [mobile, setMobile] = useState(() => window.innerWidth <= 820);
-  const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<RootTab>('messages');
   const [nestedPage, setNestedPage] = useState<NestedPage>('');
-  const [username, setUsername] = useState('');
-  const [role, setRole] = useState('');
-  const [operators, setOperators] = useState<OperatorSummary[]>([]);
-  const [canCreateInvites, setCanCreateInvites] = useState(false);
-  const [canUseStaffChat, setCanUseStaffChat] = useState(false);
   const [error, setError] = useState('');
-
-  const isSuper = role === 'SUPER_ADMIN';
+  const isSuper = admin.role === 'SUPER_ADMIN';
+  const inChat = tab === 'messages' && view === 'sessions' && mobileView === 'chat';
 
   useEffect(() => {
     const onResize = () => setMobile(window.innerWidth <= 820);
@@ -63,204 +40,78 @@ export default function AdminMobileShell() {
     return () => removeEventListener('resize', onResize);
   }, []);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      const exists = Boolean(document.querySelector('.admin.is-narrow'));
-      setReady(exists);
-      if (exists) window.clearInterval(timer);
-    }, 80);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const refreshIdentity = useCallback(async () => {
-    try {
-      const auth = await apiFetch<AuthResponse>('/api/auth/me', { retryGet: false });
-      const nextRole = auth.admin?.role || '';
-      const nextUsername = auth.admin?.username || '';
-      setUsername(nextUsername);
-      setRole(nextRole);
-
-      if (!nextRole) {
-        setOperators([]);
-        setCanCreateInvites(false);
-        setCanUseStaffChat(false);
-        return;
-      }
-
-      if (nextRole === 'SUPER_ADMIN') {
-        // A verified SUPER_ADMIN role already authorizes these administrator surfaces.
-        // Do not let a capability request that raced login make the administrator look like an operator.
-        setCanCreateInvites(true);
-        setCanUseStaffChat(true);
-        apiFetch<OperatorListResponse>('/api/admins/operators', { retryGet: false })
-          .then(response => setOperators(response.operators || []))
-          .catch(() => setOperators([]));
-        setError('');
-        return;
-      }
-
-      setOperators([]);
-      try {
-        const capabilities = await apiFetch<CapabilityResponse>('/api/admin/capabilities', { retryGet: false });
-        setCanCreateInvites(capabilities.capabilities?.canCreateInvites === true);
-        setCanUseStaffChat(capabilities.capabilities?.canUseStaffChat === true);
-        setError('');
-      } catch {
-        setCanCreateInvites(false);
-        setCanUseStaffChat(false);
-        setError('账号权限读取失败；高权限入口已保持关闭，请刷新后重试。');
-      }
-    } catch {
-      setUsername('');
-      setRole('');
-      setOperators([]);
-      setCanCreateInvites(false);
-      setCanUseStaffChat(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshIdentity();
-    const onFocus = () => { void refreshIdentity(); };
-    addEventListener('focus', onFocus);
-    return () => removeEventListener('focus', onFocus);
-  }, [refreshIdentity]);
-
-  // This shell is mounted before the legacy login view. Retry only while no authenticated
-  // role is known, so a successful login is picked up without keeping a permanent poller.
-  useEffect(() => {
-    if (role) return;
-    const timer = window.setInterval(() => { void refreshIdentity(); }, 1000);
-    return () => window.clearInterval(timer);
-  }, [refreshIdentity, role]);
-
-  const openLegacyView = useCallback((label: '会话' | '内部消息' | '客服管理') => {
-    buttonWithText('.side-nav button', label)?.click();
-  }, []);
-
-  const leaveStaffView = useCallback(() => {
-    notifyStaffView(false);
-    openLegacyView('会话');
-  }, [openLegacyView]);
-
-  const goMessages = useCallback(() => {
+  const goMessages = () => {
     setError('');
     setTab('messages');
     setNestedPage('');
-    leaveStaffView();
-  }, [leaveStaffView]);
+    openView('sessions', 'dir');
+  };
 
-  const goQr = useCallback(() => {
+  const goQr = () => {
     setError('');
-    if (!canCreateInvites) {
-      setTab('qr');
-      setNestedPage('');
-      leaveStaffView();
-      setError('当前客服账号未被授予生成邀请二维码权限，或权限信息暂时不可用。');
-      return;
-    }
     setTab('qr');
     setNestedPage('');
-    leaveStaffView();
-  }, [canCreateInvites, leaveStaffView]);
+    openView('sessions', 'dir');
+    if (!capabilities.canCreateInvites) setError('当前客服账号未被授予生成邀请二维码权限，或权限信息暂时不可用。');
+  };
 
-  const goMe = useCallback(() => {
+  const goMe = () => {
     setError('');
     setTab('me');
     setNestedPage('');
-    leaveStaffView();
-  }, [leaveStaffView]);
+    openView('sessions', 'dir');
+  };
 
   const openStaff = () => {
-    if (!canUseStaffChat) {
+    if (!capabilities.canUseStaffChat) {
       setError('当前客服账号未被授予内部消息权限，或权限信息暂时不可用。');
       return;
     }
     setError('');
     setTab('me');
     setNestedPage('staff');
-    openLegacyView('内部消息');
-    notifyStaffView(true);
+    openView('staffChat', 'panel');
   };
 
   const openOperators = () => {
     setError('');
     setTab('me');
     setNestedPage('operators');
-    notifyStaffView(false);
-    openLegacyView('客服管理');
+    openView('operators', 'panel');
   };
 
   const openSecurity = () => {
     setError('');
     setTab('me');
     setNestedPage('security');
-    leaveStaffView();
-  };
-
-  const logout = async () => {
-    try {
-      await apiFetch('/api/auth/logout', { method: 'POST' });
-      window.location.reload();
-    } catch (err) {
-      setError(getErrorMessage(err, '退出失败'));
-    }
+    openView('sessions', 'dir');
   };
 
   const back = () => {
-    if (nestedPage === 'chat') goMessages();
+    if (inChat) goMessages();
     else goMe();
   };
 
-  useEffect(() => {
-    if (!mobile || !ready) return;
-    const onClick = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      const session = target?.closest('.mobile-session-list-view .conversation-item, .mobile-session-list-view .session');
-      if (session) {
-        setTab('messages');
-        setNestedPage('chat');
-        notifyStaffView(false);
-        return;
-      }
-      const bubble = target?.closest('.msg') as HTMLElement | null;
-      if (!bubble || !bubble.closest('.mobile-chat-workspace')) return;
-      if (target?.closest('a,button,input,textarea,label')) return;
-      event.preventDefault();
-      const rect = bubble.getBoundingClientRect();
-      bubble.dispatchEvent(new MouseEvent('contextmenu', {
-        bubbles: true,
-        cancelable: true,
-        clientX: rect.left + Math.min(rect.width / 2, 120),
-        clientY: rect.top + Math.min(rect.height / 2, 48),
-      }));
-    };
-    document.addEventListener('click', onClick, true);
-    return () => document.removeEventListener('click', onClick, true);
-  }, [mobile, ready]);
+  if (!mobile) return null;
+  const rootPage = !nestedPage && !inChat;
 
-  useEffect(() => () => notifyStaffView(false), []);
-
-  if (!mobile || !ready) return null;
-
-  const rootPage = !nestedPage;
   return (
     <>
-      {nestedPage ? <button type="button" className="mobile-subpage-back" onClick={back} aria-label="返回">‹</button> : null}
+      {(nestedPage || inChat) ? <button type="button" className="mobile-subpage-back" onClick={back} aria-label="返回">‹</button> : null}
 
       {rootPage && tab === 'qr' ? (
         <section className="mobile-root-page mobile-qr-root" aria-label="二维码">
-          {canCreateInvites ? <InviteLinkPanel adminRole={role} operators={operators} /> : null}
+          {capabilities.canCreateInvites ? <InviteLinkPanel adminRole={admin.role} operators={operators} /> : null}
           {error ? <p className="mobile-shell-error">{error}</p> : null}
         </section>
       ) : null}
 
       {rootPage && tab === 'me' ? (
         <section className="mobile-account-tab" aria-label="我的">
-          <OperatorProfileSettings username={username} role={role} />
+          <OperatorProfileSettings username={admin.username} role={admin.role} />
           <div className="mobile-account-menu">
-            <button type="button" onClick={openStaff} disabled={!canUseStaffChat}>
-              <span>内部消息</span><small>{canUseStaffChat ? '客服团队内部沟通' : '管理员已关闭此权限或权限暂不可用'}</small><i>›</i>
+            <button type="button" onClick={openStaff} disabled={!capabilities.canUseStaffChat}>
+              <span>内部消息</span><small>{capabilities.canUseStaffChat ? '客服团队内部沟通' : '管理员已关闭此权限或权限暂不可用'}</small><i>›</i>
             </button>
             {isSuper ? (
               <button type="button" onClick={openOperators}>
@@ -272,8 +123,8 @@ export default function AdminMobileShell() {
                 <span>风控与安全</span><small>异常访问、登录会话与客服权限</small><i>›</i>
               </button>
             ) : null}
-            <button type="button" className="mobile-account-logout" onClick={logout}>
-              <span>退出登录</span><small>结束当前后台登录状态</small><i>›</i>
+            <button type="button" className="mobile-account-logout" onClick={() => void logout()} disabled={logoutLoading}>
+              <span>{logoutLoading ? '退出中...' : '退出登录'}</span><small>结束当前后台登录状态</small><i>›</i>
             </button>
           </div>
           {error ? <p className="mobile-shell-error">{error}</p> : null}
@@ -288,8 +139,9 @@ export default function AdminMobileShell() {
         <nav className="mobile-bottom-nav" aria-label="主要导航">
           <button type="button" className={tab === 'messages' ? 'active' : ''} onClick={goMessages}>
             <TabIcon type="messages" /><span>消息</span>
+            {unreadCount > 0 ? <span className="admin-unread-badge" aria-label={`${unreadCount} 条未读消息`}>{unreadCount > 99 ? '99+' : unreadCount}</span> : null}
           </button>
-          <button type="button" className={tab === 'qr' ? 'active' : ''} onClick={goQr}>
+          <button type="button" className={tab === 'qr' ? 'active' : ''} onClick={goQr} disabled={!capabilities.canCreateInvites}>
             <TabIcon type="qr" /><span>二维码</span>
           </button>
           <button type="button" className={tab === 'me' ? 'active' : ''} onClick={goMe}>
