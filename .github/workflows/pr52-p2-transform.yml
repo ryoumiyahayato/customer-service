@@ -1,20 +1,21 @@
 name: PR52 P2 convergence
 
 on:
-  pull_request:
-    types: [synchronize, opened, reopened, ready_for_review]
+  push:
+    branches:
+      - fix/p0-security-boundaries-20260809
 
 permissions:
   contents: write
 
 jobs:
   transform:
-    if: github.event.pull_request.number == 52 && github.event.pull_request.head.ref == 'fix/p0-security-boundaries-20260809' && github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: fix/p0-security-boundaries-20260809
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
