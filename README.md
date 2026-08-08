@@ -4,9 +4,9 @@ This project is a customer support chat system using a Cloudflare-native product
 
 ## Current production architecture
 
-- Frontend: React + Vite SPA served by Cloudflare static assets.
-- API backend: Cloudflare Worker in `src/worker.ts` with security hardening in `src/worker-secure.ts`.
-- Realtime: Durable Objects + WebSocket in `src/durable-objects/ChatRoom.ts`.
+- Frontend: React + Vite SPA served by Cloudflare static assets. `AdminDashboard` owns authenticated admin/session/capability/unread state; desktop and mobile shells consume that shared workspace state instead of maintaining parallel auth or navigation state.
+- API backend: production requests enter through `src/worker-production-boundary.ts`; the remaining Worker compatibility layers share centralized admin-session, operator-policy, request-origin, password, and domain-isolation primitives rather than defining separate security rules.
+- Realtime: Durable Objects + WebSocket in `src/durable-objects/ChatRoom.ts`, with staff and conversation authorization revalidated against current D1 state.
 - Database: D1 database named `customer_chat_db`.
 - Attachments/images: R2 bucket named `customer-chat-uploads`.
 - Sessions: HttpOnly signed cookies backed by D1 `admin_sessions` and `visitor_sessions` tables.
