@@ -24,7 +24,6 @@ import '../styles.css';
 
 type Message = ChatMessage;
 type GuestBootstrapResponse = {
-  visitorId?: string;
   session?: ChatSession;
   messages?: Message[];
 };
@@ -65,8 +64,7 @@ const sessionUnavailable = isSessionEnded;
 
 /* ========== VISITOR CHAT PAGE ========== */
 function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
-  const [sessionId, setSessionId] = useState<string>(() => localStorage.getItem('chat_session_id') || '');
-  const [visitorId, setVisitorId] = useState<string>(() => localStorage.getItem('chat_visitor_id') || '');
+  const [sessionId, setSessionId] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState<'idle' | 'text' | 'image'>('idle');
@@ -107,6 +105,10 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   useEffect(() => { const tou = () => setIsMobile(true); addEventListener('touchstart', tou, { once: true }); return () => removeEventListener('touchstart', tou); }, []);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { onlineRef.current = online; }, [online]);
+  useEffect(() => {
+    localStorage.removeItem('chat_session_id');
+    localStorage.removeItem('chat_visitor_id');
+  }, []);
 
   const showNotFound = useCallback(() => {
     sessionClosedRef.current = true;
@@ -120,6 +122,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     setQuote(null);
     setContextMenu(null);
     localStorage.removeItem('chat_session_id');
+    localStorage.removeItem('chat_visitor_id');
     clearTimeout(initRetryTimer.current);
     clearTimeout(reconnectTimer.current);
     clearTimeout(fallbackTimer.current);
@@ -186,7 +189,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       const endpoint = `/api/guest/${encodeURIComponent(resolvedInviteToken)}`;
       let request = inviteConsumeRequests.get(resolvedInviteToken);
       if (!request) {
-        request = apiFetch<GuestBootstrapResponse>(endpoint, { method: 'POST', body: JSON.stringify({ visitorId }) });
+        request = apiFetch<GuestBootstrapResponse>(endpoint, { method: 'POST', body: JSON.stringify({}) });
         inviteConsumeRequests.set(resolvedInviteToken, request);
       }
       const res = await request;
@@ -195,8 +198,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
         showNotFound();
         return null;
       }
-      if (res.visitorId && res.visitorId !== visitorId) { setVisitorId(res.visitorId); localStorage.setItem('chat_visitor_id', res.visitorId); }
-      if (res.session) { setSessionId(res.session.id); localStorage.setItem('chat_session_id', res.session.id); }
+      setSessionId(res.session.id);
       if (res.messages) setMessages(mergeMessages([], res.messages));
       sessionClosedRef.current = false;
       setSessionClosed(false);
@@ -233,7 +235,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       setOnline(false);
       return null;
     }
-  }, [visitorId, resolvedInviteToken, sessionId, showNotFound]);
+  }, [resolvedInviteToken, sessionId, showNotFound]);
 
   useEffect(() => { connect(); return () => clearTimeout(initRetryTimer.current); }, [connect]);
 
@@ -384,7 +386,6 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     };
   }, [accessError, retryConnect, sessionClosed]);
 
-  useEffect(() => { const f = (e: StorageEvent) => { if (e.key === 'chat_visitor_id' && e.newValue && e.newValue !== visitorId) window.location.reload(); }; addEventListener('storage', f); return () => removeEventListener('storage', f); }, [visitorId]);
   useEffect(() => { scrollToBottom('smooth'); }, [messages, scrollToBottom]);
   useEffect(() => { if (networkBanner) { const t = setTimeout(() => setNetworkBanner(false), 10000); return () => clearTimeout(t); } }, [networkBanner]);
   useEffect(() => {
@@ -409,7 +410,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       id: tempId,
       sessionId: sessionId,
       senderType: 'VISITOR',
-      senderId: visitorId,
+      senderId: null,
       content,
       messageType: 'text',
       imagePath: null,
@@ -430,7 +431,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
     focusMessageInput();
     try {
       const postStarted = performance.now();
-      const res = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content, senderType: 'VISITOR', quoteMessageId: currentQuote?.id || null }) });
+      const res = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, clientMessageId, content, senderType: 'VISITOR', quoteMessageId: currentQuote?.id || null }) });
       recordChatMetric('api_post_total_ms', postStarted);
       if (res?.message) setMessages(prev => mergeMessage(prev, res.message));
       syncMessages(sessionId).catch((error) => { if (isSessionGoneError(error)) showNotFound(); });
@@ -446,8 +447,8 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
       const fd = new FormData(); fd.append('file', file); fd.append('sessionId', sessionId);
       const res = await apiFetch<UploadResponse>(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST', body: fd });
       tempId = localMessageId(clientMessageId);
-      setMessages(prev => mergeMessage(prev, { id: tempId, sessionId: sessionId, senderType: 'VISITOR', senderId: visitorId, content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: false, quoteMessageId: null, clientMessageId: clientMessageId, recalledAt: null, deletedAt: null, imagePurgedAt: null }));
-      const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, visitorId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
+      setMessages(prev => mergeMessage(prev, { id: tempId, sessionId: sessionId, senderType: 'VISITOR', senderId: null, content: '', messageType: 'image', imagePath: res.path, status: 'sending', createdAt: new Date().toISOString(), readAt: null, isRead: false, quoteMessageId: null, clientMessageId: clientMessageId, recalledAt: null, deletedAt: null, imagePurgedAt: null }));
+      const msgRes = await apiFetch<MessageMutationResponse>('/api/messages', { method: 'POST', body: JSON.stringify({ sessionId, clientMessageId, content: '', messageType: 'image', imagePath: res.path, senderType: 'VISITOR' }) });
       if (msgRes?.message) setMessages(prev => mergeMessage(prev, msgRes.message));
     } catch (error) { if (isSessionGoneError(error)) { showNotFound(); } else { if (tempId) setMessages(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); setNetworkBanner(true); } }
     sendingRef.current = false; setSending('idle');
@@ -506,7 +507,6 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   };
 
   if (accessError === INVITE_NOT_FOUND || sessionClosed) return <LinkExpired />;
-  // Keep transient network failures recoverable instead of showing a blank page.
   if (connecting) return <div className="chat-gate-page"><div className="chat-gate-card"><span className="spinner" /> <h1>正在连接客服</h1><p>正在建立安全会话，请稍候...</p></div></div>;
   if (accessError) return <div className="chat-gate-page"><div className="chat-gate-card error-state"><h1>连接暂时不可用</h1><p>{accessError}</p><button type="button" onClick={retryConnect}>重试连接</button></div></div>;
 
@@ -541,7 +541,6 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
         onTextKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
       />
 
-      {/* Context menu */}
       {contextMenu && (() => {
         const items = menuItems(contextMenu.msg);
         if (items.length === 0) return null;
@@ -553,12 +552,9 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
           </div>
         </div>;
       })()}
-
     </div>
   );
 }
-
-/* ========== ADMIN PAGE ========== */
 
 type GuestChatProps = {
   token: string;
