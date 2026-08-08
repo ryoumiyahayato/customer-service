@@ -34,6 +34,39 @@ function replaceOnce(source, before, after, label) {
   write(path, s);
 }
 
+// Deployment test checks the new safer ordering: explicit deploy delegates before preflight build.
+{
+  const path = 'tests/unit/deploymentSafety.test.mjs';
+  let s = read(path);
+  s = s.replace(`  assert.match(wrapper, /if \\(!deployRequested\\)/);`, `  assert.match(wrapper, /if \\(deployRequested\\)/);\n  assert.ok(wrapper.indexOf('if (deployRequested)') < wrapper.indexOf("['run', 'build']"));`);
+  write(path, s);
+}
+
+// Presentation unit tests no longer assert a settings key; storage is covered by typed-table integration.
+{
+  const path = 'tests/unit/operatorPresentation.test.mjs';
+  let s = read(path);
+  s = s.replace(`  normalizeOperatorPresentation,\n  operatorPresentationKey,`, `  normalizeOperatorPresentation,`);
+  s = s.replace(/\ntest\('operator presentation uses a stable settings key',[\s\S]*?\n\}\);\n/, '\n');
+  write(path, s);
+}
+
+// Invite presentation fixture writes the typed presentation table directly.
+{
+  const path = 'tests/unit/invitePresentationFallback.test.mjs';
+  let s = read(path);
+  s = s.replace(`const { operatorPresentationKey } = await import('../../src/operatorPresentation.ts');\n`, '');
+  s = replaceOnce(s,
+`    CREATE TABLE settings (\n      key TEXT PRIMARY KEY,\n      value_json TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    );`,
+`    CREATE TABLE operator_presentations (\n      admin_id TEXT PRIMARY KEY,\n      welcome_text TEXT NOT NULL,\n      avatar_key TEXT NOT NULL,\n      qr_background_color TEXT NOT NULL,\n      qr_accent_color TEXT NOT NULL,\n      qr_top_text TEXT NOT NULL,\n      qr_bottom_text TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    );`,
+    'invite presentation schema');
+  s = replaceOnce(s,
+`  database.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)')\n    .run(\n      operatorPresentationKey(id),\n      JSON.stringify({\n        welcomeText,\n        avatarKey: '',\n        qrBackgroundColor: '#ffffff',\n        qrAccentColor: '#18b868',\n        qrTopText: '扫码联系客服',\n        qrBottomText: '',\n      }),\n      new Date().toISOString(),\n    );`,
+`  database.prepare(\`INSERT INTO operator_presentations(\n      admin_id,welcome_text,avatar_key,qr_background_color,qr_accent_color,qr_top_text,qr_bottom_text,updated_at\n    ) VALUES(?,?,?,?,?,?,?,?)\`)\n    .run(id, welcomeText, '', '#ffffff', '#18b868', '扫码联系客服', '', new Date().toISOString());`,
+    'invite typed presentation seed');
+  write(path, s);
+}
+
 // Durable Object authorization fixture now owns the same typed policy table as production.
 {
   const path = 'tests/unit/staffChatRoomAuthorization.test.mjs';
