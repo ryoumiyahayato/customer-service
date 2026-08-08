@@ -1,6 +1,7 @@
 export { ChatRoom } from './worker-final';
 import worker from './worker-final';
 import type { Env } from './worker';
+import { hmacHex } from './security/signing';
 import {
   DEFAULT_VISITOR_ROOT_DOMAIN,
   extractVisitorSubdomainToken,
@@ -14,6 +15,12 @@ type WorkerModule = {
 };
 
 type DomainEnv = Env & { VISITOR_ROOT_DOMAIN?: string; VISITOR_PUBLIC_HOSTS?: string };
+type InviteEntryRow = {
+  expires_at: string;
+  revoked_at: string | null;
+  consumed_at: string | null;
+};
+
 const inner = worker as WorkerModule;
 const INVITE_CONSUME = /^\/api\/guest\/([a-f0-9]{40})$/i;
 const MESSAGE_LIST = /^\/api\/sessions\/[^/]+\/messages$/;
@@ -50,6 +57,19 @@ function notFound() {
       'X-Robots-Tag': 'noindex, nofollow, noarchive',
     },
   });
+}
+
+async function inviteAllowsInitialDocument(env: Env, token: string) {
+  const tokenHash = await hmacHex(env.SESSION_SECRET, `invite:${token.toLowerCase()}`);
+  const row = await env.DB.prepare(
+    `SELECT expires_at,revoked_at,consumed_at
+       FROM invite_links
+      WHERE token_hash=?
+      LIMIT 1`,
+  ).bind(tokenHash).first<InviteEntryRow>();
+  if (!row) return false;
+  if (row.revoked_at || row.consumed_at) return false;
+  return row.expires_at > new Date().toISOString();
 }
 
 export function isAllowedVisitorApiRequest(req: Request, expectedInviteToken = '') {
@@ -94,7 +114,20 @@ export default {
     if (!visitor) return inner.fetch(req, env, ctx);
 
     const method = req.method.toUpperCase();
-    if (method === 'GET' && url.pathname === '/') {
+    if ((method === 'GET' || method === 'HEAD') && url.pathname === '/') {
+      if (!(await inviteAllowsInitialDocument(env, visitor.token))) return notFound();
+      if (method === 'HEAD') {
+        return new Response(null, {
+          status: 200,
+          headers: {
+            'Cache-Control': 'no-store',
+            'Referrer-Policy': 'no-referrer',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Frame-Options': 'DENY',
+            'X-Robots-Tag': 'noindex, nofollow, noarchive',
+          },
+        });
+      }
       return inner.fetch(visitorDocumentRequest(req), env, ctx);
     }
     if (method === 'GET' && url.pathname.startsWith('/visitor/assets/')) {
