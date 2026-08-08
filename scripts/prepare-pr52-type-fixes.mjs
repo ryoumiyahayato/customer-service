@@ -37,4 +37,16 @@ function replaceOnce(source, before, after, label) {
   writeFileSync(path, source);
 }
 
+{
+  const path = 'src/worker-public-gate.ts';
+  let source = readFileSync(path, 'utf8');
+  source = replaceOnce(
+    source,
+    `      if (adminLegacyVisitorApi(url.pathname)) return notFound('admin');`,
+    `      if (url.pathname === '/g' || url.pathname.startsWith('/g/') || adminLegacyVisitorApi(url.pathname)) return notFound('admin');`,
+    'outer admin legacy visitor path rejection',
+  );
+  writeFileSync(path, source);
+}
+
 console.log('aligned transformed runtime consumers with typed P2 state');
