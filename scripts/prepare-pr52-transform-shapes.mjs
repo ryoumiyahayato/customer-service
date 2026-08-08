@@ -87,8 +87,8 @@ replaceOnce(`  const wsAdmin = useCallback(() => {
 
 replaceOnce(`  const upload = async (file: File) => {
     if (sending === 'image' || !cur || currentSessionEnded) return;
-    const sid = cur.id;`, `  const upload = async (file: File) => {
-    const sessionId = cur?.id || '';
+    const sid = cur.id;`, `  const sessionId = cur?.id || '';
+  const upload = async (file: File) => {
     if (!sessionId || !isActiveAdminSession(sessionId)) return;
     const sid = sessionId;`, 'upload shape');
 
