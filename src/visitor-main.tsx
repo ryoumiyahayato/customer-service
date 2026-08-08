@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import './styles.css';
+import './visitor/visitorChat.css';
 import VisitorApp from './apps/VisitorApp';
 import LinkExpired from './common/LinkExpired';
 
