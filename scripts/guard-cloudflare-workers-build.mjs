@@ -20,10 +20,16 @@ function fail(message) {
 }
 
 if (!decision.allowed) {
-  if (decision.reason === 'missing_branch') {
-    fail('Cloudflare Workers Build branch is unavailable; refusing to build because production branch safety cannot be verified.');
-  }
-  fail(`Cloudflare Workers Build for branch "${decision.branch}" is blocked. Production Workers Builds are allowed only from main.`);
+  fail('Cloudflare Workers Build branch is unavailable; refusing to build because production/preview intent cannot be verified.');
+}
+
+// Workers Builds has a distinct non-production deploy command (normally
+// `wrangler versions upload`). A preview/version build must be allowed to compile,
+// but it must never use the production D1 migration gate as evidence that it may
+// promote traffic. Production migration verification is therefore main-only.
+if (!decision.production) {
+  console.log(`Cloudflare Workers Build gate: non-production branch "${decision.branch}" may build/upload a version; production promotion is not authorized.`);
+  process.exit(0);
 }
 
 const isWindows = process.platform === 'win32';
