@@ -1,14 +1,8 @@
-import { isAbortControllerSupported, isAbortError } from './compat';
-import { normalizeApiPayload } from './chat/mappers';
+import { isAbortControllerSupported, isAbortError } from '../compat';
+import { normalizeApiPayload } from '../chat/mappers';
 
-type ApiErrorData = Record<string, unknown> & {
-  error?: string;
-  reason?: unknown;
-};
-
-function asApiErrorData(data: unknown): ApiErrorData | null {
-  return data && typeof data === 'object' ? data as ApiErrorData : null;
-}
+type ApiErrorData = Record<string, unknown> & { error?: string };
+type ApiFetchOptions = RequestInit & { timeoutMs?: number; retryGet?: boolean };
 
 export class ApiError extends Error {
   status: number;
@@ -18,60 +12,72 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
     this.status = status;
-    this.data = asApiErrorData(data);
+    this.data = data && typeof data === 'object' && !Array.isArray(data) ? data as ApiErrorData : null;
   }
 }
 
-type ApiFetchOptions = RequestInit & { timeoutMs?: number; retryGet?: boolean };
+const TOKEN_PATH = /^\/api\/guest\/[a-f0-9]{40}$/i;
+const MESSAGE_LIST_PATH = /^\/api\/sessions\/[^/]+\/messages$/;
+const CUSTOMER_READ_PATH = /^\/api\/sessions\/[^/]+\/customer-read$/;
+
+function allowedVisitorApiPath(path: string) {
+  return TOKEN_PATH.test(path)
+    || MESSAGE_LIST_PATH.test(path)
+    || CUSTOMER_READ_PATH.test(path)
+    || path === '/api/messages'
+    || path === '/api/upload';
+}
+
+function requestPath(input: RequestInfo | URL) {
+  const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  const url = new URL(raw, window.location.origin);
+  if (url.origin !== window.location.origin) throw new ApiError('请求地址不可用', 0);
+  if (!allowedVisitorApiPath(url.pathname)) throw new ApiError('请求地址不可用', 0);
+  return url.pathname;
+}
 
 async function parseBody(response: Response) {
   const text = await response.text().catch(() => '');
   if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { error: text };
-  }
-}
-
-function pathFromInput(input: RequestInfo | URL) {
-  const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-  try {
-    return new URL(raw, window.location.origin).pathname;
-  } catch {
-    return '';
-  }
+  try { return JSON.parse(text); } catch { return { error: text }; }
 }
 
 function messageForStatus(status: number, data: unknown, path: string) {
-  const backend = asApiErrorData(data)?.error || '';
-  if (path === '/api/auth/login' && status === 401) return '账号或密码错误';
-  if (path === '/api/account/login' && status === 401) return '账号或密码错误';
-  if (path === '/api/auth/me' && status === 401) return '请登录';
-  if (path.startsWith('/api/guest/') && [401, 403, 404, 410].includes(status)) return '链接不存在或已失效';
+  const backend = data && typeof data === 'object' && !Array.isArray(data)
+    ? String((data as ApiErrorData).error || '')
+    : '';
+  if (TOKEN_PATH.test(path) && [401, 403, 404, 410].includes(status)) return '链接不存在或已失效';
+  if ([401, 403, 404, 410].includes(status)) return '当前会话已不可用';
+  if (status === 413) return '发送内容过大';
   if (status === 400 && backend) return backend;
-  if (status === 401) return '登录已过期，请重新登录';
   if (status >= 500) return '服务器错误，请稍后重试';
   return backend || '网络不稳定，请重试';
 }
 
-function publishVisitorPresentation(path: string, data: unknown) {
-  if (!/^\/api\/guest\/[a-f0-9]{40}$/i.test(path)) return;
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+function publishPresentationAfterConsume(path: string, data: unknown) {
+  if (!TOKEN_PATH.test(path) || !data || typeof data !== 'object' || Array.isArray(data)) return;
   const presentation = (data as Record<string, unknown>).presentation;
   window.dispatchEvent(new CustomEvent('visitor:presentation', {
     detail: presentation && typeof presentation === 'object' ? presentation : null,
   }));
+  // Remove the bearer invite token from the address bar immediately. A reload of this
+  // token-free URL is intentionally not a valid visitor entry.
+  try { history.replaceState(null, '', '/session'); } catch {}
 }
 
 async function fetchOnce(input: RequestInfo | URL, options: ApiFetchOptions) {
+  const path = requestPath(input);
   const timeoutMs = options.timeoutMs ?? 10000;
   const controller = isAbortControllerSupported() ? new AbortController() : null;
   const requestOptions = { ...options };
   delete requestOptions.timeoutMs;
   delete requestOptions.retryGet;
-  const credentials = options.credentials ?? 'same-origin';
-  const request = fetch(input, { ...requestOptions, credentials, signal: controller?.signal });
+  const request = fetch(input, {
+    ...requestOptions,
+    credentials: 'same-origin',
+    referrerPolicy: 'origin',
+    signal: controller?.signal,
+  });
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
@@ -83,10 +89,9 @@ async function fetchOnce(input: RequestInfo | URL, options: ApiFetchOptions) {
   try {
     const response = await Promise.race([request, timeout]);
     const rawData = await parseBody(response);
-    const path = pathFromInput(input);
     if (!response.ok) throw new ApiError(messageForStatus(response.status, rawData, path), response.status, rawData);
     const data = normalizeApiPayload(rawData);
-    publishVisitorPresentation(path, data);
+    publishPresentationAfterConsume(path, data);
     return data;
   } catch (error) {
     if (isAbortError(error)) throw new ApiError('请求超时，请检查网络后重试', 408);

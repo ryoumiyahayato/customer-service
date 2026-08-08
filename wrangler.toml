@@ -1,5 +1,5 @@
 name = "support-chat-cloudflare"
-main = "src/worker-final.ts"
+main = "src/worker-public-gate.ts"
 compatibility_date = "2026-06-26"
 compatibility_flags = ["nodejs_compat"]
 
@@ -44,3 +44,5 @@ zone_name = "kefuxitong.net"
 
 [vars]
 VISITOR_ROOT_DOMAIN = "vx9qn7zr.org"
+VISITOR_PUBLIC_HOSTS = "vx9qn7zr.org"
+ADMIN_PUBLIC_HOST = "denglu.kefuxitong.net"

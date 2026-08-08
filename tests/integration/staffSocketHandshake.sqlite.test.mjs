@@ -16,6 +16,7 @@ const { hashSessionToken } = await import('../../src/security/sessionTokens.ts')
 
 const SECRET = 'staff-socket-handshake-test-secret';
 const NOW = new Date().toISOString();
+const RECENT = new Date(Date.now() - 5 * 60 * 1000).toISOString();
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
 function createDatabase() {
@@ -91,8 +92,8 @@ test('production staff websocket binds authenticated admin and backend session i
   try {
     const forwarded = [];
     const operator = await addAdmin(database, 'operator-a');
-    database.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=?').run('2026-08-08T00:00:00.000Z', operator.sessionId);
-    database.prepare('UPDATE admins SET last_seen_at=? WHERE id=?').run('2026-08-08T00:00:00.000Z', 'operator-a');
+    database.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=?').run(RECENT, operator.sessionId);
+    database.prepare('UPDATE admins SET last_seen_at=? WHERE id=?').run(RECENT, 'operator-a');
 
     const response = await worker.fetch(staffRequest(operator.cookie), createEnv(database, forwarded), context());
     assert.equal(response.status, 200);
@@ -103,8 +104,8 @@ test('production staff websocket binds authenticated admin and backend session i
 
     const authSeen = database.prepare('SELECT last_seen_at FROM admin_sessions WHERE id=?').get(operator.sessionId).last_seen_at;
     const adminSeen = database.prepare('SELECT last_seen_at FROM admins WHERE id=?').get('operator-a').last_seen_at;
-    assert.notEqual(authSeen, '2026-08-08T00:00:00.000Z');
-    assert.notEqual(adminSeen, '2026-08-08T00:00:00.000Z');
+    assert.notEqual(authSeen, RECENT);
+    assert.notEqual(adminSeen, RECENT);
   } finally {
     database.close();
   }
