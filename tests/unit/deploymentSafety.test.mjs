@@ -46,14 +46,19 @@ test('pending migration parser recognizes migration filenames and ignores no-op 
   );
 });
 
-test('repository deployment entry points all route through the guarded deploy script', async () => {
+test('production deploy aliases use the guarded deploy while deploy:cloudflare preserves explicit opt-in', async () => {
   const pkg = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
-  for (const name of ['deploy', 'cf:deploy', 'deploy:cloudflare', 'deploy:safe']) {
+  for (const name of ['deploy', 'cf:deploy', 'deploy:safe']) {
     assert.equal(pkg.scripts[name], 'node scripts/deploy-cloudflare-safe.mjs');
   }
+  assert.equal(pkg.scripts['deploy:cloudflare'], 'node scripts/deploy-cloudflare.mjs');
   assert.match(pkg.scripts.build, /guard-cloudflare-workers-build\.mjs/);
 
-  const legacy = await readFile(new URL('../../scripts/deploy-cloudflare.mjs', import.meta.url), 'utf8');
-  assert.doesNotMatch(legacy, /wrangler\s+deploy/);
-  assert.match(legacy, /deploy-cloudflare-safe\.mjs/);
+  const wrapper = await readFile(new URL('../../scripts/deploy-cloudflare.mjs', import.meta.url), 'utf8');
+  assert.match(wrapper, /deployRequested/);
+  assert.match(wrapper, /if \(!deployRequested\)/);
+  assert.match(wrapper, /No production deployment was started/);
+  assert.match(wrapper, /deploy-cloudflare-safe\.mjs/);
+  assert.doesNotMatch(wrapper, /['"]wrangler['"]\s*,\s*['"]deploy['"]/);
+  assert.doesNotMatch(wrapper, /npx\s+wrangler\s+deploy/);
 });
