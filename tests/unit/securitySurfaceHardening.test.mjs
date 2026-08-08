@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const productionBoundary = readFileSync(new URL('../../src/worker-production-boundary.ts', import.meta.url), 'utf8');
 const publicGate = readFileSync(new URL('../../src/worker-public-gate.ts', import.meta.url), 'utf8');
+const secureWorker = readFileSync(new URL('../../src/worker-secure.ts', import.meta.url), 'utf8');
 const chatRoom = readFileSync(new URL('../../src/durable-objects/ChatRoom.ts', import.meta.url), 'utf8');
 const requestLimits = readFileSync(new URL('../../src/security/requestLimits.ts', import.meta.url), 'utf8');
 const cookies = readFileSync(new URL('../../src/security/cookies.ts', import.meta.url), 'utf8');
@@ -48,11 +49,15 @@ test('browser session cookies are __Host- scoped and cannot be widened to siblin
   assert.doesNotMatch(cookies, /Domain=/i);
 });
 
-test('persistent identity changes require a recently created administrator session', () => {
-  assert.match(productionBoundary, /function sensitiveIdentityMutation/);
+test('persistent credential changes require a recent session without blocking display-name-only profile edits', () => {
+  assert.match(productionBoundary, /async function sensitiveIdentityMutation/);
   assert.match(productionBoundary, /url\.pathname === '\/api\/admins'/);
-  assert.match(productionBoundary, /url\.pathname === '\/api\/admins\/profile'/);
   assert.match(productionBoundary, /OPERATOR_PASSWORD_RESET/);
+  assert.match(productionBoundary, /url\.pathname !== '\/api\/admins\/profile'/);
+  assert.match(productionBoundary, /readJsonObjectWithinLimit\(req, SENSITIVE_PROFILE_MAX_BYTES\)/);
+  assert.match(productionBoundary, /body\.username/);
+  assert.match(productionBoundary, /body\.password/);
+  assert.doesNotMatch(productionBoundary.match(/async function sensitiveIdentityMutation[\s\S]*?\n}/)?.[0] || '', /displayName/);
   assert.match(productionBoundary, /datetime\(s\.created_at\)>datetime\('now','-10 minutes'\)/);
   assert.match(productionBoundary, /reauthentication_required/);
 });
@@ -62,6 +67,14 @@ test('read endpoints with side effects reject same-site sibling origins as well 
   assert.match(readGuard, /site && site !== 'same-origin'/);
   assert.match(readGuard, /mode === 'navigate'/);
   assert.match(readGuard, /dest && dest !== 'empty'/);
+});
+
+test('setup token mutation attempts are rate-limited before first-admin initialization', () => {
+  assert.match(secureWorker, /SETUP_IP_LIMIT = 5/);
+  assert.match(secureWorker, /SETUP_WINDOW_MS = 10 \* 60 \* 1000/);
+  assert.match(secureWorker, /async function protectSetupMutation\(req: Request, env: Env\)/);
+  assert.match(secureWorker, /setup:ip:\$\{clientIp\(req\)\}/);
+  assert.match(secureWorker, /protectSetupMutation\(req, env\)/);
 });
 
 test('request body size guards fail closed when a request stream cannot be read', () => {
