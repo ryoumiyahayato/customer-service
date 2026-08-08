@@ -28,7 +28,7 @@ export function isLocalDevelopmentHost(value: string | undefined | null) {
 export function isVisitorSurfaceHost(hostname: string, visitorRootDomain = DEFAULT_VISITOR_ROOT_DOMAIN) {
   const host = normalizePublicHost(hostname);
   const root = normalizePublicHost(visitorRootDomain);
-  return Boolean(host && root && (host === root || host.endsWith(`.${root}`)));
+  return Boolean(host && root && host === root);
 }
 
 export function isAdminSurfaceHost(hostname: string, adminPublicHost = DEFAULT_ADMIN_PUBLIC_HOST) {
