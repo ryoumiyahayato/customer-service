@@ -18,25 +18,16 @@ function failConfig(message) {
   process.exit(2);
 }
 
-function logPass(name) {
-  console.log(`PASS ${name}`);
-}
-
-function logInfo(message) {
-  console.log(`INFO ${message}`);
-}
+function logPass(name) { console.log(`PASS ${name}`); }
+function logInfo(message) { console.log(`INFO ${message}`); }
 
 class CookieJar {
   constructor() { this.cookies = new Map(); }
-  header() {
-    return [...this.cookies.entries()].map(([key, value]) => `${key}=${value}`).join('; ');
-  }
+  header() { return [...this.cookies.entries()].map(([key, value]) => `${key}=${value}`).join('; '); }
   storeFrom(headers) {
     const values = Array.isArray(headers?.['set-cookie'])
       ? headers['set-cookie']
-      : headers?.['set-cookie']
-        ? [headers['set-cookie']]
-        : [];
+      : headers?.['set-cookie'] ? [headers['set-cookie']] : [];
     for (const header of values) {
       for (const cookie of splitSetCookieHeader(header)) {
         const first = cookie.split(';')[0]?.trim();
@@ -80,16 +71,11 @@ function rawRequest(path, { method, headers, body }) {
   const requestBody = body === undefined ? undefined : JSON.stringify(body);
   const requestHeaders = { ...headers };
   if (requestBody !== undefined) requestHeaders['content-length'] = Buffer.byteLength(requestBody);
-
   return new Promise((resolve, reject) => {
     const req = client.request(target, { method, headers: requestHeaders }, (res) => {
       const chunks = [];
-      res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      res.on('end', () => resolve({
-        status: res.statusCode || 0,
-        headers: res.headers,
-        text: Buffer.concat(chunks).toString('utf8'),
-      }));
+      res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      res.on('end', () => resolve({ status: res.statusCode || 0, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') }));
     });
     req.on('error', reject);
     if (requestBody !== undefined) req.write(requestBody);
@@ -103,38 +89,26 @@ async function request(path, { method = 'GET', body, jar, expected = [200], skip
   const cookie = jar?.header();
   if (cookie) headers.cookie = cookie;
   const safeLabel = label || safeRequestLabel(path);
-
   let response;
   try {
     response = await rawRequest(path, { method, headers, body });
   } catch {
     console.error(`FAIL service_unreachable ${baseUrl}`);
     console.error('Start local compose first, then rerun this script.');
-    console.error('Expected app URL example: http://127.0.0.1:8788');
     process.exit(3);
   }
-
   jar?.storeFrom(response.headers);
   if (!expected.includes(response.status)) {
     let code = '';
-    try {
-      const data = JSON.parse(response.text || '{}');
-      code = data?.error || data?.code || '';
-    } catch {}
+    try { const data = JSON.parse(response.text || '{}'); code = data?.error || data?.code || ''; } catch {}
     throw new Error(`${method} ${safeLabel} returned ${response.status}${code ? ` (${code})` : ''}`);
   }
   if (skipJson || response.status === 204) return null;
   return JSON.parse(response.text || '{}');
 }
 
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function requireObject(value, name) {
-  assert(value && typeof value === 'object', `${name} must be an object`);
-  return value;
-}
+function assert(condition, message) { if (!condition) throw new Error(message); }
+function requireObject(value, name) { assert(value && typeof value === 'object', `${name} must be an object`); return value; }
 
 function extractInvite(inviteResponse) {
   const invite = requireObject(inviteResponse?.invite, 'invite');
@@ -158,9 +132,7 @@ function findMessage(messages, senderType) {
 }
 
 function countClientMessage(messages, clientMessageId) {
-  return Array.isArray(messages)
-    ? messages.filter(message => message?.client_message_id === clientMessageId).length
-    : 0;
+  return Array.isArray(messages) ? messages.filter(message => message?.client_message_id === clientMessageId).length : 0;
 }
 
 async function main() {
@@ -175,33 +147,19 @@ async function main() {
   if (setupStatus.setupAvailable) {
     await request('/api/setup/initialize', {
       method: 'POST',
-      body: {
-        setupToken,
-        username: adminUsername,
-        password: adminPassword,
-        confirmPassword: adminPassword,
-        displayName: adminDisplayName,
-      },
+      body: { setupToken, username: adminUsername, password: adminPassword, confirmPassword: adminPassword, displayName: adminDisplayName },
       expected: [201],
     });
     logPass('setup initialize local admin');
-  } else {
-    logInfo('setup already configured; skipping initialize');
-  }
+  } else logInfo('setup already configured; skipping initialize');
 
-  const login = await request('/api/auth/login', {
-    method: 'POST',
-    body: { username: adminUsername, password: adminPassword },
-    jar: adminJar,
-  });
+  const login = await request('/api/auth/login', { method: 'POST', body: { username: adminUsername, password: adminPassword }, jar: adminJar });
   assert(login?.admin?.role === 'SUPER_ADMIN', 'admin login did not return SUPER_ADMIN role');
   logPass('admin login');
 
   const me = await request('/api/auth/me', { jar: adminJar });
   assert(me?.admin?.role === 'SUPER_ADMIN', 'auth me did not return SUPER_ADMIN role');
-  for (const forbidden of ['password_hash', 'passwordHash', 'token', 'sessionToken', 'cookie', 'secret']) {
-    assert(!(forbidden in me.admin), `auth me leaked ${forbidden}`);
-  }
+  for (const forbidden of ['password_hash', 'passwordHash', 'token', 'sessionToken', 'cookie', 'secret']) assert(!(forbidden in me.admin), `auth me leaked ${forbidden}`);
   logPass('auth me');
 
   const inviteResponse = await request('/api/invites', { method: 'POST', body: {}, jar: adminJar, expected: [201] });
@@ -216,62 +174,27 @@ async function main() {
   const guest = await request(`/api/guest/${encodeURIComponent(token)}`, { method: 'POST', body: {}, jar: visitorJar });
   const sessionId = getSessionId(guest);
   assert(guest.resumed === false, 'first invite consumption should not be resumed');
-  assert(typeof guest.visitorId === 'string' && guest.visitorId.length > 0, 'visitor id missing');
-  visitorJar.cookies.set('support_visitor', guest.visitorId);
+  assert(visitorJar.cookies.has('support_visitor'), 'HttpOnly visitor session cookie was not issued');
   logPass('consume invite once');
 
-  const rejectedSecondConsumer = await request(`/api/guest/${encodeURIComponent(token)}`, {
-    method: 'POST',
-    body: {},
-    jar: secondVisitorJar,
-    expected: [410],
-  });
+  const rejectedSecondConsumer = await request(`/api/guest/${encodeURIComponent(token)}`, { method: 'POST', body: {}, jar: secondVisitorJar, expected: [410] });
   assert(rejectedSecondConsumer?.error === 'invite_already_consumed', 'second browser was not rejected');
   logPass('reject second invite consumer');
 
-  const resumed = await request(`/api/guest/${encodeURIComponent(token)}`, {
-    method: 'POST',
-    body: { visitorId: guest.visitorId },
-    jar: visitorJar,
-  });
-  assert(resumed?.resumed === true && getSessionId(resumed) === sessionId, 'original visitor could not resume consumed invite');
+  const resumed = await request(`/api/guest/${encodeURIComponent(token)}`, { method: 'POST', body: {}, jar: visitorJar });
+  assert(resumed?.resumed === true && getSessionId(resumed) === sessionId, 'original HttpOnly visitor session could not resume consumed invite');
   logPass('resume consumed invite in original browser');
 
   const revokeCandidateResponse = await request('/api/invites', { method: 'POST', body: {}, jar: adminJar, expected: [201] });
   const revokeCandidate = extractInvite(revokeCandidateResponse);
-  await request(`/api/invites/${encodeURIComponent(revokeCandidate.id)}/revoke`, {
-    method: 'POST',
-    body: {},
-    jar: adminJar,
-  });
-  const revokedGuest = await request(`/api/guest/${encodeURIComponent(revokeCandidate.token)}`, {
-    method: 'POST',
-    body: {},
-    jar: new CookieJar(),
-    expected: [404],
-  });
+  await request(`/api/invites/${encodeURIComponent(revokeCandidate.id)}/revoke`, { method: 'POST', body: {}, jar: adminJar });
+  const revokedGuest = await request(`/api/guest/${encodeURIComponent(revokeCandidate.token)}`, { method: 'POST', body: {}, jar: new CookieJar(), expected: [404] });
   assert(revokedGuest?.error === 'invite_not_found', 'revoked invite remained consumable');
   logPass('revoke invite');
 
-  const visitorSendBody = {
-    sessionId,
-    senderType: 'VISITOR',
-    content: visitorMessage,
-    visitorId: guest.visitorId,
-    clientMessageId: visitorClientMessageId,
-  };
-  await request('/api/messages', {
-    method: 'POST',
-    body: visitorSendBody,
-    jar: visitorJar,
-    expected: [201],
-  });
-  const visitorRetry = await request('/api/messages', {
-    method: 'POST',
-    body: visitorSendBody,
-    jar: visitorJar,
-    expected: [200],
-  });
+  const visitorSendBody = { sessionId, senderType: 'VISITOR', content: visitorMessage, clientMessageId: visitorClientMessageId };
+  await request('/api/messages', { method: 'POST', body: visitorSendBody, jar: visitorJar, expected: [201] });
+  const visitorRetry = await request('/api/messages', { method: 'POST', body: visitorSendBody, jar: visitorJar, expected: [200] });
   assert(visitorRetry?.deduped === true, 'visitor retry was not deduplicated');
   logPass('visitor text idempotency');
 
@@ -284,24 +207,9 @@ async function main() {
   assert(countClientMessage(adminMessages.messages, visitorClientMessageId) === 1, 'visitor idempotency created duplicate messages');
   logPass('admin reads visitor message');
 
-  const adminSendBody = {
-    sessionId,
-    senderType: 'OPERATOR',
-    content: adminMessage,
-    clientMessageId: adminClientMessageId,
-  };
-  await request('/api/messages', {
-    method: 'POST',
-    body: adminSendBody,
-    jar: adminJar,
-    expected: [201],
-  });
-  const adminRetry = await request('/api/messages', {
-    method: 'POST',
-    body: adminSendBody,
-    jar: adminJar,
-    expected: [200],
-  });
+  const adminSendBody = { sessionId, senderType: 'OPERATOR', content: adminMessage, clientMessageId: adminClientMessageId };
+  await request('/api/messages', { method: 'POST', body: adminSendBody, jar: adminJar, expected: [201] });
+  const adminRetry = await request('/api/messages', { method: 'POST', body: adminSendBody, jar: adminJar, expected: [200] });
   assert(adminRetry?.deduped === true, 'admin retry was not deduplicated');
   logPass('admin text idempotency');
 
@@ -310,54 +218,22 @@ async function main() {
   assert(countClientMessage(visitorMessages.messages, adminClientMessageId) === 1, 'admin idempotency created duplicate messages');
   logPass('visitor reads admin reply');
 
-  const readTarget = await request('/api/messages', {
-    method: 'POST',
-    body: {
-      sessionId,
-      senderType: 'OPERATOR',
-      content: `${adminMessage} read target`,
-      clientMessageId: readTargetClientMessageId,
-    },
-    jar: adminJar,
-    expected: [201],
-  });
-  const unreadControl = await request('/api/messages', {
-    method: 'POST',
-    body: {
-      sessionId,
-      senderType: 'OPERATOR',
-      content: `${adminMessage} unread control`,
-      clientMessageId: unreadControlClientMessageId,
-    },
-    jar: adminJar,
-    expected: [201],
-  });
+  const readTarget = await request('/api/messages', { method: 'POST', body: { sessionId, senderType: 'OPERATOR', content: `${adminMessage} read target`, clientMessageId: readTargetClientMessageId }, jar: adminJar, expected: [201] });
+  const unreadControl = await request('/api/messages', { method: 'POST', body: { sessionId, senderType: 'OPERATOR', content: `${adminMessage} unread control`, clientMessageId: unreadControlClientMessageId }, jar: adminJar, expected: [201] });
   const readTargetId = readTarget?.message?.id;
   const unreadControlId = unreadControl?.message?.id;
   assert(typeof readTargetId === 'string' && typeof unreadControlId === 'string', 'read receipt test messages missing ids');
 
-  const readReceipt = await request(`/api/sessions/${encodeURIComponent(sessionId)}/customer-read`, {
-    method: 'POST',
-    body: { messageIds: [readTargetId] },
-    jar: visitorJar,
-  });
-  assert(
-    readReceipt?.ok === true &&
-      Array.isArray(readReceipt.messageIds) &&
-      readReceipt.messageIds.length === 1 &&
-      readReceipt.messageIds[0] === readTargetId &&
-      !readReceipt.messageIds.includes(unreadControlId),
-    'customer read receipt did not honor the requested message ids',
-  );
+  const readReceipt = await request(`/api/sessions/${encodeURIComponent(sessionId)}/customer-read`, { method: 'POST', body: { messageIds: [readTargetId] }, jar: visitorJar });
+  assert(readReceipt?.ok === true && Array.isArray(readReceipt.messageIds) && readReceipt.messageIds.length === 1 && readReceipt.messageIds[0] === readTargetId && !readReceipt.messageIds.includes(unreadControlId), 'customer read receipt did not honor the requested message ids');
   logPass('customer read receipt id filtering');
 
   await request('/api/auth/logout', { method: 'POST', jar: adminJar, expected: [204], skipJson: true });
   logPass('admin logout');
-
   console.log('Local self-host smoke passed.');
 }
 
-main().catch((error) => {
+main().catch(error => {
   console.error(`FAIL ${error instanceof Error ? error.message : String(error)}`);
   console.error('No secrets, cookies, session ids, tokens, or message bodies were printed.');
   process.exit(1);
