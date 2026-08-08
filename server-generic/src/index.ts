@@ -20,9 +20,7 @@ import { loginAdmin, logoutAdmin, requireCurrentAdmin } from './auth.js';
 import { assertExperimentalPublicExposure, loadConfig } from './config.js';
 import { createPostgresAdapter } from './db/postgres.js';
 import { handleFrontendCompatRequest } from './frontendCompat.js';
-import { healthPayload } from './health.js';
 import { HttpError } from './http.js';
-import { describeLifecycleMigration } from './lifecycle.js';
 import { applySecurityHeaders, readJsonBody, sendError, sendJson, sendNoContent, sendText } from './response.js';
 import {
   matchAdminAttachmentDownload,
@@ -73,12 +71,22 @@ function enforceMessageAbuseLimits(request: IncomingMessage, response: ServerRes
   return enforceAbuseLimit(response, abuseGuard.check(request, 'message_session', [abuseSessionPart(sessionId)]));
 }
 
+function isStateChangingMethod(method: string | undefined) {
+  return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(method || '').toUpperCase());
+}
+
 async function serveStatic(response: ServerResponse, url: URL) {
-  const rawPath = decodeURIComponent(url.pathname);
+  let rawPath: string;
+  try {
+    rawPath = decodeURIComponent(url.pathname);
+  } catch {
+    sendText(response, 400, 'Bad request', { 'cache-control': 'no-store' });
+    return;
+  }
   const relativePath = rawPath === '/' ? 'index.html' : rawPath.replace(/^\/+/, '');
   let filePath = path.resolve(staticRoot, relativePath);
   if (!filePath.startsWith(staticRoot + path.sep) && filePath !== staticRoot) {
-    sendText(response, 403, 'Forbidden');
+    sendText(response, 403, 'Forbidden', { 'cache-control': 'no-store' });
     return;
   }
 
@@ -91,10 +99,14 @@ async function serveStatic(response: ServerResponse, url: URL) {
 
   try {
     await stat(filePath);
-    response.writeHead(200, { 'content-type': contentType(filePath) });
+    const type = contentType(filePath);
+    response.writeHead(200, {
+      'content-type': type,
+      ...(type.startsWith('text/html') ? { 'cache-control': 'no-store' } : {}),
+    });
     createReadStream(filePath).pipe(response);
   } catch {
-    sendText(response, 404, 'Not found');
+    sendText(response, 404, 'Not found', { 'cache-control': 'no-store' });
   }
 }
 
@@ -103,16 +115,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const host = request.headers.host || 'localhost';
   const url = new URL(request.url || '/', `http://${host}`);
 
-  if (url.pathname.startsWith('/api/') && !isSameOriginWrite(request)) {
+  if (url.pathname.startsWith('/api/') && isStateChangingMethod(request.method) && !isSameOriginWrite(request)) {
     throw new HttpError(403, 'forbidden');
   }
 
   if (request.method === 'GET' && url.pathname === '/healthz') {
-    sendJson(response, 200, {
-      ...healthPayload(config),
-      databaseConfigured: db.configured,
-      lifecycle: describeLifecycleMigration(),
-    });
+    sendJson(response, 200, { ok: true });
     return;
   }
 
