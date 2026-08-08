@@ -92,5 +92,11 @@ replaceOnce(`  const upload = async (file: File) => {
     if (!sessionId || !isActiveAdminSession(sessionId)) return;
     const sid = sessionId;`, 'upload shape');
 
+const actualFileLabel = `<label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>`;
+const placeholderFileLabel = `<label className="file-btn"><span aria-hidden="true">⌘</span><input ref={uploadRef} type="file" accept="image/*" hidden onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>`;
+const labelCount = source.split(actualFileLabel).length - 1;
+if (labelCount !== 2) throw new Error(`upload control shape: expected two labels, got ${labelCount}`);
+source = source.split(actualFileLabel).join(placeholderFileLabel);
+
 writeFileSync(path, source);
 console.log('normalized PR52 AdminDashboard transformer input');
