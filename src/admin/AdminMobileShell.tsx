@@ -51,8 +51,8 @@ export default function AdminMobileShell() {
   const [username, setUsername] = useState('');
   const [role, setRole] = useState('');
   const [operators, setOperators] = useState<OperatorSummary[]>([]);
-  const [canCreateInvites, setCanCreateInvites] = useState(true);
-  const [canUseStaffChat, setCanUseStaffChat] = useState(true);
+  const [canCreateInvites, setCanCreateInvites] = useState(false);
+  const [canUseStaffChat, setCanUseStaffChat] = useState(false);
   const [error, setError] = useState('');
 
   const isSuper = role === 'SUPER_ADMIN';
@@ -74,22 +74,42 @@ export default function AdminMobileShell() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      apiFetch<AuthResponse>('/api/auth/me', { retryGet: false }),
-      apiFetch<CapabilityResponse>('/api/admin/capabilities', { retryGet: false }),
-    ]).then(([auth, capabilities]) => {
-      if (!active) return;
-      const nextRole = auth.admin?.role || '';
-      setUsername(auth.admin?.username || '');
-      setRole(nextRole);
-      setCanCreateInvites(capabilities.capabilities?.canCreateInvites !== false);
-      setCanUseStaffChat(capabilities.capabilities?.canUseStaffChat !== false);
-      if (nextRole === 'SUPER_ADMIN') {
-        apiFetch<OperatorListResponse>('/api/admins/operators', { retryGet: false })
-          .then(response => { if (active) setOperators(response.operators || []); })
-          .catch(() => {});
-      }
-    }).catch(() => {});
+
+    apiFetch<AuthResponse>('/api/auth/me', { retryGet: false })
+      .then((auth) => {
+        if (!active) return;
+        const nextRole = auth.admin?.role || '';
+        setUsername(auth.admin?.username || '');
+        setRole(nextRole);
+        if (nextRole === 'SUPER_ADMIN') {
+          apiFetch<OperatorListResponse>('/api/admins/operators', { retryGet: false })
+            .then(response => { if (active) setOperators(response.operators || []); })
+            .catch(() => { if (active) setOperators([]); });
+        } else {
+          setOperators([]);
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        setUsername('');
+        setRole('');
+        setOperators([]);
+        setError('当前账号身份读取失败，请刷新后重试。');
+      });
+
+    apiFetch<CapabilityResponse>('/api/admin/capabilities', { retryGet: false })
+      .then((capabilities) => {
+        if (!active) return;
+        setCanCreateInvites(capabilities.capabilities?.canCreateInvites === true);
+        setCanUseStaffChat(capabilities.capabilities?.canUseStaffChat === true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setCanCreateInvites(false);
+        setCanUseStaffChat(false);
+        setError(current => current || '账号权限读取失败；高权限入口已保持关闭，请刷新后重试。');
+      });
+
     return () => { active = false; };
   }, []);
 
@@ -115,7 +135,7 @@ export default function AdminMobileShell() {
       setTab('qr');
       setNestedPage('');
       leaveStaffView();
-      setError('当前客服账号未被授予生成邀请二维码权限。');
+      setError('当前客服账号未被授予生成邀请二维码权限，或权限信息暂时不可用。');
       return;
     }
     setTab('qr');
@@ -132,7 +152,7 @@ export default function AdminMobileShell() {
 
   const openStaff = () => {
     if (!canUseStaffChat) {
-      setError('当前客服账号未被授予内部消息权限。');
+      setError('当前客服账号未被授予内部消息权限，或权限信息暂时不可用。');
       return;
     }
     setError('');
@@ -209,7 +229,7 @@ export default function AdminMobileShell() {
 
       {rootPage && tab === 'qr' ? (
         <section className="mobile-root-page mobile-qr-root" aria-label="二维码">
-          <InviteLinkPanel adminRole={role} operators={operators} />
+          {canCreateInvites ? <InviteLinkPanel adminRole={role} operators={operators} /> : null}
           {error ? <p className="mobile-shell-error">{error}</p> : null}
         </section>
       ) : null}
@@ -219,7 +239,7 @@ export default function AdminMobileShell() {
           <OperatorProfileSettings username={username} role={role} />
           <div className="mobile-account-menu">
             <button type="button" onClick={openStaff} disabled={!canUseStaffChat}>
-              <span>内部消息</span><small>{canUseStaffChat ? '客服团队内部沟通' : '管理员已关闭此权限'}</small><i>›</i>
+              <span>内部消息</span><small>{canUseStaffChat ? '客服团队内部沟通' : '管理员已关闭此权限或权限暂不可用'}</small><i>›</i>
             </button>
             {isSuper ? (
               <button type="button" onClick={openOperators}>

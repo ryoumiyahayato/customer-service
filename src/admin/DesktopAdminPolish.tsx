@@ -37,8 +37,8 @@ export default function DesktopAdminPolish() {
   const [username, setUsername] = useState('');
   const [role, setRole] = useState('');
   const [operators, setOperators] = useState<OperatorSummary[]>([]);
-  const [canCreateInvites, setCanCreateInvites] = useState(true);
-  const [canUseStaffChat, setCanUseStaffChat] = useState(true);
+  const [canCreateInvites, setCanCreateInvites] = useState(false);
+  const [canUseStaffChat, setCanUseStaffChat] = useState(false);
   const [error, setError] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [sessionLabel, setSessionLabel] = useState('');
@@ -62,22 +62,42 @@ export default function DesktopAdminPolish() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      apiFetch<AuthResponse>('/api/auth/me', { retryGet: false }),
-      apiFetch<CapabilityResponse>('/api/admin/capabilities', { retryGet: false }),
-    ]).then(([auth, capabilities]) => {
-      if (!active) return;
-      const nextRole = auth.admin?.role || '';
-      setUsername(auth.admin?.username || '');
-      setRole(nextRole);
-      setCanCreateInvites(capabilities.capabilities?.canCreateInvites !== false);
-      setCanUseStaffChat(capabilities.capabilities?.canUseStaffChat !== false);
-      if (nextRole === 'SUPER_ADMIN') {
-        apiFetch<OperatorListResponse>('/api/admins/operators', { retryGet: false })
-          .then(response => { if (active) setOperators(response.operators || []); })
-          .catch(() => {});
-      }
-    }).catch(() => {});
+
+    apiFetch<AuthResponse>('/api/auth/me', { retryGet: false })
+      .then((auth) => {
+        if (!active) return;
+        const nextRole = auth.admin?.role || '';
+        setUsername(auth.admin?.username || '');
+        setRole(nextRole);
+        if (nextRole === 'SUPER_ADMIN') {
+          apiFetch<OperatorListResponse>('/api/admins/operators', { retryGet: false })
+            .then(response => { if (active) setOperators(response.operators || []); })
+            .catch(() => { if (active) setOperators([]); });
+        } else {
+          setOperators([]);
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        setUsername('');
+        setRole('');
+        setOperators([]);
+        setError('当前账号身份读取失败，请刷新后重试。');
+      });
+
+    apiFetch<CapabilityResponse>('/api/admin/capabilities', { retryGet: false })
+      .then((capabilities) => {
+        if (!active) return;
+        setCanCreateInvites(capabilities.capabilities?.canCreateInvites === true);
+        setCanUseStaffChat(capabilities.capabilities?.canUseStaffChat === true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setCanCreateInvites(false);
+        setCanUseStaffChat(false);
+        setError(current => current || '账号权限读取失败；高权限入口已保持关闭，请刷新后重试。');
+      });
+
     return () => { active = false; };
   }, []);
 
@@ -124,7 +144,7 @@ export default function DesktopAdminPolish() {
     setDetailsOpen(false);
     notifyStaffView(false);
     openLegacyView('会话');
-    if (!canCreateInvites) setError('当前客服账号未被授予生成邀请二维码权限。');
+    if (!canCreateInvites) setError('当前客服账号未被授予生成邀请二维码权限，或权限信息暂时不可用。');
   };
 
   const goSettings = () => {
@@ -144,7 +164,7 @@ export default function DesktopAdminPolish() {
     if (page === 'staff') {
       if (!canUseStaffChat) {
         setSettingsPage('profile');
-        setError('当前客服账号未被授予内部消息权限。');
+        setError('当前客服账号未被授予内部消息权限，或权限信息暂时不可用。');
         notifyStaffView(false);
         openLegacyView('会话');
         return;
@@ -188,7 +208,7 @@ export default function DesktopAdminPolish() {
       <nav className="desktop-tg-rail" aria-label="后台主导航">
         <div className="desktop-rail-avatar">{(username || '客').slice(0, 1).toUpperCase()}</div>
         <button type="button" className={mode === 'messages' ? 'active' : ''} onClick={goMessages}><RailIcon type="messages" /><span>消息</span></button>
-        <button type="button" className={mode === 'qr' ? 'active' : ''} onClick={goQr}><RailIcon type="qr" /><span>二维码</span></button>
+        <button type="button" className={mode === 'qr' ? 'active' : ''} onClick={goQr} disabled={!canCreateInvites}><RailIcon type="qr" /><span>二维码</span></button>
         <button type="button" className={mode === 'settings' ? 'active' : ''} onClick={goSettings}><RailIcon type="settings" /><span>设置</span></button>
       </nav>
 
@@ -201,15 +221,15 @@ export default function DesktopAdminPolish() {
 
       {mode === 'qr' ? (
         <div className="desktop-shell-overlay desktop-qr-overlay">
-          {canCreateInvites ? <InviteLinkPanel adminRole={role} operators={operators} workspace /> : <div className="desktop-access-denied">当前客服账号未被授予生成邀请二维码权限。</div>}
+          {canCreateInvites ? <InviteLinkPanel adminRole={role} operators={operators} workspace /> : <div className="desktop-access-denied">当前客服账号未被授予生成邀请二维码权限，或权限信息暂时不可用。</div>}
         </div>
       ) : null}
 
       {mode === 'settings' ? (
         <aside className="desktop-settings-nav">
-          <div className="desktop-settings-account"><b>{username || '当前账号'}</b><span>{isSuper ? '超级管理员' : '客服'}</span></div>
+          <div className="desktop-settings-account"><b>{username || '当前账号'}</b><span>{isSuper ? '超级管理员' : role ? '客服' : '身份加载中'}</span></div>
           <button type="button" className={settingsPage === 'profile' ? 'active' : ''} onClick={() => openSettingsPage('profile')}><b>我的</b><span>头像、欢迎词、密码</span></button>
-          <button type="button" className={settingsPage === 'staff' ? 'active' : ''} onClick={() => openSettingsPage('staff')} disabled={!canUseStaffChat}><b>内部消息</b><span>{canUseStaffChat ? '团队沟通' : '权限已关闭'}</span></button>
+          <button type="button" className={settingsPage === 'staff' ? 'active' : ''} onClick={() => openSettingsPage('staff')} disabled={!canUseStaffChat}><b>内部消息</b><span>{canUseStaffChat ? '团队沟通' : '权限已关闭或暂不可用'}</span></button>
           {isSuper ? <button type="button" className={settingsPage === 'operators' ? 'active' : ''} onClick={() => openSettingsPage('operators')}><b>客服管理</b><span>账号与人员</span></button> : null}
           {isSuper ? <button type="button" className={settingsPage === 'security' ? 'active' : ''} onClick={() => openSettingsPage('security')}><b>风控与安全</b><span>异常访问、会话与权限</span></button> : null}
           <button type="button" className="desktop-settings-logout" onClick={logout}><b>退出登录</b><span>结束当前后台会话</span></button>

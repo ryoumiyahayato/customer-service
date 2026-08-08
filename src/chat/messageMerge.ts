@@ -19,6 +19,36 @@ function sameClientIdentity(left: ChatMessage, right: ChatMessage) {
   return true;
 }
 
+function isOptimisticMessage(message: ChatMessage) {
+  return message.id.startsWith('local-') || message.status === 'sending' || message.status === 'failed';
+}
+
+function closeEnough(left: string, right: string, thresholdMs = 15_000) {
+  const leftTime = Date.parse(left || '');
+  const rightTime = Date.parse(right || '');
+  return Number.isFinite(leftTime)
+    && Number.isFinite(rightTime)
+    && Math.abs(leftTime - rightTime) <= thresholdMs;
+}
+
+function sameLegacyOptimisticPayload(left: ChatMessage, right: ChatMessage) {
+  // This fallback exists only for a stale/legacy public edge that may omit clientMessageId.
+  // If both ids exist and disagree, they are intentionally distinct messages.
+  if (left.clientMessageId && right.clientMessageId) return false;
+  const leftOptimistic = isOptimisticMessage(left);
+  const rightOptimistic = isOptimisticMessage(right);
+  if (leftOptimistic === rightOptimistic) return false;
+  const server = leftOptimistic ? right : left;
+  if (!isServerMessage(server)) return false;
+  if (left.sessionId !== right.sessionId || left.senderType !== right.senderType) return false;
+  if (left.senderId && right.senderId && left.senderId !== right.senderId) return false;
+  if (left.messageType !== right.messageType) return false;
+  if ((left.content || '') !== (right.content || '')) return false;
+  if ((left.imagePath || '') !== (right.imagePath || '')) return false;
+  if ((left.quoteMessageId || '') !== (right.quoteMessageId || '')) return false;
+  return closeEnough(left.createdAt, right.createdAt);
+}
+
 function laterTimestamp(left: string | null, right: string | null) {
   if (!left) return right;
   if (!right) return left;
@@ -69,9 +99,18 @@ export function sortMessages(messages: ChatMessage[]) {
 
 export function mergeMessage(messages: ChatMessage[], incoming?: ChatMessage) {
   if (!incoming) return messages;
-  const index = messages.findIndex((current) =>
+  let index = messages.findIndex((current) =>
     current.id === incoming.id || sameClientIdentity(current, incoming),
   );
+
+  if (index < 0) {
+    const fallbackMatches = messages
+      .map((current, currentIndex) => sameLegacyOptimisticPayload(current, incoming) ? currentIndex : -1)
+      .filter(currentIndex => currentIndex >= 0);
+    // Never guess when repeated identical messages create more than one plausible pending copy.
+    if (fallbackMatches.length === 1) index = fallbackMatches[0];
+  }
+
   if (index < 0) return sortMessages([...messages, incoming]);
   const next = messages.slice();
   next[index] = preferServerMessage(messages[index], incoming);
