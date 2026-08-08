@@ -10,7 +10,8 @@ import { activeAdminSession } from './security/adminSession';
 import { isSameOriginWrite } from './security/requestOrigin';
 import {
   normalizeOperatorPresentation,
-  operatorPresentationKey,
+  readOperatorPresentation,
+  writeOperatorPresentation,
   type OperatorPresentation,
 } from './operatorPresentation';
 
@@ -27,7 +28,6 @@ type AdminIdentity = {
 };
 
 type OperatorRow = AdminIdentity & { display_name?: string | null };
-type SettingsRow = { value_json: string };
 
 const inner = businessWorker as WorkerModule;
 const JSON_MAX_BYTES = 16 * 1024;
@@ -64,17 +64,11 @@ async function presentationRateLimit(env: Env, req: Request) {
 }
 
 async function readPresentation(env: Env, adminId: string) {
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(operatorPresentationKey(adminId)).first<SettingsRow>();
-  if (!row?.value_json) return normalizeOperatorPresentation(null);
-  try { return normalizeOperatorPresentation(JSON.parse(row.value_json)); } catch { return normalizeOperatorPresentation(null); }
+  return readOperatorPresentation(env.DB, adminId);
 }
 
 async function writePresentation(env: Env, adminId: string, value: OperatorPresentation) {
-  await env.DB.prepare(
-    `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-  ).bind(operatorPresentationKey(adminId), JSON.stringify(value), new Date().toISOString()).run();
+  await writeOperatorPresentation(env.DB, adminId, value);
 }
 
 function publicPresentation(target: OperatorRow, presentation: OperatorPresentation) {
