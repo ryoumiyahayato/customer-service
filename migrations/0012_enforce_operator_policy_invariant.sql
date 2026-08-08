@@ -63,12 +63,18 @@ AFTER UPDATE OF role ON admins
 FOR EACH ROW
 WHEN NEW.role='OPERATOR' AND OLD.role<>'OPERATOR'
 BEGIN
-  INSERT OR IGNORE INTO settings(key,value_json,updated_at)
+  -- Promotion must establish a known-valid policy even if a stale pre-migration row
+  -- already exists for this stable principal. Silently preserving malformed JSON would
+  -- leave the newly promoted operator in an indeterminate capability state.
+  INSERT INTO settings(key,value_json,updated_at)
   VALUES(
     'operator_policy:' || NEW.id,
     '{"canCreateInvites":true,"canUseStaffChat":true,"canUploadImages":true}',
     datetime('now')
-  );
+  )
+  ON CONFLICT(key) DO UPDATE SET
+    value_json=excluded.value_json,
+    updated_at=excluded.updated_at;
 END;
 
 -- Only complete boolean policy documents with exactly one occurrence of each required
