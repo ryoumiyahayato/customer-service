@@ -145,11 +145,15 @@ test('visitor token host cannot prefetch welcome/presentation from a token endpo
   }
 });
 
-test('admin hostname and bare visitor root cannot serve a visitor invite entry', async () => {
+test('admin hostname cannot serve visitor routes and bare visitor root cannot serve an invite entry', async () => {
   const database = createDatabase();
   try {
-    const admin = await worker.fetch(new Request(`https://${ADMIN_HOST}/`), env(database), context());
-    assert.equal(admin.status, 404);
+    const adminGuest = await worker.fetch(
+      new Request(`https://${ADMIN_HOST}/api/guest/${TOKEN}`, { method: 'POST' }),
+      env(database),
+      context(),
+    );
+    assert.equal(adminGuest.status, 404);
     const bare = await worker.fetch(new Request(`https://${VISITOR_ROOT}/`), env(database), context());
     assert.equal(bare.status, 404);
   } finally {
