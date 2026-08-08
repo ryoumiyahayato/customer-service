@@ -6,7 +6,6 @@ import './operatorProfileSettings.css';
 type OperatorPresentation = {
   operatorId?: string;
   displayName?: string;
-  welcomeText: string;
   avatarUrl: string;
 };
 
@@ -14,7 +13,6 @@ type PresentationResponse = { presentation?: OperatorPresentation };
 type ProfileResponse = { profile?: { username?: string; displayName?: string } };
 
 const DEFAULT_PRESENTATION: OperatorPresentation = {
-  welcomeText: '您好，请问有什么可以帮您？',
   avatarUrl: '',
 };
 
@@ -23,7 +21,6 @@ const LOGIN_USERNAME_RE = /^[A-Za-z0-9_.@-]{3,64}$/;
 export default function OperatorProfileSettings({ username, role }: { username: string; role: string }) {
   const [presentation, setPresentation] = useState(DEFAULT_PRESENTATION);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [nameEditing, setNameEditing] = useState(false);
@@ -110,8 +107,6 @@ export default function OperatorProfileSettings({ username, role }: { username: 
     setLoginUsernameSaving(true);
     setError('');
     try {
-      // Re-authenticate first so the sensitive identity change always runs on a fresh
-      // admin session. The production boundary makes this new session replace the old one.
       await apiFetch('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password: loginPassword }),
@@ -128,24 +123,6 @@ export default function OperatorProfileSettings({ username, role }: { username: 
       setError(getErrorMessage(err, '修改管理员登录账号失败'));
     } finally {
       setLoginUsernameSaving(false);
-    }
-  };
-
-  const saveWelcome = async () => {
-    if (saving) return;
-    setSaving(true);
-    setError('');
-    try {
-      const response = await apiFetch<PresentationResponse>('/api/admins/presentation', {
-        method: 'PUT',
-        body: JSON.stringify({ welcomeText: presentation.welcomeText }),
-      });
-      setPresentation(prev => ({ ...prev, ...(response.presentation || {}) }));
-      flash('欢迎词已保存');
-    } catch (err) {
-      setError(getErrorMessage(err, '保存欢迎词失败'));
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -256,11 +233,7 @@ export default function OperatorProfileSettings({ username, role }: { username: 
       </div>
 
       <div className="account-setting-block">
-        <label className="account-welcome-field">
-          <span><b>欢迎词</b><small>访客进入会话时显示</small></span>
-          <textarea rows={3} maxLength={300} value={presentation.welcomeText} onChange={event => setPresentation(prev => ({ ...prev, welcomeText: event.target.value }))} />
-        </label>
-        <button type="button" onClick={saveWelcome} disabled={saving || loading}>{saving ? '保存中…' : '保存欢迎词'}</button>
+        <div className="account-setting-title"><b>预设欢迎内容</b><span>已移至“预设消息”，服务器会把预设内容作为真实聊天消息发送。</span></div>
       </div>
 
       {role === 'SUPER_ADMIN' ? (
