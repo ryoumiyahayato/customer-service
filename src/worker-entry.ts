@@ -15,11 +15,11 @@ import {
   writeOperatorPolicy as writePolicy,
   type OperatorPolicy,
 } from './security/operatorPolicy';
-import { normalizeOperatorPresentation, operatorPresentationKey } from './operatorPresentation';
+import { readOperatorPresentation } from './operatorPresentation';
 import { buildQrMatrix } from './admin/inviteQr';
+import { buildVisitorInviteUrl, DEFAULT_VISITOR_ROOT_DOMAIN } from './domainIsolation';
 import {
   clientMetadataFromRequest,
-  sessionClientMetadataKey,
   type SessionClientMetadata,
 } from './sessionClientMetadata';
 
@@ -51,7 +51,13 @@ type AdminContext = {
 };
 
 type StoredSessionClientMetadata = SessionClientMetadata & { ipAddress?: string };
-type SettingsRow = { key?: string; value_json: string };
+type SessionMetadataRow = {
+  session_id: string;
+  device_label: string;
+  approximate_location: string;
+  captured_at: string;
+  ip_address: string;
+};
 type SessionListPayload = { sessions?: Array<Record<string, unknown>> };
 type PresentationPayload = { presentation?: Record<string, unknown> | null };
 type AdminAuditSessionRow = { admin_id: string };
@@ -104,14 +110,7 @@ async function writeSecurityLog(
 }
 
 async function readPresentation(env: Env, adminId: string) {
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(operatorPresentationKey(adminId)).first<SettingsRow>();
-  if (!row?.value_json) return normalizeOperatorPresentation(null);
-  try {
-    return normalizeOperatorPresentation(JSON.parse(row.value_json));
-  } catch {
-    return normalizeOperatorPresentation(null);
-  }
+  return readOperatorPresentation(env.DB, adminId);
 }
 
 function rewrittenJsonResponse(response: Response, payload: unknown) {
@@ -177,9 +176,14 @@ async function storeSessionClientMetadata(env: Env, req: Request, sessionId: str
   const stored: StoredSessionClientMetadata = { ...metadata, ipAddress: clientIp(req) };
   if (!stored.deviceLabel && !stored.approximateLocation && !stored.ipAddress) return;
   await env.DB.prepare(
-    `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-  ).bind(sessionClientMetadataKey(sessionId), JSON.stringify(stored), capturedAt).run();
+    `INSERT INTO session_client_metadata(session_id,device_label,approximate_location,captured_at,ip_address)
+     VALUES(?,?,?,?,?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       device_label=excluded.device_label,
+       approximate_location=excluded.approximate_location,
+       captured_at=excluded.captured_at,
+       ip_address=excluded.ip_address`,
+  ).bind(sessionId, stored.deviceLabel, stored.approximateLocation, capturedAt, stored.ipAddress || '').run();
 }
 
 async function loadSessionMetadata(env: Env, sessionIds: string[]) {
@@ -188,25 +192,17 @@ async function loadSessionMetadata(env: Env, sessionIds: string[]) {
   for (let offset = 0; offset < unique.length; offset += 80) {
     const chunk = unique.slice(offset, offset + 80);
     if (!chunk.length) continue;
-    const keys = chunk.map(sessionClientMetadataKey);
     const rows = await env.DB.prepare(
-      `SELECT key,value_json FROM settings WHERE key IN (${keys.map(() => '?').join(',')})`,
-    ).bind(...keys).all<SettingsRow>();
+      `SELECT session_id,device_label,approximate_location,captured_at,ip_address
+         FROM session_client_metadata WHERE session_id IN (${chunk.map(() => '?').join(',')})`,
+    ).bind(...chunk).all<SessionMetadataRow>();
     for (const row of rows.results || []) {
-      const key = String(row.key || '');
-      const sessionId = key.startsWith('session_client_meta:') ? key.slice('session_client_meta:'.length) : '';
-      if (!sessionId) continue;
-      try {
-        const parsed = JSON.parse(row.value_json) as Partial<StoredSessionClientMetadata>;
-        result.set(sessionId, {
-          deviceLabel: typeof parsed.deviceLabel === 'string' ? parsed.deviceLabel : '',
-          approximateLocation: typeof parsed.approximateLocation === 'string' ? parsed.approximateLocation : '',
-          capturedAt: typeof parsed.capturedAt === 'string' ? parsed.capturedAt : '',
-          ipAddress: typeof parsed.ipAddress === 'string' ? parsed.ipAddress : '',
-        });
-      } catch {
-        // Ignore malformed legacy metadata rather than failing the session list.
-      }
+      result.set(row.session_id, {
+        deviceLabel: row.device_label || '',
+        approximateLocation: row.approximate_location || '',
+        capturedAt: row.captured_at || '',
+        ipAddress: row.ip_address || '',
+      });
     }
   }
   return result;
@@ -236,13 +232,12 @@ async function enrichSessionListResponse(response: Response, env: Env, req: Requ
 
 async function cleanupPurgedSessionMetadata(env: Env) {
   await env.DB.prepare(
-    `DELETE FROM settings
-      WHERE key LIKE 'session_client_meta:%'
-        AND EXISTS (
-          SELECT 1 FROM sessions s
-          WHERE s.id=substr(settings.key,21)
-            AND s.purged_at IS NOT NULL
-        )`,
+    `DELETE FROM session_client_metadata
+      WHERE EXISTS (
+        SELECT 1 FROM sessions s
+        WHERE s.id=session_client_metadata.session_id
+          AND s.purged_at IS NOT NULL
+      )`,
   ).run();
 }
 
@@ -397,7 +392,6 @@ async function handleRevokeOperatorSessions(req: Request, env: Env, operatorId: 
   return json({ ok: true, revoked: Number(result.meta?.changes || 0) });
 }
 
-
 async function handleResetOperatorPassword(req: Request, env: Env, operatorId: string) {
   if (!sameOriginWrite(req)) return json({ error: 'forbidden' }, 403);
   const { error, admin } = await requireSuperContext(env, req);
@@ -416,9 +410,8 @@ async function handleResetOperatorPassword(req: Request, env: Env, operatorId: s
   return json({ ok: true });
 }
 
-function publicInviteUrl(req: Request, env: Env, token: string) {
-  const root = String(env.VISITOR_ROOT_DOMAIN || '').trim().replace(/^\.+|\.+$/g, '');
-  return root ? `https://${token}.${root}/` : `${new URL(req.url).origin}/g/${encodeURIComponent(token)}`;
+function publicInviteUrl(env: Env, token: string) {
+  return buildVisitorInviteUrl(token, String(env.VISITOR_ROOT_DOMAIN || DEFAULT_VISITOR_ROOT_DOMAIN));
 }
 
 async function rewriteInviteResponse(req: Request, env: Env, response: Response) {
@@ -436,7 +429,7 @@ async function rewriteInviteResponse(req: Request, env: Env, response: Response)
     const token = typeof payload.invite.token === 'string' ? payload.invite.token : '';
     const expiresAt = payload.invite.expiresAt ?? payload.invite.expires_at ?? null;
     payload.invite = token
-      ? { qrMatrix: buildQrMatrix(publicInviteUrl(req, env, token)), expiresAt, rawLinkVisible: false }
+      ? { qrMatrix: buildQrMatrix(publicInviteUrl(env, token)), expiresAt, rawLinkVisible: false }
       : { expiresAt, rawLinkVisible: false };
   }
   if (Array.isArray(payload.invites)) {
