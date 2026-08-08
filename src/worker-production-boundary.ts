@@ -120,35 +120,37 @@ function clientIp(req: Request) {
   return String(req.headers.get('cf-connecting-ip') || 'unknown').trim().slice(0, 80);
 }
 
-async function visitorEntryLimited(req: Request, env: Env) {
-  const url = new URL(req.url);
-  const method = req.method.toUpperCase();
-  const entry = (method === 'GET' || method === 'HEAD') && url.pathname === '/';
-  const consume = method === 'POST' && INVITE_CONSUME.test(url.pathname);
-  if (!entry && !consume) return null;
+async function limitedByIp(req: Request, env: Env, key: string, limit: number, windowMs: number) {
   const retryAfter = await consumeRateLimit(
     env.DB,
-    `surface:visitor-entry:${clientIp(req)}`.slice(0, 240),
-    60,
-    5 * 60 * 1000,
+    `surface:${key}:${clientIp(req)}`.slice(0, 240),
+    limit,
+    windowMs,
   );
   return retryAfter === null
     ? null
     : hardenedPlain(429, 'Too many requests', { 'Retry-After': String(retryAfter) });
 }
 
+async function adminSetupLimited(req: Request, env: Env) {
+  const url = new URL(req.url);
+  if (req.method.toUpperCase() === 'GET' || !url.pathname.startsWith('/api/setup/')) return null;
+  return limitedByIp(req, env, 'admin-setup', 5, 10 * 60 * 1000);
+}
+
+async function visitorEntryLimited(req: Request, env: Env) {
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  const entry = (method === 'GET' || method === 'HEAD') && url.pathname === '/';
+  const consume = method === 'POST' && INVITE_CONSUME.test(url.pathname);
+  if (!entry && !consume) return null;
+  return limitedByIp(req, env, 'visitor-entry', 60, 5 * 60 * 1000);
+}
+
 async function visitorUploadLimited(req: Request, env: Env) {
   const url = new URL(req.url);
   if (req.method.toUpperCase() !== 'POST' || url.pathname !== '/api/upload') return null;
-  const retryAfter = await consumeRateLimit(
-    env.DB,
-    `surface:visitor-upload:${clientIp(req)}`.slice(0, 240),
-    20,
-    10 * 60 * 1000,
-  );
-  return retryAfter === null
-    ? null
-    : hardenedPlain(429, 'Too many requests', { 'Retry-After': String(retryAfter) });
+  return limitedByIp(req, env, 'visitor-upload', 20, 10 * 60 * 1000);
 }
 
 async function liveInvite(env: Env, token: string) {
@@ -221,6 +223,8 @@ export default {
     if (!domains) return hardenedPlain(503, 'Service unavailable');
 
     if (host === domains.admin) {
+      const setupLimit = await adminSetupLimited(req, env);
+      if (setupLimit) return setupLimit;
       if (crossSiteReadMutation(req)) return hardenedPlain(403, 'Forbidden');
       if (await sensitiveIdentityMutation(req) && !(await recentAdminSession(env, req))) {
         return hardenedJson(403, { error: 'reauthentication_required' });
