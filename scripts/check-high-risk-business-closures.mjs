@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
+const productionBoundary = read('src/worker-production-boundary.ts');
 const publicGate = read('src/worker-public-gate.ts');
 const finalWrapper = read('src/worker-final.ts');
 const entryWrapper = read('src/worker-entry.ts');
@@ -27,11 +28,17 @@ const genericSetup = read('server-generic/src/setup.ts');
 const preflight = read('deploy/linux/preflight.sh');
 const adminDashboard = read('src/admin/AdminDashboard.tsx');
 
-assert.match(wrangler, /main\s*=\s*"src\/worker-public-gate\.ts"/);
+assert.match(wrangler, /main\s*=\s*"src\/worker-production-boundary\.ts"/);
+assert.match(productionBoundary, /export \{ ChatRoom \} from '\.\/worker-public-gate'/);
+assert.match(productionBoundary, /import worker from '\.\/worker-public-gate'/);
+assert.match(productionBoundary, /if \(!domains\) return hardenedPlain\(503/);
+assert.match(productionBoundary, /if \(!visitor\) return hardenedPlain\(404/);
+assert.match(productionBoundary, /visitorAsset[\s\S]*?liveInvite/);
+assert.match(productionBoundary, /crossSiteReadMutation/);
 assert.match(publicGate, /export \{ ChatRoom \} from '\.\/worker-final'/);
 assert.match(publicGate, /import worker from '\.\/worker-final'/);
 assert.match(publicGate, /isAllowedVisitorApiRequest/);
-assert.match(publicGate, /visitorHost[\s\S]*?url\.pathname\.startsWith\('\/api\/'\)[\s\S]*?!isAllowedVisitorApiRequest/);
+assert.match(publicGate, /visitor[\s\S]*?url\.pathname\.startsWith\('\/api\/'\)[\s\S]*?!isAllowedVisitorApiRequest/);
 assert.match(finalWrapper, /export \{ ChatRoom \} from '\.\/worker-entry'/);
 assert.match(finalWrapper, /import worker from '\.\/worker-entry'/);
 assert.match(finalWrapper, /url\.pathname === '\/api\/ws\/staff'/);
@@ -123,8 +130,7 @@ assert.doesNotMatch(websocket, /type\s*===\s*['"]subscribe['"]/);
 assert.match(websocket, /client_messages_not_supported/);
 assert.match(genericIndex, /createWebSocketHub\(db\)/);
 assert.match(genericConfig, /server-generic public exposure is blocked/);
-assert.match(genericConfig, /SELF_HOST_EXPERIMENTAL_PUBLIC_ACK/);
-assert.match(genericConfig, /required production domains are missing/);
+assert.match(genericConfig, /does not yet implement the production admin\/visitor bundle and token-subdomain isolation boundary/);
 assert.match(genericConfig, /requiredDomains\.some\(\(domain\) => !domain\.trim\(\)\)/);
 assert.match(preflight, /server-generic remains experimental/);
 
