@@ -1,5 +1,4 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { apiFetch } from '../api';
 import GuestChat from './GuestChat';
 import './visitorPresentation.css';
 
@@ -8,28 +7,32 @@ type VisitorInviteLandingProps = {
 };
 
 type OperatorPresentation = {
-  operatorId?: string;
   displayName?: string;
   welcomeText?: string;
   avatarUrl?: string;
 };
 
-type PresentationResponse = { presentation?: OperatorPresentation | null };
-
 export default function VisitorInviteLanding({ token }: VisitorInviteLandingProps) {
   const [presentation, setPresentation] = useState<OperatorPresentation | null>(null);
 
   useEffect(() => {
-    if (!token) {
-      setPresentation(null);
-      return;
-    }
-    let active = true;
-    apiFetch<PresentationResponse>(`/api/invite-presentation/${encodeURIComponent(token)}`, { retryGet: false })
-      .then(res => { if (active) setPresentation(res?.presentation || null); })
-      .catch(() => { if (active) setPresentation(null); });
+    setPresentation(null);
+    const receive = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
+        setPresentation(null);
+        return;
+      }
+      const value = detail as Record<string, unknown>;
+      setPresentation({
+        displayName: typeof value.displayName === 'string' ? value.displayName : '',
+        welcomeText: typeof value.welcomeText === 'string' ? value.welcomeText : '',
+        avatarUrl: typeof value.avatarUrl === 'string' ? value.avatarUrl : '',
+      });
+    };
+    window.addEventListener('visitor:presentation', receive);
     return () => {
-      active = false;
+      window.removeEventListener('visitor:presentation', receive);
       setPresentation(null);
     };
   }, [token]);
