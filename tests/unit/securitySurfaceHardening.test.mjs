@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const productionBoundary = readFileSync(new URL('../../src/worker-production-boundary.ts', import.meta.url), 'utf8');
 const publicGate = readFileSync(new URL('../../src/worker-public-gate.ts', import.meta.url), 'utf8');
 const chatRoom = readFileSync(new URL('../../src/durable-objects/ChatRoom.ts', import.meta.url), 'utf8');
+const requestLimits = readFileSync(new URL('../../src/security/requestLimits.ts', import.meta.url), 'utf8');
 const wrangler = readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8');
 const genericAuth = readFileSync(new URL('../../server-generic/src/auth.ts', import.meta.url), 'utf8');
 const genericCompat = readFileSync(new URL('../../server-generic/src/frontendCompat.ts', import.meta.url), 'utf8');
@@ -20,6 +21,9 @@ test('production visitor and admin surfaces are restricted at the outermost work
   assert.match(productionBoundary, /requestWithOnlyCookie\(req, COOKIE_NAMES\.admin\)/);
   assert.match(productionBoundary, /requestWithOnlyCookie\(req, COOKIE_NAMES\.guest\)/);
   assert.match(productionBoundary, /surface:visitor-entry/);
+  assert.match(productionBoundary, /surface:visitor-upload/);
+  assert.match(productionBoundary, /visitorUploadLimited/);
+  assert.match(productionBoundary, /20,[\s\S]*?10 \* 60 \* 1000/);
   assert.match(productionBoundary, /visitorAsset[\s\S]*?liveInvite/);
   assert.match(productionBoundary, /crossSiteReadMutation/);
   assert.match(publicGate, /Content-Security-Policy/);
@@ -30,6 +34,12 @@ test('production visitor and admin surfaces are restricted at the outermost work
   assert.match(publicGate, /Referrer-Policy': 'no-referrer'/);
   assert.match(wrangler, /workers_dev\s*=\s*false/);
   assert.match(wrangler, /preview_urls\s*=\s*false/);
+});
+
+test('request body size guards fail closed when a request stream cannot be read', () => {
+  const streamGuard = requestLimits.match(/export async function requestStreamExceeds[\s\S]*?\n}/)?.[0] || '';
+  assert.match(streamGuard, /catch\s*{[\s\S]*?return true;/);
+  assert.doesNotMatch(streamGuard, /catch\s*{[\s\S]*?return false;/);
 });
 
 test('visitor HTTP and websocket payloads are minimized independently from admin payloads', () => {
