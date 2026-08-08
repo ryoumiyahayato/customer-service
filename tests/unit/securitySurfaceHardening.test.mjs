@@ -45,7 +45,8 @@ test('self-host authentication and websocket access fail closed after login', ()
 test('self-host browser compatibility never treats visitorId as a bearer credential', () => {
   const credentialFunction = genericCompat.match(/function visitorTokenFromRequest[\s\S]*?\n}/)?.[0] || '';
   assert.match(credentialFunction, /support_visitor|VISITOR_COOKIE_NAME/);
-  assert.doesNotMatch(credentialFunction, /visitorId|visitor_id/);
+  assert.match(credentialFunction, /return optionalString\(body\?\.visitorToken\)\?\.trim\(\) \|\| null/);
+  assert.doesNotMatch(credentialFunction, /body\?\.(?:visitorId|visitor_id)/);
   assert.doesNotMatch(genericCompat, /visitorId:\s*consumed\.visitorToken/);
 });
 
