@@ -7,13 +7,12 @@ import LinkExpired from './common/LinkExpired';
 const TOKEN_PATTERN = /^[a-f0-9]{40}$/i;
 
 function tokenFromHost() {
-  const firstLabel = location.hostname.toLowerCase().split('.')[0] || '';
+  if (location.pathname !== '/') return '';
+  const labels = location.hostname.toLowerCase().split('.');
+  if (labels.length !== 3) return '';
+  const firstLabel = labels[0] || '';
   return TOKEN_PATTERN.test(firstLabel) ? firstLabel : '';
 }
-
-window.addEventListener('pageshow', (event) => {
-  if (event.persisted && location.pathname === '/session') location.reload();
-});
 
 const root = document.getElementById('root');
 if (root) {
