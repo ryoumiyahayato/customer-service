@@ -47,4 +47,11 @@ patch('tests/integration/visitorChatDelivery.sqlite.test.mjs', source => replace
   'visitor delivery preset tables',
 ));
 
+patch('tests/integration/operatorPresetDelivery.sqlite.test.mjs', source => replaceOnce(
+  source,
+  'FROM messages WHERE session_id=? ORDER BY datetime(created_at),id',
+  'FROM messages WHERE session_id=? ORDER BY created_at,id',
+  'preset integration millisecond order',
+));
+
 console.log('PR52 preset worker integration applied');
