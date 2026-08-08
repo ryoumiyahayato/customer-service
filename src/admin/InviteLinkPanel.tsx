@@ -3,6 +3,13 @@ import { apiFetch } from '../api';
 import { getErrorMessage } from '../compat';
 import type { OperatorSummary } from '../chatModel';
 import { QR_CARD_TEXT_MAX_LENGTH } from '../operatorPresentation';
+import {
+  DEFAULT_VISITOR_ROOT_DOMAIN,
+  buildVisitorInviteUrl,
+  isLocalDevelopmentHost,
+  isVisitorSurfaceHost,
+  normalizePublicHost,
+} from '../domainIsolation';
 import { renderInviteQr } from './inviteQr';
 import './operatorPresentation.css';
 
@@ -49,12 +56,26 @@ const COLOR_PRESETS = [
   { label: '亮黄', value: '#f4c542' },
 ];
 
-const visitorBaseUrl = () => {
-  const configured = (import.meta.env.VITE_VISITOR_PUBLIC_BASE_URL as string | undefined)?.trim();
-  return (configured || window.location.origin).replace(/\/+$/, '');
+const visitorRootDomain = () => normalizePublicHost(
+  (import.meta.env.VITE_VISITOR_ROOT_DOMAIN as string | undefined) || DEFAULT_VISITOR_ROOT_DOMAIN,
+) || DEFAULT_VISITOR_ROOT_DOMAIN;
+
+const safeVisitorInviteUrl = (value: string) => {
+  const candidate = String(value || '').trim();
+  if (!candidate) return '';
+  try {
+    const url = new URL(candidate);
+    const root = visitorRootDomain();
+    const local = isLocalDevelopmentHost(url.hostname);
+    if (url.protocol !== 'https:' && !local) return '';
+    if (!local && !isVisitorSurfaceHost(url.hostname, root)) return '';
+    if (!/^\/g\/[A-Fa-f0-9]{40}$/.test(url.pathname.replace(/\/+$/, ''))) return '';
+    return url.toString();
+  } catch {
+    return '';
+  }
 };
 
-const visitorRootDomain = () => ((import.meta.env.VITE_VISITOR_ROOT_DOMAIN as string | undefined) || '').trim();
 const limitQrText = (value: string) => Array.from(value).slice(0, QR_CARD_TEXT_MAX_LENGTH).join('');
 
 export default function InviteLinkPanel({ adminRole, operators = [], workspace = false }: InviteLinkPanelProps) {
@@ -151,14 +172,11 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
       const body = isSuper && sourceOperatorId ? { sourceOperatorId } : {};
       const response = await apiFetch<InviteResponse>('/api/invites', { method: 'POST', body: JSON.stringify(body) });
       const invite = response?.invite || {};
-      const token = invite.token;
-      const rootDomain = visitorRootDomain();
-      let fullUrl = '';
-      if (token && rootDomain) fullUrl = `https://${token}.${rootDomain}/`;
-      else if (token) fullUrl = `${visitorBaseUrl()}/g/${encodeURIComponent(token)}`;
-      else if (invite.url) fullUrl = invite.url.startsWith('http') ? invite.url : `${visitorBaseUrl()}${invite.url.startsWith('/') ? invite.url : `/${invite.url}`}`;
+      const token = String(invite.token || '').trim();
+      let fullUrl = safeVisitorInviteUrl(String(invite.url || ''));
+      if (!fullUrl && token) fullUrl = buildVisitorInviteUrl(token, visitorRootDomain());
 
-      if (!fullUrl && !invite.qrMatrix?.length) throw new Error('邀请二维码生成失败');
+      if (!fullUrl && !invite.qrMatrix?.length) throw new Error('访客邀请域名配置异常，已拒绝生成后台域名链接');
       setInviteUrl(fullUrl);
       setInviteMatrix(invite.qrMatrix?.length ? invite.qrMatrix : null);
     } catch (err) {
