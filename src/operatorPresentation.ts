@@ -1,4 +1,6 @@
 export type OperatorPresentation = {
+  /** Legacy adapters may still read this key while PR #52 converges. It is intentionally never populated. */
+  welcomeText?: undefined;
   avatarKey: string;
   qrBackgroundColor: string;
   qrAccentColor: string;
