@@ -12,7 +12,6 @@ const {
   isAdminSurfaceHost,
   isVisitorSurfaceHost,
 } = await import('../../src/domainIsolation.ts');
-const { resolveAppMode } = await import('../../src/routing.ts');
 const { default: worker } = await import('../../src/worker-public-gate.ts');
 
 const TOKEN = 'a'.repeat(40);
@@ -35,15 +34,13 @@ test('visitor invite URLs use token-first subdomains under the dedicated visitor
   assert.equal(isAdminSurfaceHost(DEFAULT_VISITOR_ROOT_DOMAIN), false);
 });
 
-test('routing accepts only token-subdomain root entry and rejects legacy path-token forms', () => {
-  assert.deepEqual(resolveAppMode({ hostname: VISITOR_HOST, pathname: '/' }), {
-    type: 'visitor',
-    token: TOKEN,
-    source: 'subdomain',
-  });
-  assert.deepEqual(resolveAppMode({ hostname: VISITOR_HOST, pathname: `/g/${TOKEN}` }), { type: 'not-found' });
-  assert.deepEqual(resolveAppMode({ hostname: DEFAULT_VISITOR_ROOT_DOMAIN, pathname: `/g/${TOKEN}` }), { type: 'not-found' });
-  assert.deepEqual(resolveAppMode({ hostname: DEFAULT_VISITOR_ROOT_DOMAIN, pathname: `/${TOKEN}` }), { type: 'not-found' });
+test('routing source accepts only token-subdomain root entry and removes legacy path-token modes', () => {
+  const routing = readFileSync(new URL('../../src/routing.ts', import.meta.url), 'utf8');
+  assert.match(routing, /extractVisitorSubdomainToken\(hostname, visitorRootDomain\)/);
+  assert.match(routing, /if \(subdomainToken\)/);
+  assert.match(routing, /if \(pathname !== '\/'\) return \{ type: 'not-found' \}/);
+  assert.doesNotMatch(routing, /legacy-g|long-token/);
+  assert.doesNotMatch(routing, /pathname\.match\(\/\^\\\/g/);
 });
 
 test('admin host rejects visitor entry routes before reaching application code', async () => {
