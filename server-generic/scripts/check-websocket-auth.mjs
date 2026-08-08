@@ -60,27 +60,23 @@ assert.throws(
   /required production domains are missing/,
 );
 
-const blockedPublicConfig = loadConfig({
-  NODE_ENV: 'production',
-  APP_DOMAIN: 'admin.example.test',
-  VISITOR_ROOT_DOMAIN: 'visitor.example.test',
-  DATABASE_URL: '',
-  ENCRYPTION_ENABLED: 'false',
-});
-assert.throws(
-  () => assertExperimentalPublicExposure(blockedPublicConfig, { NODE_ENV: 'production' }),
-  /server-generic public exposure is blocked/,
-);
-
-const acknowledgedPublicConfig = loadConfig({
-  NODE_ENV: 'production',
-  APP_DOMAIN: 'admin.example.test',
-  VISITOR_ROOT_DOMAIN: 'visitor.example.test',
-  DATABASE_URL: '',
-  ENCRYPTION_ENABLED: 'false',
-  SELF_HOST_EXPERIMENTAL_PUBLIC_ACK: 'I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL',
-});
-assert.doesNotThrow(() => assertExperimentalPublicExposure(acknowledgedPublicConfig, { NODE_ENV: 'production' }));
+for (const extra of [
+  {},
+  { SELF_HOST_EXPERIMENTAL_PUBLIC_ACK: 'I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL' },
+]) {
+  const publicConfig = loadConfig({
+    NODE_ENV: 'production',
+    APP_DOMAIN: 'admin.example.test',
+    VISITOR_ROOT_DOMAIN: 'visitor.example.test',
+    DATABASE_URL: '',
+    ENCRYPTION_ENABLED: 'false',
+    ...extra,
+  });
+  assert.throws(
+    () => assertExperimentalPublicExposure(publicConfig, { NODE_ENV: 'production', ...extra }),
+    /server-generic public exposure is blocked/,
+  );
+}
 
 const acknowledgedMissingDomains = loadConfig({
   NODE_ENV: 'production',
@@ -90,6 +86,12 @@ const acknowledgedMissingDomains = loadConfig({
   ENCRYPTION_ENABLED: 'false',
   SELF_HOST_EXPERIMENTAL_PUBLIC_ACK: 'I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL',
 });
-assert.doesNotThrow(() => assertExperimentalPublicExposure(acknowledgedMissingDomains, { NODE_ENV: 'production' }));
+assert.throws(
+  () => assertExperimentalPublicExposure(acknowledgedMissingDomains, {
+    NODE_ENV: 'production',
+    SELF_HOST_EXPERIMENTAL_PUBLIC_ACK: 'I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL',
+  }),
+  /required production domains are missing/,
+);
 
 console.log('server-generic websocket authentication and public exposure checks passed');
