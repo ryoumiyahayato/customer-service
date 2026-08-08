@@ -29,17 +29,19 @@ function policy(db, id) {
   return row ? JSON.parse(row.value_json) : null;
 }
 
-test('migration preserves existing operators while repairing corrupt policy state', () => {
+test('migration preserves valid legacy operators while repairing malformed and duplicate-key policy state', () => {
   const db = createDatabase();
   db.exec(`
     INSERT INTO admins(id,role) VALUES
       ('legacy','OPERATOR'),
       ('custom','OPERATOR'),
       ('corrupt','OPERATOR'),
+      ('duplicate','OPERATOR'),
       ('super','SUPER_ADMIN');
     INSERT INTO settings(key,value_json,updated_at) VALUES
       ('operator_policy:custom','{"canCreateInvites":false,"canUseStaffChat":true,"canUploadImages":false}','2026-01-01T00:00:00Z'),
-      ('operator_policy:corrupt','not-json','2026-01-01T00:00:00Z');
+      ('operator_policy:corrupt','not-json','2026-01-01T00:00:00Z'),
+      ('operator_policy:duplicate','{"canCreateInvites":false,"canCreateInvites":"oops","canUseStaffChat":true,"canUploadImages":true}','2026-01-01T00:00:00Z');
   `);
 
   db.exec(migration);
@@ -54,15 +56,18 @@ test('migration preserves existing operators while repairing corrupt policy stat
     canUseStaffChat: true,
     canUploadImages: false,
   });
-  assert.deepEqual(policy(db, 'corrupt'), {
-    canCreateInvites: false,
-    canUseStaffChat: false,
-    canUploadImages: false,
-  });
+  for (const id of ['corrupt', 'duplicate']) {
+    assert.deepEqual(policy(db, id), {
+      canCreateInvites: false,
+      canUseStaffChat: false,
+      canUploadImages: false,
+    });
+  }
   assert.equal(policy(db, 'super'), null);
+  db.close();
 });
 
-test('new operators always receive an explicit legacy-compatible policy', () => {
+test('new operators always receive an explicit legacy-compatible policy and keep an immutable principal id', () => {
   const db = createDatabase();
   db.exec(migration);
   db.prepare('INSERT INTO admins(id,role) VALUES(?,?)').run('new-op', 'OPERATOR');
@@ -71,9 +76,20 @@ test('new operators always receive an explicit legacy-compatible policy', () => 
     canUseStaffChat: true,
     canUploadImages: true,
   });
+  assert.throws(
+    () => db.prepare('UPDATE admins SET id=? WHERE id=?').run('renamed-op', 'new-op'),
+    /operator_id_immutable/,
+  );
+  assert.deepEqual(policy(db, 'new-op'), {
+    canCreateInvites: true,
+    canUseStaffChat: true,
+    canUploadImages: true,
+  });
+  assert.equal(policy(db, 'renamed-op'), null);
+  db.close();
 });
 
-test('live operator policy cannot be deleted, renamed, malformed, or made partial', () => {
+test('live operator policy cannot be deleted, renamed, malformed, partial, or duplicate-keyed', () => {
   const db = createDatabase();
   db.exec(migration);
   db.prepare('INSERT INTO admins(id,role) VALUES(?,?)').run('guarded', 'OPERATOR');
@@ -94,6 +110,13 @@ test('live operator policy cannot be deleted, renamed, malformed, or made partia
     () => db.prepare('UPDATE settings SET value_json=? WHERE key=?').run('{"canUseStaffChat":true}', 'operator_policy:guarded'),
     /invalid_operator_policy/,
   );
+  assert.throws(
+    () => db.prepare('UPDATE settings SET value_json=? WHERE key=?').run(
+      '{"canCreateInvites":false,"canCreateInvites":"oops","canUseStaffChat":true,"canUploadImages":true}',
+      'operator_policy:guarded',
+    ),
+    /invalid_operator_policy/,
+  );
 
   db.prepare('UPDATE settings SET value_json=? WHERE key=?').run(
     '{"canCreateInvites":false,"canUseStaffChat":false,"canUploadImages":false}',
@@ -104,4 +127,5 @@ test('live operator policy cannot be deleted, renamed, malformed, or made partia
     canUseStaffChat: false,
     canUploadImages: false,
   });
+  db.close();
 });
