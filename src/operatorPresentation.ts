@@ -1,5 +1,4 @@
 export type OperatorPresentation = {
-  welcomeText: string;
   avatarKey: string;
   qrBackgroundColor: string;
   qrAccentColor: string;
@@ -10,7 +9,6 @@ export type OperatorPresentation = {
 export const QR_CARD_TEXT_MAX_LENGTH = 18;
 
 export const DEFAULT_OPERATOR_PRESENTATION: OperatorPresentation = {
-  welcomeText: '您好，请问有什么可以帮您？',
   avatarKey: '',
   qrBackgroundColor: '#ffffff',
   qrAccentColor: '#18b868',
@@ -39,7 +37,6 @@ export function normalizeOperatorPresentation(value: unknown): OperatorPresentat
     ? value as Record<string, unknown>
     : {};
   return {
-    welcomeText: cleanText(source.welcomeText, 300, DEFAULT_OPERATOR_PRESENTATION.welcomeText),
     avatarKey: cleanAvatarKey(source.avatarKey),
     qrBackgroundColor: cleanColor(source.qrBackgroundColor, DEFAULT_OPERATOR_PRESENTATION.qrBackgroundColor),
     qrAccentColor: cleanColor(source.qrAccentColor, DEFAULT_OPERATOR_PRESENTATION.qrAccentColor),
@@ -49,7 +46,6 @@ export function normalizeOperatorPresentation(value: unknown): OperatorPresentat
 }
 
 type PresentationRow = {
-  welcome_text: string;
   avatar_key: string;
   qr_background_color: string;
   qr_accent_color: string;
@@ -59,11 +55,10 @@ type PresentationRow = {
 
 export async function readOperatorPresentation(db: D1Database, adminId: string) {
   const row = await db.prepare(
-    `SELECT welcome_text,avatar_key,qr_background_color,qr_accent_color,qr_top_text,qr_bottom_text
+    `SELECT avatar_key,qr_background_color,qr_accent_color,qr_top_text,qr_bottom_text
        FROM operator_presentations WHERE admin_id=? LIMIT 1`,
   ).bind(adminId).first<PresentationRow>();
   return normalizeOperatorPresentation(row ? {
-    welcomeText: row.welcome_text,
     avatarKey: row.avatar_key,
     qrBackgroundColor: row.qr_background_color,
     qrAccentColor: row.qr_accent_color,
@@ -77,9 +72,8 @@ export async function writeOperatorPresentation(db: D1Database, adminId: string,
   await db.prepare(
     `INSERT INTO operator_presentations(
        admin_id,welcome_text,avatar_key,qr_background_color,qr_accent_color,qr_top_text,qr_bottom_text,updated_at
-     ) VALUES(?,?,?,?,?,?,?,?)
+     ) VALUES(?,'',?,?,?,?,?,?)
      ON CONFLICT(admin_id) DO UPDATE SET
-       welcome_text=excluded.welcome_text,
        avatar_key=excluded.avatar_key,
        qr_background_color=excluded.qr_background_color,
        qr_accent_color=excluded.qr_accent_color,
@@ -88,7 +82,6 @@ export async function writeOperatorPresentation(db: D1Database, adminId: string,
        updated_at=excluded.updated_at`,
   ).bind(
     adminId,
-    normalized.welcomeText,
     normalized.avatarKey,
     normalized.qrBackgroundColor,
     normalized.qrAccentColor,
