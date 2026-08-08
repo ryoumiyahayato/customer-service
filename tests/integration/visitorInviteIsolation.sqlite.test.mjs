@@ -16,6 +16,7 @@ const ADMIN_HOST = 'denglu.kefuxitong.net';
 const TOKEN = 'a'.repeat(40);
 const OTHER_TOKEN = 'b'.repeat(40);
 const VISITOR_HOST = `${TOKEN}.${VISITOR_ROOT}`;
+const OTHER_VISITOR_HOST = `${OTHER_TOKEN}.${VISITOR_ROOT}`;
 
 function createDatabase() {
   const database = new DatabaseSync(':memory:');
@@ -41,6 +42,21 @@ function createDatabase() {
     );
   `);
   return database;
+}
+
+async function insertFreshInvite(database, token = TOKEN) {
+  const tokenHash = await hmacHex(SECRET, `invite:${token}`);
+  database.prepare(`
+    INSERT INTO invite_links(
+      id,token_hash,source_operator_id,created_by_admin_id,expires_at,revoked_at,consumed_at,consumed_session_id
+    ) VALUES(?,?,?,?,?,NULL,NULL,NULL)
+  `).run(
+    `invite-${token.slice(0, 4)}`,
+    tokenHash,
+    null,
+    'admin-primary',
+    new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  );
 }
 
 async function insertConsumedInvite(database) {
@@ -82,6 +98,14 @@ function env(database) {
     VISITOR_ROOT_DOMAIN: VISITOR_ROOT,
     VISITOR_PUBLIC_HOSTS: VISITOR_ROOT,
     ADMIN_PUBLIC_HOST: ADMIN_HOST,
+    ASSETS: {
+      async fetch() {
+        return new Response('<!doctype html><html><body>visitor-shell</body></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      },
+    },
   };
 }
 
@@ -89,10 +113,29 @@ function context() {
   return { waitUntil() {}, passThroughOnException() {} };
 }
 
-test('a consumed QR cannot be reopened even when the same token subdomain still has an old guest cookie', async () => {
+test('only a live token subdomain receives the visitor HTML shell', async () => {
+  const database = createDatabase();
+  try {
+    await insertFreshInvite(database);
+    const live = await worker.fetch(new Request(`https://${VISITOR_HOST}/`), env(database), context());
+    assert.equal(live.status, 200);
+    assert.match(await live.text(), /visitor-shell/);
+
+    const unknown = await worker.fetch(new Request(`https://${OTHER_VISITOR_HOST}/`), env(database), context());
+    assert.equal(unknown.status, 404);
+    assert.equal(unknown.headers.get('cache-control'), 'no-store');
+  } finally {
+    database.close();
+  }
+});
+
+test('a consumed QR cannot reopen its visitor HTML or consume again even with an old guest cookie', async () => {
   const database = createDatabase();
   try {
     await insertConsumedInvite(database);
+    const reopened = await worker.fetch(new Request(`https://${VISITOR_HOST}/`), env(database), context());
+    assert.equal(reopened.status, 404);
+
     const cookie = await oldGuestCookie(database);
     const response = await worker.fetch(
       new Request(`https://${VISITOR_HOST}/api/guest/${TOKEN}`, {
