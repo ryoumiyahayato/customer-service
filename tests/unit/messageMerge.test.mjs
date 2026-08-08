@@ -31,6 +31,69 @@ test('replaces a failed optimistic message with the server result', () => {
   assert.deepEqual(mergeMessage([failed], serverMessage), [serverMessage]);
 });
 
+test('reconciles one legacy server response that omitted clientMessageId', () => {
+  const pending = {
+    ...serverMessage,
+    id: 'local-cm_legacy',
+    senderId: null,
+    status: 'sending',
+    clientMessageId: 'cm_legacy',
+    createdAt: '2026-07-31T00:00:05.000Z',
+  };
+  const legacyServer = {
+    ...serverMessage,
+    id: 'msg_legacy',
+    senderId: null,
+    clientMessageId: null,
+    createdAt: '2026-07-31T00:00:06.000Z',
+  };
+  assert.deepEqual(mergeMessage([pending], legacyServer), [legacyServer]);
+});
+
+test('does not guess when two identical pending messages could match a legacy response', () => {
+  const pendingOne = {
+    ...serverMessage,
+    id: 'local-cm_a',
+    senderId: null,
+    status: 'sending',
+    clientMessageId: 'cm_a',
+    createdAt: '2026-07-31T00:00:05.000Z',
+  };
+  const pendingTwo = {
+    ...pendingOne,
+    id: 'local-cm_b',
+    clientMessageId: 'cm_b',
+    createdAt: '2026-07-31T00:00:06.000Z',
+  };
+  const legacyServer = {
+    ...serverMessage,
+    id: 'msg_legacy',
+    senderId: null,
+    clientMessageId: null,
+    createdAt: '2026-07-31T00:00:07.000Z',
+  };
+  assert.equal(mergeMessage([pendingOne, pendingTwo], legacyServer).length, 3);
+});
+
+test('does not merge legacy-looking payloads outside the optimistic time window', () => {
+  const pending = {
+    ...serverMessage,
+    id: 'local-cm_legacy',
+    senderId: null,
+    status: 'sending',
+    clientMessageId: 'cm_legacy',
+    createdAt: '2026-07-31T00:00:00.000Z',
+  };
+  const laterServer = {
+    ...serverMessage,
+    id: 'msg_later',
+    senderId: null,
+    clientMessageId: null,
+    createdAt: '2026-07-31T00:00:20.001Z',
+  };
+  assert.equal(mergeMessage([pending], laterServer).length, 2);
+});
+
 test('does not merge equal client ids across sessions or senders', () => {
   const otherSession = { ...serverMessage, id: 'msg_2', sessionId: 'sess_2' };
   const otherSender = { ...serverMessage, id: 'msg_3', senderId: 'visitor_2' };
