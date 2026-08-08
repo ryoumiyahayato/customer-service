@@ -1,30 +1,30 @@
-.qr-only-panel{display:grid;gap:16px}
+.qr-only-panel{display:grid;gap:16px;min-width:0}
 .qr-workspace-editor-content{display:grid;gap:14px;min-width:0}
 .qr-workspace-editor-content .invite-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .qr-workspace-editor-content .invite-panel-head>div{display:grid;gap:3px;min-width:0}
 .qr-workspace-editor-content .invite-panel-head h3,.qr-workspace-editor-content .invite-panel-head small{margin:0}
 .qr-workspace-editor-content .invite-panel-head small{color:#91a4b8;font-size:11px}
-.qr-preset-block{display:grid;gap:8px}
+.qr-preset-block{display:grid;gap:8px;min-width:0}
 .qr-preset-block>span{font-size:12px;color:#91a4b8}
 .qr-color-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
 .qr-color-presets button{min-width:0;min-height:42px;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px;border:1px solid rgba(148,163,184,.17);border-radius:10px;background:#172638;color:#dce7f2;font-size:12px}
 .qr-color-presets button.active{outline:2px solid #58bdf4;outline-offset:1px}
 .qr-color-presets i{width:13px;height:13px;border-radius:50%;box-shadow:0 0 0 2px rgba(255,255,255,.22)}
 .qr-edit-hint,.operator-link-hidden-note{margin:0;color:#91a4b8;font-size:11px;line-height:1.5}
-.raw-invite-link{display:grid;grid-template-columns:1fr auto;gap:7px}
+.raw-invite-link{display:grid;grid-template-columns:1fr auto;gap:7px;min-width:0}
 .raw-invite-link label{grid-column:1/-1;color:#91a4b8;font-size:11px}
 .raw-invite-link input{min-width:0}
-.qr-visual-preview{display:grid;gap:12px;justify-items:center;align-content:start;min-width:0}
-.qr-preview-title{width:min(100%,560px);display:flex;justify-content:space-between;gap:10px;color:#eaf3fb}
+.qr-visual-preview{display:grid;gap:12px;justify-items:center;align-content:start;min-width:0;max-width:100%}
+.qr-preview-title{width:min(100%,560px);max-width:100%;display:flex;justify-content:space-between;gap:10px;color:#eaf3fb;box-sizing:border-box}
 .qr-preview-title span{color:#91a4b8;font-size:11px;text-align:right}
-.invite-qr-canvas-shell{position:relative;width:min(100%,560px);display:grid;place-items:center;min-width:0}
-.invite-qr-canvas-shell canvas{display:block;width:100%;height:auto;border-radius:28px;box-shadow:0 20px 55px rgba(0,0,0,.25)}
-.qr-direct-text{position:absolute;left:8%;right:8%;width:84%;height:34px;box-sizing:border-box;padding:4px 8px;border:0!important;outline:0;background:transparent!important;text-align:center;font-weight:700;line-height:26px;white-space:nowrap;overflow:hidden;box-shadow:none!important;transform:translateY(-50%)}
+.invite-qr-canvas-shell{position:relative;width:min(100%,560px);max-width:100%;display:grid;place-items:center;min-width:0;box-sizing:border-box}
+.invite-qr-canvas-shell canvas{display:block;width:100%;max-width:100%;height:auto;border-radius:28px;box-shadow:0 20px 55px rgba(0,0,0,.25)}
+.qr-direct-text{position:absolute;z-index:3;left:8%;right:8%;width:auto;height:34px;box-sizing:border-box;padding:4px 8px;border:0!important;outline:0;background:transparent!important;text-align:center;font-weight:700;line-height:26px;white-space:nowrap;overflow:hidden;box-shadow:none!important;transform:translateY(-50%)}
 /* These centers match inviteQr.ts: top text y=43/510 and bottom text y=473/510. */
 .qr-direct-top{top:8.45%;color:#16202b;font-size:clamp(16px,2.1vw,24px)}
 .qr-direct-bottom{top:92.75%;bottom:auto;color:#fff;font-size:clamp(14px,1.8vw,21px)}
 .qr-direct-text:focus{background:rgba(255,255,255,.92)!important;color:#111827!important;border-radius:8px!important;box-shadow:0 0 0 2px rgba(35,136,255,.35)!important}
-.qr-preview-actions{width:min(100%,560px);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.qr-preview-actions{width:min(100%,560px);max-width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;box-sizing:border-box}
 .qr-preview-actions button{min-height:42px;padding:8px 14px;border-radius:10px}
 .qr-preview-actions small{max-width:330px;color:#91a4b8;font-size:11px;line-height:1.45}
 .invite-workspace-shell{position:fixed;z-index:260;top:0;right:0;bottom:0;left:72px;display:grid;grid-template-columns:360px minmax(0,1fr);min-width:0;background:#0d1729;color:#eef5fb}
@@ -35,19 +35,22 @@
 
 @media(max-width:820px){
   .qr-color-presets{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .qr-workspace-editor-content .invite-panel-head{align-items:flex-start}
-  .qr-workspace-editor-content .invite-panel-head button{white-space:nowrap}
-  .qr-visual-preview{padding-bottom:10px}
-  .invite-qr-canvas-shell{width:min(100%,430px)}
+  .qr-workspace-editor-content .invite-panel-head{align-items:flex-start;flex-wrap:wrap}
+  .qr-workspace-editor-content .invite-panel-head button{white-space:nowrap;max-width:100%}
+  .qr-visual-preview{padding-bottom:10px;width:100%}
+  .invite-qr-canvas-shell{width:min(100%,430px);overflow:hidden}
   .qr-preview-actions{width:min(100%,430px);display:grid}
   .qr-preview-actions button{width:100%}
-  .raw-invite-link{grid-template-columns:1fr}
+  .raw-invite-link{grid-template-columns:minmax(0,1fr)}
   .raw-invite-link button{width:100%}
-  .qr-direct-top{font-size:clamp(15px,4.4vw,22px)}
-  .qr-direct-bottom{font-size:clamp(13px,3.8vw,19px)}
+  .qr-direct-text{display:block!important;opacity:1!important;left:6%!important;right:6%!important;width:auto!important;max-width:none!important;padding-inline:4px!important}
+  .qr-direct-top{top:8.45%;font-size:clamp(14px,4.1vw,20px)}
+  .qr-direct-bottom{top:92.75%;font-size:clamp(12px,3.6vw,18px)}
 
-  /* In the dedicated mobile QR root, neutralize the old sidebar-card presentation. */
-  .mobile-qr-root .qr-only-panel{display:grid!important;width:min(100%,620px);max-width:620px;margin:0 auto!important;padding:0!important;gap:18px;background:transparent!important;color:#eef5fb!important;border:0!important;border-radius:0!important;box-shadow:none!important}
-  .mobile-qr-root .qr-workspace-editor-content{padding:14px;border:1px solid rgba(148,163,184,.14);border-radius:16px;background:#1d2d3d}
-  .mobile-qr-root .qr-visual-preview{width:100%;padding:0 0 12px}
+  /* Dedicated mobile QR surface must never exceed the visual viewport. */
+  .mobile-qr-root{overflow-x:hidden!important}
+  .mobile-qr-root .qr-only-panel{display:grid!important;width:100%!important;max-width:620px!important;min-width:0!important;margin:0 auto!important;padding:0!important;gap:18px;background:transparent!important;color:#eef5fb!important;border:0!important;border-radius:0!important;box-shadow:none!important;box-sizing:border-box!important}
+  .mobile-qr-root .qr-workspace-editor-content{width:100%;max-width:100%;min-width:0;padding:14px;border:1px solid rgba(148,163,184,.14);border-radius:16px;background:#1d2d3d;box-sizing:border-box}
+  .mobile-qr-root .qr-visual-preview,.mobile-qr-root .invite-qr-canvas-shell,.mobile-qr-root .qr-preview-title,.mobile-qr-root .qr-preview-actions{width:100%!important;max-width:100%!important;min-width:0!important;box-sizing:border-box!important}
+  .mobile-qr-root .qr-visual-preview{padding:0 0 12px}
 }
