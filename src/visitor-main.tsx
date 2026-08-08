@@ -6,15 +6,9 @@ import LinkExpired from './common/LinkExpired';
 
 const TOKEN_PATTERN = /^[a-f0-9]{40}$/i;
 
-function tokenFromPath() {
-  const match = location.pathname.match(/^\/g\/([^/]+)\/?$/);
-  if (!match) return '';
-  try {
-    const token = decodeURIComponent(match[1]);
-    return TOKEN_PATTERN.test(token) ? token.toLowerCase() : '';
-  } catch {
-    return '';
-  }
+function tokenFromHost() {
+  const firstLabel = location.hostname.toLowerCase().split('.')[0] || '';
+  return TOKEN_PATTERN.test(firstLabel) ? firstLabel : '';
 }
 
 window.addEventListener('pageshow', (event) => {
@@ -23,7 +17,7 @@ window.addEventListener('pageshow', (event) => {
 
 const root = document.getElementById('root');
 if (root) {
-  const token = tokenFromPath();
+  const token = tokenFromHost();
   createRoot(root).render(
     <React.StrictMode>
       {token ? <VisitorApp token={token} /> : <LinkExpired />}
