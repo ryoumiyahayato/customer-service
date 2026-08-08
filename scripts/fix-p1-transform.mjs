@@ -1,8 +1,16 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 
 const read = path => readFileSync(path, 'utf8');
 const write = (path, value) => writeFileSync(path, value);
+
+const transformed = read('src/admin/AdminDashboard.tsx').includes('AdminWorkspaceProvider')
+  && read('src/runtimeWorker.ts').includes("from './security/passwords'");
+
+if (!transformed) {
+  console.log('P1 convergence type fixes skipped: transformed tree not present');
+  process.exit(0);
+}
 
 {
   const path = 'src/security/passwords.ts';
@@ -32,25 +40,9 @@ const write = (path, value) => writeFileSync(path, value);
   write(path, s);
 }
 
-{
-  const path = 'src/worker-presentation.ts';
+for (const path of ['src/worker-presentation.ts', 'src/worker-business-hardening.ts']) {
   let s = read(path);
-  s = s.replace(/type AdminSessionRow = \{[\s\S]*?\};\n\n/, '');
-  s = s.replace("import { COOKIE_NAMES, readCookie } from './security/cookies';\n", '');
-  s = s.replace("import { verifySignedValue } from './security/signing';\n", '');
-  s = s.replace("import { hashSessionToken } from './security/sessionTokens';\n", '');
-  s = s.replace("const ADMIN_COOKIE = COOKIE_NAMES.admin;\n", '');
-  s = s.replace("const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;\n", '');
-  s = s.replace("const ADMIN_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;\n", '');
-  s = s.replace("const getCookie = readCookie;\n", '');
-  s = s.replace(/async function verifySignedId\(env: Env,[^\n]*\n/, '');
-  s = s.replace(/async function tokenHash\(env: Env,[^\n]*\n/, '');
-  write(path, s);
-}
-
-{
-  const path = 'src/worker-business-hardening.ts';
-  let s = read(path);
+  if (!s.includes("from './security/adminSession'")) continue;
   s = s.replace(/type AdminSessionRow = \{[\s\S]*?\};\n\n/, '');
   s = s.replace("import { COOKIE_NAMES, readCookie } from './security/cookies';\n", '');
   s = s.replace("import { verifySignedValue } from './security/signing';\n", '');
@@ -67,24 +59,26 @@ const write = (path, value) => writeFileSync(path, value);
 {
   const path = 'src/worker-public-gate.ts';
   let s = read(path);
-  s = s.replace("import { COOKIE_NAMES, readCookie } from './security/cookies';\n", '');
-  s = s.replace("import { hmacHex, verifySignedValue } from './security/signing';\n", "import { hmacHex } from './security/signing';\n");
-  s = s.replace("import { hashSessionToken } from './security/sessionTokens';\n", '');
-  write(path, s);
+  if (s.includes("from './security/adminSession'")) {
+    s = s.replace("import { COOKIE_NAMES, readCookie } from './security/cookies';\n", '');
+    s = s.replace("import { hmacHex, verifySignedValue } from './security/signing';\n", "import { hmacHex } from './security/signing';\n");
+    s = s.replace("import { hashSessionToken } from './security/sessionTokens';\n", '');
+    write(path, s);
+  }
 }
 
-{
-  const path = 'src/worker-entry.ts';
+for (const path of ['src/worker-entry.ts', 'src/worker-secure.ts']) {
   let s = read(path);
   s = s.replace(/function isLocalDevHost\(host: string\) \{[\s\S]*?\n\}\n\n/, '');
   write(path, s);
 }
 
 {
-  const path = 'src/worker-secure.ts';
-  let s = read(path);
-  s = s.replace(/function isLocalDevHost\(host: string\) \{[\s\S]*?\n\}\n\n/, '');
-  write(path, s);
+  const path = 'package.json';
+  const pkg = JSON.parse(read(path));
+  delete pkg.scripts.pretypecheck;
+  write(path, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 
-console.log('P1 convergence type fixes applied');
+rmSync('scripts/fix-p1-transform.mjs', { force: true });
+console.log('P1 convergence type fixes applied and temporary hook removed');
