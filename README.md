@@ -97,7 +97,7 @@ Generate `SESSION_SECRET` as a long random value with a password manager or cryp
 
 ## Deployment
 
-Production deployment has one authoritative repository entry point:
+Production deployment has one authoritative repository implementation:
 
 ```bash
 npm run deploy:safe
@@ -109,7 +109,7 @@ The compatibility wrapper preserves the documented non-deploying preflight mode:
 npm run deploy:cloudflare
 ```
 
-Without `--deploy`, that command runs doctor/bootstrap/typecheck/build and exits without deploying. `npm run deploy:cloudflare -- --deploy` is an explicit opt-in compatibility path that delegates the real deployment to `deploy:safe`; it does not invoke Wrangler deployment directly.
+Without `--deploy`, that command runs doctor/bootstrap/typecheck/build and exits without deploying. `npm run deploy:cloudflare -- --deploy` is an explicit opt-in compatibility command that delegates the real production operation to the same `deploy:safe` implementation; it does not contain a second Wrangler deployment path.
 
 If the guarded deploy reports pending D1 migrations, review them and rerun explicitly:
 
