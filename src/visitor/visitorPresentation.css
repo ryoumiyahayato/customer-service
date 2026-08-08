@@ -1,5 +1,4 @@
-.visitor-operator-avatar,
-.operator-welcome-avatar {
+.visitor-operator-avatar {
   flex: 0 0 auto;
   overflow: hidden;
   display: grid;
@@ -8,41 +7,15 @@
   background: var(--accent-soft, rgba(59, 130, 246, 0.12));
   color: var(--text);
   font-weight: 700;
-}
-
-.visitor-operator-avatar img,
-.operator-welcome-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.visitor-operator-avatar {
   width: 38px;
   height: 38px;
 }
 
-.operator-welcome-avatar {
-  width: 42px;
-  height: 42px;
-}
-
-.operator-welcome-content {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.operator-welcome-content b {
-  font-size: 13px;
-}
-
-.operator-welcome-content p {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.55;
+.visitor-operator-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .personalized-visitor-shell {
@@ -88,27 +61,6 @@
   font-size: 13px;
 }
 
-.operator-welcome-overlay {
-  position: absolute;
-  z-index: 8;
-  top: calc(max(10px, env(safe-area-inset-top)) + 50px);
-  left: 12px;
-  right: 12px;
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 11px 12px;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  box-shadow: 0 8px 24px var(--shadow);
-  pointer-events: none;
-}
-
-.personalized-visitor-shell:has(.network-banner) .operator-welcome-overlay {
-  top: calc(max(10px, env(safe-area-inset-top)) + 92px);
-}
-
 /* The visitor sees its optimistic bubble immediately. Keep failures visible, but do not
  * expose an intermediate "sending" label or upload placeholder. Operator-side sending
  * feedback is intentionally unchanged. */
@@ -118,15 +70,9 @@
 }
 
 /* LinkExpired is rendered synchronously by GuestChat when the session becomes unavailable.
- * Keep presentation overlays structurally hidden in that same render so a stale welcome/avatar
- * cannot flash for a frame while the presentation-clearing event is being processed. */
-.personalized-visitor-shell:has(.link-expired-page) .operator-identity-overlay,
-.personalized-visitor-shell:has(.link-expired-page) .operator-welcome-overlay {
+ * Keep the identity overlay structurally hidden in that same render. */
+.personalized-visitor-shell:has(.link-expired-page) .operator-identity-overlay {
   display: none !important;
-}
-
-.personalized-visitor-shell.has-welcome .chat-page .msgs {
-  padding-top: 104px !important;
 }
 
 .personalized-visitor-shell.has-avatar .message-avatar.agent-avatar {
@@ -145,10 +91,5 @@
   .operator-identity-overlay {
     right: 8px;
     max-width: 126px;
-  }
-
-  .operator-welcome-overlay {
-    left: 8px;
-    right: 8px;
   }
 }
