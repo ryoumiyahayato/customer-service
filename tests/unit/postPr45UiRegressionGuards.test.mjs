@@ -4,14 +4,24 @@ import test from 'node:test';
 
 const read = path => readFile(new URL(`../../${path}`, import.meta.url), 'utf8');
 
-test('admin shells do not couple authenticated role to capability fetch success', async () => {
+test('admin shells resync authenticated identity after login without coupling role to capabilities', async () => {
   for (const path of ['src/admin/AdminMobileShell.tsx', 'src/admin/DesktopAdminPolish.tsx']) {
     const source = await read(path);
     assert.doesNotMatch(source, /Promise\.all\(\s*\[\s*apiFetch<AuthResponse>[\s\S]*?apiFetch<CapabilityResponse>/);
+    assert.match(source, /const refreshIdentity = useCallback/);
     assert.match(source, /apiFetch<AuthResponse>\('\/api\/auth\/me'/);
-    assert.match(source, /apiFetch<CapabilityResponse>\('\/api\/admin\/capabilities'/);
     assert.match(source, /setRole\(nextRole\)/);
+    assert.match(source, /if \(nextRole === 'SUPER_ADMIN'\)/);
+    assert.match(source, /setCanCreateInvites\(true\)/);
+    assert.match(source, /setCanUseStaffChat\(true\)/);
+    assert.match(source, /if \(role\) return;[\s\S]*?setInterval\(\(\) => \{ void refreshIdentity\(\); \}, 1000\)/);
+    assert.match(source, /apiFetch<CapabilityResponse>\('\/api\/admin\/capabilities'/);
   }
+});
+
+test('unresolved admin role is never mislabeled as customer-service operator', async () => {
+  const source = await read('src/admin/OperatorProfileSettings.tsx');
+  assert.match(source, /role === 'SUPER_ADMIN' \? '超级管理员' : role === 'OPERATOR' \? '客服' : '身份加载中'/);
 });
 
 test('super admin staff clear control follows the actual staff chat surface', async () => {
@@ -38,11 +48,14 @@ test('mobile QR editor exposes both text fields inside the bounded card', async 
   assert.match(css, /\.qr-direct-bottom\{top:92\.75%!important/);
 });
 
-test('desktop settings secondary pane uses the same 360px boundary as conversations', async () => {
+test('desktop settings secondary pane and customer details use deterministic top-aligned geometry', async () => {
   const css = await read('src/admin/adminRegressionFixes.css');
   assert.match(css, /\.desktop-settings-nav\{[^}]*left:72px;width:288px/);
   assert.match(css, /\.desktop-settings-content\{left:360px\}/);
   assert.match(css, /grid-template-columns:360px minmax\(0,1fr\)/);
+  assert.match(css, /\.session-action-bar\{justify-content:flex-start!important;align-content:flex-start!important\}/);
+  assert.match(css, />\.customer-remark-form\{order:2!important;[^}]*width:100%/);
+  assert.match(css, />\.session-client-info\{order:4/);
 });
 
 test('profile name remains an inline click-to-edit control', async () => {

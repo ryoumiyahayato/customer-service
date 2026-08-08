@@ -49,7 +49,12 @@ type AttachmentBinding = {
   created_by_type: string;
   created_by_id: string;
   deleted_at: string | null;
+  expires_at?: string | null;
 };
+
+type AttachmentClaimResult =
+  | { ok: true; claimToken: string | null }
+  | { ok: false; response: Response };
 
 const inner = secureWorker as WorkerModule;
 const ADMIN_COOKIE = COOKIE_NAMES.admin;
@@ -296,7 +301,7 @@ async function existingImageRetry(
   if (!existing?.id) return 'none';
 
   const attachment = await env.DB.prepare(
-    `SELECT message_id,conversation_id,created_by_type,created_by_id,deleted_at
+    `SELECT message_id,conversation_id,created_by_type,created_by_id,deleted_at,expires_at
        FROM attachments
       WHERE object_key=?
       LIMIT 1`,
@@ -314,7 +319,53 @@ async function existingImageRetry(
   return sameMessage && sameAttachment ? 'deduped' : 'conflict';
 }
 
-async function releaseAttachmentClaim(env: Env, attachmentKey: string, claimToken: string) {
+function isMissingClaimTokenColumn(error: unknown) {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error || '');
+  return /claim_token/i.test(text) && /(no such column|has no column|unknown column|SQLITE_ERROR|D1_ERROR)/i.test(text);
+}
+
+function attachmentOwnedAndActive(attachment: AttachmentBinding | null, sender: MessageSender) {
+  if (!attachment || attachment.deleted_at || attachment.message_id) return false;
+  if (attachment.conversation_id !== sender.sessionId) return false;
+  if (attachment.created_by_type !== sender.senderType || attachment.created_by_id !== sender.senderId) return false;
+  if (attachment.expires_at && attachment.expires_at <= new Date().toISOString()) return false;
+  return true;
+}
+
+async function claimAttachment(env: Env, attachmentKey: string, sender: MessageSender): Promise<AttachmentClaimResult> {
+  const claimToken = crypto.randomUUID();
+  try {
+    const claimed = await env.DB.prepare(
+      `UPDATE attachments SET claim_token=?
+        WHERE conversation_id=? AND object_key=?
+          AND created_by_type=? AND created_by_id=?
+          AND message_id IS NULL AND claim_token IS NULL AND deleted_at IS NULL
+          AND (expires_at IS NULL OR datetime(expires_at)>datetime('now'))`,
+    ).bind(claimToken, sender.sessionId, attachmentKey, sender.senderType, sender.senderId).run();
+    if (Number(claimed?.meta?.changes || 0) !== 1) {
+      return { ok: false, response: json({ error: 'attachment_claim_failed' }, 409) };
+    }
+    return { ok: true, claimToken };
+  } catch (error) {
+    if (!isMissingClaimTokenColumn(error)) throw error;
+
+    // Compatibility path for a production D1 database that has not yet received migration 0010.
+    // Ownership, session, deletion and expiry are still verified before the message is accepted,
+    // and the binding is verified again after the inner message write.
+    const attachment = await env.DB.prepare(
+      `SELECT message_id,conversation_id,created_by_type,created_by_id,deleted_at,expires_at
+         FROM attachments WHERE object_key=? LIMIT 1`,
+    ).bind(attachmentKey).first<AttachmentBinding>();
+    if (!attachmentOwnedAndActive(attachment, sender)) {
+      return { ok: false, response: json({ error: 'attachment_claim_failed' }, 409) };
+    }
+    console.warn('security: attachments.claim_token is unavailable; using verified compatibility binding path');
+    return { ok: true, claimToken: null };
+  }
+}
+
+async function releaseAttachmentClaim(env: Env, attachmentKey: string, claimToken: string | null) {
+  if (!claimToken) return;
   await env.DB.prepare(
     'UPDATE attachments SET claim_token=NULL WHERE object_key=? AND claim_token=? AND message_id IS NULL',
   ).bind(attachmentKey, claimToken).run();
@@ -337,28 +388,19 @@ async function handleImageMessage(req: Request, env: Env, ctx: ExecutionContext)
   if (retry === 'deduped') return inner.fetch(req, env, ctx);
   if (retry === 'conflict') return json({ error: 'client_message_id_conflict' }, 409);
 
-  const claimToken = crypto.randomUUID();
-  const claimed = await env.DB.prepare(
-    `UPDATE attachments SET claim_token=?
-      WHERE conversation_id=? AND object_key=?
-        AND created_by_type=? AND created_by_id=?
-        AND message_id IS NULL AND claim_token IS NULL AND deleted_at IS NULL
-        AND (expires_at IS NULL OR datetime(expires_at)>datetime('now'))`,
-  ).bind(claimToken, sender.sessionId, attachmentKey, sender.senderType, sender.senderId).run();
-  if (Number(claimed?.meta?.changes || 0) !== 1) {
-    return json({ error: 'attachment_claim_failed' }, 409);
-  }
+  const claim = await claimAttachment(env, attachmentKey, sender);
+  if (!claim.ok) return claim.response;
 
   let response: Response;
   try {
     response = await inner.fetch(req, env, ctx);
   } catch (error) {
-    await releaseAttachmentClaim(env, attachmentKey, claimToken);
+    await releaseAttachmentClaim(env, attachmentKey, claim.claimToken);
     throw error;
   }
 
   if (response.status < 200 || response.status >= 300) {
-    await releaseAttachmentClaim(env, attachmentKey, claimToken);
+    await releaseAttachmentClaim(env, attachmentKey, claim.claimToken);
     return response;
   }
 
@@ -366,11 +408,22 @@ async function handleImageMessage(req: Request, env: Env, ctx: ExecutionContext)
   const message = jsonObject(payload.message);
   const messageId = typeof message.id === 'string' ? message.id : '';
   const attachment = await env.DB.prepare(
-    'SELECT message_id,claim_token FROM attachments WHERE object_key=? LIMIT 1',
-  ).bind(attachmentKey).first<{ message_id: string | null; claim_token: string | null }>();
+    `SELECT message_id,conversation_id,created_by_type,created_by_id,deleted_at,expires_at
+       FROM attachments WHERE object_key=? LIMIT 1`,
+  ).bind(attachmentKey).first<AttachmentBinding>();
 
-  if (messageId && attachment?.message_id === messageId) {
-    await env.DB.prepare('UPDATE attachments SET claim_token=NULL WHERE object_key=? AND claim_token=?').bind(attachmentKey, claimToken).run();
+  const bindingValid = Boolean(
+    messageId
+      && attachment
+      && !attachment.deleted_at
+      && attachment.message_id === messageId
+      && attachment.conversation_id === sender.sessionId
+      && attachment.created_by_type === sender.senderType
+      && attachment.created_by_id === sender.senderId,
+  );
+
+  if (bindingValid) {
+    await releaseAttachmentClaim(env, attachmentKey, claim.claimToken);
     return response;
   }
 
@@ -379,7 +432,7 @@ async function handleImageMessage(req: Request, env: Env, ctx: ExecutionContext)
       'DELETE FROM messages WHERE id=? AND session_id=? AND sender_type=? AND sender_id=?',
     ).bind(messageId, sender.sessionId, sender.senderType, sender.senderId).run();
   }
-  await releaseAttachmentClaim(env, attachmentKey, claimToken);
+  await releaseAttachmentClaim(env, attachmentKey, claim.claimToken);
   return json({ error: 'attachment_binding_failed' }, 409);
 }
 
