@@ -21,6 +21,9 @@ type AdminWithPasswordRow = {
   is_disabled: boolean;
 };
 
+// Public, non-secret dummy hash used only to equalize KDF cost for unknown/disabled usernames.
+const DUMMY_ADMIN_PASSWORD_HASH = 'scrypt:v1:Y3VzdG9tZXItc2VydmljZQ:r2odcRGGReylRo5Nox-ZCXE5G40w0er7MpY_d7UXDejuBEanNtBP5eCqjxx2yGvDmb7VEIoj67DmQtJN8k3H8g';
+
 export async function loginAdmin(config: GenericServerConfig, db: PostgresAdapter, body: Record<string, unknown>) {
   const usernameOrEmail = requireString(body.username, 'username').trim();
   const password = requireString(body.password, 'password');
@@ -34,10 +37,8 @@ export async function loginAdmin(config: GenericServerConfig, db: PostgresAdapte
     [usernameOrEmail],
   );
   const admin = rows[0];
-  if (!admin || admin.is_disabled) throw new HttpError(401, 'invalid_credentials');
-
-  const valid = await verifyPassword(password, admin.password_hash);
-  if (!valid) throw new HttpError(401, 'invalid_credentials');
+  const valid = await verifyPassword(password, admin?.password_hash || DUMMY_ADMIN_PASSWORD_HASH);
+  if (!admin || admin.is_disabled || !valid) throw new HttpError(401, 'invalid_credentials');
 
   const session = await createAdminSession(db, admin.id, config);
   return {

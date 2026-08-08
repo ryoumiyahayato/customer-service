@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '../api';
 import { getErrorMessage } from '../compat';
 import type { OperatorSummary } from '../chatModel';
@@ -24,8 +24,18 @@ type InviteResponse = {
     token?: string;
     url?: string;
     expiresAt?: string;
+    expires_at?: string;
+    inviteHandle?: string;
     qrMatrix?: boolean[][];
     rawLinkVisible?: boolean;
+  };
+};
+
+type InviteStatusResponse = {
+  invite?: {
+    handle?: string;
+    state?: 'active' | 'consumed' | 'revoked' | 'expired';
+    expiresAt?: string;
   };
 };
 
@@ -41,6 +51,17 @@ type OperatorPresentation = {
 };
 
 type PresentationResponse = { presentation?: OperatorPresentation };
+
+type CachedInvite = {
+  handle: string;
+  url: string;
+  matrix: boolean[][] | null;
+  expiresAt: string;
+};
+
+// Deliberately memory-only: QR state survives navigation inside the current admin SPA,
+// but the bearer invite itself is never persisted to browser storage.
+const activeInviteCache = new Map<string, CachedInvite>();
 
 const DEFAULT_PRESENTATION: OperatorPresentation = {
   qrBackgroundColor: '#ffffff',
@@ -87,6 +108,8 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
   const [sourceOperatorId, setSourceOperatorId] = useState('');
   const [inviteUrl, setInviteUrl] = useState('');
   const [inviteMatrix, setInviteMatrix] = useState<boolean[][] | null>(null);
+  const [inviteHandle, setInviteHandle] = useState('');
+  const [inviteExpiresAt, setInviteExpiresAt] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
@@ -100,6 +123,35 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
   const isSuper = adminRole === 'SUPER_ADMIN';
 
   const targetQuery = isSuper && sourceOperatorId ? `?operatorId=${encodeURIComponent(sourceOperatorId)}` : '';
+  const cacheKey = useMemo(
+    () => isSuper ? `super:${sourceOperatorId || 'unassigned'}` : 'operator:self',
+    [isSuper, sourceOperatorId],
+  );
+
+  const clearInvite = (key = cacheKey) => {
+    activeInviteCache.delete(key);
+    setInviteUrl('');
+    setInviteMatrix(null);
+    setInviteHandle('');
+    setInviteExpiresAt('');
+    setCopied(false);
+    setQrError('');
+  };
+
+  const checkInviteState = async (handle: string, key = cacheKey) => {
+    if (!handle) return false;
+    try {
+      const response = await apiFetch<InviteStatusResponse>(`/api/invites/${encodeURIComponent(handle)}/status`, { retryGet: false });
+      if (response.invite?.state !== 'active') {
+        clearInvite(key);
+        return false;
+      }
+      return true;
+    } catch {
+      // Do not destroy an otherwise usable QR on a transient status-check failure.
+      return true;
+    }
+  };
 
   const loadPresentation = async () => {
     setPresentationLoading(true);
@@ -116,11 +168,37 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
   };
 
   useEffect(() => {
-    setInviteUrl('');
-    setInviteMatrix(null);
-    setQrError('');
+    const cached = activeInviteCache.get(cacheKey);
+    if (cached && (!cached.expiresAt || Date.parse(cached.expiresAt) > Date.now())) {
+      setInviteUrl(cached.url);
+      setInviteMatrix(cached.matrix);
+      setInviteHandle(cached.handle);
+      setInviteExpiresAt(cached.expiresAt);
+      void checkInviteState(cached.handle, cacheKey);
+    } else {
+      clearInvite(cacheKey);
+    }
     loadPresentation();
-  }, [targetQuery]);
+  }, [targetQuery, cacheKey]);
+
+  useEffect(() => {
+    if (!inviteHandle) return;
+    const timer = window.setInterval(() => {
+      void checkInviteState(inviteHandle, cacheKey);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [inviteHandle, cacheKey]);
+
+  useEffect(() => {
+    if (!inviteExpiresAt) return;
+    const remaining = Date.parse(inviteExpiresAt) - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      clearInvite(cacheKey);
+      return;
+    }
+    const timer = window.setTimeout(() => clearInvite(cacheKey), Math.min(remaining + 250, 2_147_000_000));
+    return () => window.clearTimeout(timer);
+  }, [inviteExpiresAt, cacheKey]);
 
   useEffect(() => {
     const canvas = qrCanvasRef.current;
@@ -180,10 +258,18 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
       const token = String(invite.token || '').trim();
       let fullUrl = safeVisitorInviteUrl(String(invite.url || ''));
       if (!fullUrl && token) fullUrl = buildVisitorInviteUrl(token, visitorRootDomain());
+      const matrix = invite.qrMatrix?.length ? invite.qrMatrix : null;
+      const handle = String(invite.inviteHandle || '').trim();
+      const expiresAt = String(invite.expiresAt || invite.expires_at || '').trim();
 
-      if (!fullUrl && !invite.qrMatrix?.length) throw new Error('访客邀请域名配置异常，已拒绝生成后台域名链接');
+      if (!fullUrl && !matrix) throw new Error('访客邀请域名配置异常，已拒绝生成后台域名链接');
+      if (!handle) throw new Error('邀请状态句柄缺失，请重新生成二维码');
+      const cached = { handle, url: fullUrl, matrix, expiresAt };
+      activeInviteCache.set(cacheKey, cached);
       setInviteUrl(fullUrl);
-      setInviteMatrix(invite.qrMatrix?.length ? invite.qrMatrix : null);
+      setInviteMatrix(matrix);
+      setInviteHandle(handle);
+      setInviteExpiresAt(expiresAt);
     } catch (err) {
       setError(getErrorMessage(err, '创建邀请二维码失败'));
     } finally {
@@ -219,11 +305,12 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
     link.click();
   };
 
+  const hasActiveInvite = Boolean(inviteUrl || inviteMatrix);
   const editor = (
     <div className="qr-workspace-editor-content" aria-busy={presentationLoading}>
       <div className="invite-panel-head">
-        <div><h3>二维码</h3><small>{savedNotice || '一次性邀请 · 24 小时有效'}</small></div>
-        <button type="button" onClick={createInvite} disabled={loading || presentationLoading}>{loading ? '生成中…' : '生成新二维码'}</button>
+        <div><h3>二维码</h3><small>{savedNotice || (hasActiveInvite ? '等待访客打开 · 使用后自动消失' : '一次性邀请 · 24 小时有效')}</small></div>
+        <button type="button" onClick={createInvite} disabled={loading || presentationLoading}>{loading ? '生成中…' : hasActiveInvite ? '重新生成' : '生成新二维码'}</button>
       </div>
 
       {isSuper && operators.length > 0 ? (
@@ -266,21 +353,21 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
           <button type="button" onClick={copyInvite}>{copied ? '已复制' : '复制链接'}</button>
         </div>
       ) : null}
-      {!isSuper && (inviteMatrix || inviteUrl) ? <p className="operator-link-hidden-note">客服账号只获得可发送的二维码，不返回具体邀请链接文本。</p> : null}
+      {!isSuper && hasActiveInvite ? <p className="operator-link-hidden-note">客服账号只获得可发送的二维码，不返回具体邀请链接文本。</p> : null}
       {error ? <p className="form-error">{error}</p> : null}
     </div>
   );
 
   const preview = (
     <div className="qr-visual-preview">
-      <div className="qr-preview-title"><b>实时预览</b><span>{inviteUrl || inviteMatrix ? '已生成一次性二维码' : '先看版式，生成后自动填入二维码'}</span></div>
+      <div className="qr-preview-title"><b>实时预览</b><span>{hasActiveInvite ? '已生成一次性二维码 · 使用后自动清除' : '先看版式，生成后自动填入二维码'}</span></div>
       <div className="invite-qr-canvas-shell">
         <canvas ref={qrCanvasRef} aria-label="客服邀请二维码预览" />
         <input className="qr-direct-text qr-direct-top" maxLength={QR_CARD_TEXT_MAX_LENGTH} value={presentation.qrTopText} onChange={event => setPresentation(prev => ({ ...prev, qrTopText: limitQrText(event.target.value) }))} aria-label="直接编辑二维码顶部文字" placeholder="点击输入顶部文字" />
         <input className="qr-direct-text qr-direct-bottom" maxLength={QR_CARD_TEXT_MAX_LENGTH} value={presentation.qrBottomText} onChange={event => setPresentation(prev => ({ ...prev, qrBottomText: limitQrText(event.target.value) }))} aria-label="直接编辑二维码底栏文字" placeholder="点击输入底栏文字" />
       </div>
       <div className="qr-preview-actions">
-        <button type="button" onClick={downloadQr} disabled={(!inviteUrl && !inviteMatrix) || !!qrError}>下载 PNG</button>
+        <button type="button" onClick={downloadQr} disabled={!hasActiveInvite || !!qrError}>下载 PNG</button>
         <small>边框与底栏使用同一强调色；二维码主体保持浅色背景以保证识别率。</small>
       </div>
       {qrError ? <p className="form-error">{qrError}</p> : null}

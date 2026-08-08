@@ -25,7 +25,8 @@ export async function requestStreamExceeds(request: Request, maxBytes: number) {
       }
     }
   } catch {
-    return false;
+    // An unreadable request stream must never bypass a size boundary.
+    return true;
   }
 }
 

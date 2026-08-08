@@ -8,6 +8,7 @@ registerTypeScriptHooks();
 const { createRequestPolicyGuard } = await import('../../src/services/requestPolicyGuard.ts');
 const { signValue } = await import('../../src/security/signing.ts');
 const { hashSessionToken } = await import('../../src/security/sessionTokens.ts');
+const { COOKIE_NAMES } = await import('../../src/security/cookies.ts');
 
 const secret = 'request-policy-test-secret';
 
@@ -72,7 +73,7 @@ test('requires the signed current guest identity before claim or discard registr
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: `guest_session=${signed}`,
+          cookie: `${COOKIE_NAMES.guest}=${signed}`,
         },
         body: JSON.stringify({
           username: 'visitor',
@@ -92,7 +93,7 @@ test('requires the signed current guest identity before claim or discard registr
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: `guest_session=${signed}`,
+          cookie: `${COOKIE_NAMES.guest}=${signed}`,
         },
         body: JSON.stringify({
           username: 'visitor2',

@@ -10,7 +10,7 @@ function localHost(host: string) {
   else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) {
     normalized = normalized.slice(0, normalized.lastIndexOf(':'));
   }
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1';
 }
 
 function expectedOrigin(request: IncomingMessage) {
@@ -55,7 +55,11 @@ export function parseCookies(header: string | string[] | undefined): Map<string,
   for (const part of raw.split(';')) {
     const [name, ...valueParts] = part.trim().split('=');
     if (!name || valueParts.length === 0) continue;
-    cookies.set(name, decodeURIComponent(valueParts.join('=')));
+    try {
+      cookies.set(name, decodeURIComponent(valueParts.join('=')));
+    } catch {
+      // Ignore only the malformed cookie instead of failing the entire request.
+    }
   }
 
   return cookies;

@@ -5,6 +5,7 @@ import AdminMobileShell from '../admin/AdminMobileShell';
 import SessionClientInfo from '../admin/SessionClientInfo';
 import '../admin/mobileAdminPolish.css';
 import '../admin/adminShellFinal.css';
+import '../admin/adminRegressionFixes.css';
 
 export default function AdminApp() {
   return (

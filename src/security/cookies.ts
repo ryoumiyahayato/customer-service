@@ -1,7 +1,7 @@
 export const COOKIE_NAMES = {
-  admin: 'support_admin',
-  visitor: 'visitor_account',
-  guest: 'guest_session',
+  admin: '__Host-support_admin',
+  visitor: '__Host-visitor_account',
+  guest: '__Host-guest_session',
 } as const;
 
 export function readCookie(request: Request, name: string) {

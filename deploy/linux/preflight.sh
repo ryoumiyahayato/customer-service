@@ -13,7 +13,6 @@ set -u
 
 FAIL_COUNT=0
 WARN_COUNT=0
-EXPERIMENTAL_PUBLIC_ACK='I_UNDERSTAND_SERVER_GENERIC_IS_EXPERIMENTAL'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -247,11 +246,7 @@ if [ -f ".env" ]; then
     fi
   done
 
-  if [ "$(env_value SELF_HOST_EXPERIMENTAL_PUBLIC_ACK)" = "$EXPERIMENTAL_PUBLIC_ACK" ]; then
-    warn "experimental server-generic public exposure was explicitly acknowledged; this is not production-readiness approval"
-  else
-    fail "server-generic remains experimental; public VPS startup requires explicit SELF_HOST_EXPERIMENTAL_PUBLIC_ACK after risk review"
-  fi
+  fail "server-generic public deployment is disabled until it implements the same separate admin bundle, visitor bundle, token-subdomain host capability, and visitor API boundary as the Cloudflare production entry; use the Cloudflare production deployment for public traffic"
 
   if env_key_present "ENCRYPTION_ENABLED"; then
     pass ".env key present: ENCRYPTION_ENABLED"

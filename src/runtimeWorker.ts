@@ -131,6 +131,7 @@ const ERR_MISSING_SESSION = '\u7f3a\u5c11\u4f1a\u8bdd\u4fe1\u606f';
 const ERR_USERNAME_SHORT = '\u7528\u6237\u540d\u81f3\u5c11\u9700\u8981 3 \u4e2a\u5b57\u7b26';
 const ERR_PASSWORD_SHORT = '\u5bc6\u7801\u81f3\u5c11\u9700\u8981 8 \u4e2a\u5b57\u7b26';
 const ERR_ACCOUNT_EXISTS = '\u8d26\u53f7\u5df2\u5b58\u5728';
+const DUMMY_LOGIN_PASSWORD_HASH = 'pbkdf2:100000:Y3VzdG9tZXItc2VydmljZQ==:Rs+EDoWFk4BA0KTT6kRfBfbhjslsEZitfvzhobVP24g=';
 const enc = new TextEncoder();
 const now = () => new Date().toISOString();
 const rid = (prefix: string) => `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
@@ -698,7 +699,8 @@ async function visitorLogin(env: Env, username: string, password: string) {
   const account = await env.DB.prepare(
     'SELECT * FROM visitor_accounts WHERE username=?',
   ).bind(username).first<VisitorAccountAuthRecord>();
-  if (!account || !(await verifyPassword(password, account.password_hash))) {
+  const valid = await verifyPassword(password, account?.password_hash || DUMMY_LOGIN_PASSWORD_HASH);
+  if (!account || !valid) {
     return json({ error: 'Invalid credentials' }, { status: 401 });
   }
   const t = now();
@@ -726,12 +728,13 @@ async function login(req: Request, env: Env, allowVisitorFallback: boolean) {
     'SELECT * FROM admins WHERE username=?',
   ).bind(username).first<AdminAuthRecord>();
   if (!admin) {
-    return allowVisitorFallback
-      ? visitorLogin(env, username, password)
-      : json({ error: 'Invalid credentials' }, { status: 401 });
+    if (allowVisitorFallback) return visitorLogin(env, username, password);
+    await verifyPassword(password, DUMMY_LOGIN_PASSWORD_HASH);
+    return json({ error: 'Invalid credentials' }, { status: 401 });
   }
+  const valid = await verifyPassword(password, admin.password_hash);
   if (admin.is_disabled) return json({ error: 'Disabled', disabled: true }, { status: 403 });
-  if (!(await verifyPassword(password, admin.password_hash))) {
+  if (!valid) {
     return json({ error: 'Invalid credentials' }, { status: 401 });
   }
   return json({

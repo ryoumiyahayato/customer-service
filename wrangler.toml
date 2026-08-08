@@ -1,7 +1,9 @@
 name = "support-chat-cloudflare"
-main = "src/worker-public-gate.ts"
+main = "src/worker-production-boundary.ts"
 compatibility_date = "2026-06-26"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
 
 [triggers]
 crons = ["0 * * * *"]

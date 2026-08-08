@@ -25,8 +25,10 @@ const PUBLIC_PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_MAX_LENGTH = 128;
 const LOGIN_IP_LIMIT = 20;
 const LOGIN_ACCOUNT_LIMIT = 8;
+const SETUP_IP_LIMIT = 5;
 const REGISTER_IP_LIMIT = 10;
 const LOGIN_WINDOW_MS = 5 * 60 * 1000;
+const SETUP_WINDOW_MS = 10 * 60 * 1000;
 const REGISTER_WINDOW_MS = 10 * 60 * 1000;
 const JSON_REQUEST_MAX_BYTES = 64 * 1024;
 const CHAT_MESSAGE_MAX_LENGTH = 4000;
@@ -70,8 +72,7 @@ function isSameOriginWrite(req: Request) {
 function shouldProtectAgainstCsrf(req: Request) {
   const path = new URL(req.url).pathname;
   if (!path.startsWith('/api/') || path.startsWith('/api/ws')) return false;
-  if (!SAFE_METHODS.has(req.method.toUpperCase())) return true;
-  return req.method.toUpperCase() === 'GET' && /^\/api\/sessions\/[^/]+\/messages$/.test(path);
+  return !SAFE_METHODS.has(req.method.toUpperCase());
 }
 
 function jsonObject(value: unknown): Record<string, unknown> {
@@ -91,7 +92,6 @@ function isSameOriginWebSocket(req: Request) {
   const requestHost = req.headers.get('host') || url.host;
   return isLocalDevHost(url.hostname) || isLocalDevHost(requestHost);
 }
-
 
 const getCookie = readCookie;
 const clearCookie = clearSessionCookie;
@@ -149,10 +149,17 @@ async function protectBootstrapConfig(env: Env) {
   return null;
 }
 
-async function protectSetupMutation(req: Request) {
+async function protectSetupMutation(req: Request, env: Env) {
   const path = new URL(req.url).pathname;
   if (!path.startsWith('/api/setup/') || req.method === 'GET') return null;
   if (contentLengthExceeds(req, JSON_REQUEST_MAX_BYTES)) return invalidInput('请求体过大', 413);
+  const limited = await consumeLimit(
+    env,
+    rateLimitKey(`setup:ip:${clientIp(req)}`),
+    SETUP_IP_LIMIT,
+    SETUP_WINDOW_MS,
+  );
+  if (limited) return limited;
   return null;
 }
 
@@ -499,7 +506,7 @@ async function preflightSecurity(req: Request, env: Env) {
   const bootstrapRejected = await protectBootstrapConfig(env);
   if (bootstrapRejected) return bootstrapRejected;
 
-  const setupRejected = await protectSetupMutation(req);
+  const setupRejected = await protectSetupMutation(req, env);
   if (setupRejected) return setupRejected;
 
   const guestRejected = await protectGuestInvite(req);
