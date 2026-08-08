@@ -40,6 +40,11 @@ function createDatabase() {
       expires_at TEXT NOT NULL,
       revoked_at TEXT
     );
+    CREATE TABLE rate_limits (
+      key TEXT PRIMARY KEY,
+      count INTEGER NOT NULL DEFAULT 0,
+      reset_at INTEGER NOT NULL
+    );
   `);
   return database;
 }
