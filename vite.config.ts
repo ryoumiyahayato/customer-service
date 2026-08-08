@@ -1,9 +1,8 @@
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
 
-const visitorApiPath = fileURLToPath(new URL('./src/visitor/visitorApi.ts', import.meta.url));
+const visitorApiPath = decodeURIComponent(new URL('./src/visitor/visitorApi.ts', import.meta.url).pathname);
 
 export default defineConfig(({ mode }) => {
   const visitorBuild = mode === 'visitor';
