@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { ApiError, apiFetch } from '../api';
+import { ApiError, apiFetch } from './visitorApi';
 import ChatMessageText from '../ChatMessageText';
 import LinkExpired from '../common/LinkExpired';
 import { copyText, getErrorMessage } from '../compat';
@@ -20,7 +20,7 @@ import {
   type ChatMessage,
   type ChatSession,
 } from '../chatModel';
-import '../styles.css';
+import './visitorChat.css';
 
 type Message = ChatMessage;
 type GuestBootstrapResponse = {
@@ -78,11 +78,7 @@ function VisitorChat({ inviteToken }: { inviteToken?: string } = {}) {
   const [contextMenu, setContextMenu] = useState<{ msg: Message; x: number; y: number } | null>(null);
   const [toast, setToast] = useState('');
   const [accessError, setAccessError] = useState('');
-  const resolvedInviteToken = useMemo(() => {
-    if (inviteToken) return inviteToken;
-    const m = location.pathname.match(/^\/g\/([^/]+)/);
-    return m ? decodeURIComponent(m[1]) : '';
-  }, [inviteToken]);
+  const resolvedInviteToken = useMemo(() => String(inviteToken || '').trim(), [inviteToken]);
   const sendingRef = useRef(false);
   const consumeStartedRef = useRef(false);
   const sessionClosedRef = useRef(false);
