@@ -55,6 +55,13 @@ function addAdmin(database, id, role = 'OPERATOR') {
   database.prepare('INSERT INTO admins(id,username,role,is_disabled) VALUES(?,?,?,0)').run(id, id, role);
   database.prepare('INSERT INTO admin_sessions(id,admin_id,token_hash,created_at,last_seen_at,expires_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)')
     .run(`staff-auth-${id}`, id, 'not-used-by-room-revalidation', NOW, NOW, FUTURE);
+  if (role === 'OPERATOR') {
+    database.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)').run(
+      `operator_policy:${id}`,
+      JSON.stringify({ canCreateInvites: true, canUseStaffChat: true, canUploadImages: true }),
+      NOW,
+    );
+  }
 }
 
 function staffMeta(id) {
@@ -99,8 +106,8 @@ test('already connected operator staff socket is cut off after capability is rev
     await broadcastStaff(chatRoom, 'before-policy-change');
     assert.equal(operator.sent.length, 1);
 
-    database.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)')
-      .run('operator_policy:operator-a', JSON.stringify({ canUseStaffChat: false }), NOW);
+    database.prepare('UPDATE settings SET value_json=?,updated_at=? WHERE key=?')
+      .run(JSON.stringify({ canCreateInvites: true, canUseStaffChat: false, canUploadImages: true }), NOW, 'operator_policy:operator-a');
     operator.sent.length = 0;
 
     await broadcastStaff(chatRoom, 'after-policy-change');
