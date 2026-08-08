@@ -1,11 +1,17 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
+
+const visitorApiPath = fileURLToPath(new URL('./src/visitor/visitorApi.ts', import.meta.url));
 
 export default defineConfig(({ mode }) => {
   const visitorBuild = mode === 'visitor';
   return {
     base: visitorBuild ? '/visitor/' : '/',
+    resolve: visitorBuild
+      ? { alias: { '../api': visitorApiPath } }
+      : undefined,
     plugins: [
       react(),
       legacy({
