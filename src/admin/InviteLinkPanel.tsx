@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api';
 import { getErrorMessage } from '../compat';
 import type { OperatorSummary } from '../chatModel';
+import { QR_CARD_TEXT_MAX_LENGTH } from '../operatorPresentation';
 import { renderInviteQr } from './inviteQr';
 import './operatorPresentation.css';
 
@@ -54,6 +55,7 @@ const visitorBaseUrl = () => {
 };
 
 const visitorRootDomain = () => ((import.meta.env.VITE_VISITOR_ROOT_DOMAIN as string | undefined) || '').trim();
+const limitQrText = (value: string) => Array.from(value).slice(0, QR_CARD_TEXT_MAX_LENGTH).join('');
 
 export default function InviteLinkPanel({ adminRole, operators = [], workspace = false }: InviteLinkPanelProps) {
   const [sourceOperatorId, setSourceOperatorId] = useState('');
@@ -78,7 +80,8 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
     setError('');
     try {
       const response = await apiFetch<PresentationResponse>(`/api/admins/presentation${targetQuery}`, { retryGet: false });
-      setPresentation({ ...DEFAULT_PRESENTATION, ...(response.presentation || {}) });
+      const next = { ...DEFAULT_PRESENTATION, ...(response.presentation || {}) };
+      setPresentation({ ...next, qrTopText: limitQrText(next.qrTopText), qrBottomText: limitQrText(next.qrBottomText) });
     } catch (err) {
       setError(getErrorMessage(err, '读取二维码设置失败'));
     } finally {
@@ -119,8 +122,8 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
         body: JSON.stringify({
           qrBackgroundColor: presentation.qrBackgroundColor,
           qrAccentColor: presentation.qrAccentColor,
-          qrTopText: presentation.qrTopText,
-          qrBottomText: presentation.qrBottomText,
+          qrTopText: limitQrText(presentation.qrTopText),
+          qrBottomText: limitQrText(presentation.qrBottomText),
         }),
       });
       setPresentation(prev => ({ ...prev, ...(response.presentation || {}) }));
@@ -184,8 +187,8 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
     renderInviteQr(canvas, inviteUrl, {
       backgroundColor: presentation.qrBackgroundColor,
       accentColor: presentation.qrAccentColor,
-      topText: presentation.qrTopText,
-      bottomText: presentation.qrBottomText,
+      topText: limitQrText(presentation.qrTopText),
+      bottomText: limitQrText(presentation.qrBottomText),
     }, inviteMatrix);
     const link = document.createElement('a');
     link.download = `customer-service-qr-${Date.now()}.png`;
@@ -230,7 +233,7 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
         <input type="color" value={presentation.qrBackgroundColor} onChange={event => setPresentation(prev => ({ ...prev, qrBackgroundColor: event.target.value }))} />
       </label>
 
-      <p className="qr-edit-hint">文字直接在右侧/下方二维码卡片上点选修改；这里不再重复放“上方文字、底栏文字”两个输入框。</p>
+      <p className="qr-edit-hint">文字直接在右侧/下方二维码卡片上点选修改；上下文字各最多 {QR_CARD_TEXT_MAX_LENGTH} 个字符。</p>
       <button type="button" className="presentation-save-button" onClick={() => saveQrSettings()} disabled={presentationSaving || presentationLoading}>{presentationSaving ? '保存中…' : '保存二维码样式'}</button>
 
       {isSuper && inviteUrl ? (
@@ -250,8 +253,8 @@ export default function InviteLinkPanel({ adminRole, operators = [], workspace =
       <div className="qr-preview-title"><b>实时预览</b><span>{inviteUrl || inviteMatrix ? '已生成一次性二维码' : '先看版式，生成后自动填入二维码'}</span></div>
       <div className="invite-qr-canvas-shell">
         <canvas ref={qrCanvasRef} aria-label="客服邀请二维码预览" />
-        <input className="qr-direct-text qr-direct-top" maxLength={80} value={presentation.qrTopText} onChange={event => setPresentation(prev => ({ ...prev, qrTopText: event.target.value }))} aria-label="直接编辑二维码顶部文字" placeholder="点击输入顶部文字" />
-        <input className="qr-direct-text qr-direct-bottom" maxLength={80} value={presentation.qrBottomText} onChange={event => setPresentation(prev => ({ ...prev, qrBottomText: event.target.value }))} aria-label="直接编辑二维码底栏文字" placeholder="点击输入底栏文字" />
+        <input className="qr-direct-text qr-direct-top" maxLength={QR_CARD_TEXT_MAX_LENGTH} value={presentation.qrTopText} onChange={event => setPresentation(prev => ({ ...prev, qrTopText: limitQrText(event.target.value) }))} aria-label="直接编辑二维码顶部文字" placeholder="点击输入顶部文字" />
+        <input className="qr-direct-text qr-direct-bottom" maxLength={QR_CARD_TEXT_MAX_LENGTH} value={presentation.qrBottomText} onChange={event => setPresentation(prev => ({ ...prev, qrBottomText: limitQrText(event.target.value) }))} aria-label="直接编辑二维码底栏文字" placeholder="点击输入底栏文字" />
       </div>
       <div className="qr-preview-actions">
         <button type="button" onClick={downloadQr} disabled={(!inviteUrl && !inviteMatrix) || !!qrError}>下载 PNG</button>

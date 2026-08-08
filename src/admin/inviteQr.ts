@@ -1,3 +1,5 @@
+import { QR_CARD_TEXT_MAX_LENGTH } from '../operatorPresentation.ts';
+
 export type InviteQrStyle = {
   backgroundColor: string;
   accentColor: string;
@@ -167,18 +169,24 @@ function normalizeColor(value: string, fallback: string) {
   return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
+function boundedCardText(text: string) {
+  return Array.from(text.trim()).slice(0, QR_CARD_TEXT_MAX_LENGTH).join('');
+}
+
 function drawCenteredText(ctx: CanvasRenderingContext2D, text: string, y: number, width: number, color: string) {
-  const value = text.trim();
+  const value = boundedCardText(text);
   if (!value) return;
-  ctx.font = '600 24px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = color;
   const maxWidth = width - 56;
-  let shown = value;
-  while (shown.length > 1 && ctx.measureText(shown).width > maxWidth) shown = shown.slice(0, -1);
-  if (shown !== value) shown = `${shown.slice(0, Math.max(1, shown.length - 1))}…`;
-  ctx.fillText(shown, width / 2, y);
+  let fontSize = 24;
+  do {
+    ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+    if (ctx.measureText(value).width <= maxWidth) break;
+    fontSize -= 1;
+  } while (fontSize > 16);
+  ctx.fillText(value, width / 2, y, maxWidth);
 }
 
 function textColorForBackground(hex: string) {
