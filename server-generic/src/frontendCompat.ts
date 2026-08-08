@@ -76,9 +76,11 @@ function serializeVisitorCookie(token: string) {
 }
 
 function visitorTokenFromRequest(request: IncomingMessage, body?: Record<string, unknown>): string | null {
-  const fromBody = optionalString(body?.visitorId)?.trim() || optionalString(body?.visitorToken)?.trim();
-  if (fromBody) return fromBody;
-  return parseCookies(request.headers.cookie).get(VISITOR_COOKIE_NAME) || null;
+  // Browser compatibility uses the HttpOnly cookie first. `visitorId` is deliberately
+  // not accepted as a credential so a page-visible identifier can never become auth.
+  const fromCookie = parseCookies(request.headers.cookie).get(VISITOR_COOKIE_NAME) || null;
+  if (fromCookie) return fromCookie;
+  return optionalString(body?.visitorToken)?.trim() || null;
 }
 
 function frontendStatus(status: string) {
@@ -104,6 +106,20 @@ export function mapFrontendSession(session: ChatSessionSummary) {
     archived_at: session.archivedAt,
     deleted_at: session.deletedAt,
     purged_at: null,
+    history_cleared_at: session.historyClearedAt,
+  };
+}
+
+function mapFrontendSessionForVisitor(session: ChatSessionSummary) {
+  return {
+    id: session.id,
+    status: frontendStatus(session.status),
+    unread_count: 0,
+    created_at: session.createdAt,
+    updated_at: session.updatedAt,
+    closed_at: session.closedAt,
+    archived_at: session.archivedAt,
+    deleted_at: session.deletedAt,
     history_cleared_at: session.historyClearedAt,
   };
 }
@@ -134,6 +150,10 @@ export function mapFrontendMessage(message: ChatMessage, clientMessageIdOverride
     deduped: Boolean(message.deduped),
     attachments: message.attachments,
   };
+}
+
+function mapFrontendMessageForVisitor(message: ChatMessage, clientMessageIdOverride?: string | null | number) {
+  return { ...mapFrontendMessage(message, clientMessageIdOverride), sender_id: null };
 }
 
 export function mapFrontendAdmin(admin: FrontendAdminSource) {
@@ -293,7 +313,7 @@ async function handleFrontendSessionMessages(
   const messages = await listSessionMessages(context.db, sessionId, context.config.encryption);
   sendJson(response, 200, {
     ok: true,
-    messages: messages.map((message) => mapFrontendMessage(message)),
+    messages: messages.map((message) => admin ? mapFrontendMessage(message) : mapFrontendMessageForVisitor(message)),
     read: receipt,
   });
 }
@@ -328,6 +348,7 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
   const clientMessageId = optionalString(body.clientMessageId) || optionalString(body.client_message_id);
   let message: ChatMessage;
   let session: ChatSessionSummary;
+  let visitorResponse = false;
 
   if (senderType === 'OPERATOR' || senderType === 'ADMIN') {
     const admin = await requireAdmin(context.db, request);
@@ -354,11 +375,12 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
       clientMessageId,
     );
     session = await requireAdminSessionExists(context.db, sessionId);
+    visitorResponse = true;
   } else {
     throw new HttpError(400, 'sender_type_required');
   }
 
-  const frontendMessage = mapFrontendMessage(message);
+  const frontendMessage = visitorResponse ? mapFrontendMessageForVisitor(message) : mapFrontendMessage(message);
   if (!message.deduped) {
     context.hub.broadcastToSession(sessionId, {
       type: 'message_created',
@@ -370,7 +392,7 @@ async function handleFrontendMessageCreate(request: IncomingMessage, response: S
     ok: true,
     deduped: Boolean(message.deduped),
     message: frontendMessage,
-    session: mapFrontendSession(session),
+    session: visitorResponse ? mapFrontendSessionForVisitor(session) : mapFrontendSession(session),
   });
 }
 
@@ -393,10 +415,9 @@ async function handleFrontendGuestBootstrap(
       ok: true,
       selfHostedInvite: true,
       resumed: consumed.resumed,
-      invite: mapFrontendInvite(consumed.invite),
-      visitorId: consumed.visitorToken,
-      session: mapFrontendSession(consumed.session),
-      messages: messages.map((message) => mapFrontendMessage(message)),
+      visitorId: consumed.session.id,
+      session: mapFrontendSessionForVisitor(consumed.session),
+      messages: messages.map((message) => mapFrontendMessageForVisitor(message)),
     },
     { 'set-cookie': serializeVisitorCookie(consumed.visitorToken) },
   );
