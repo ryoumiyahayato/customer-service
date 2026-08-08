@@ -50,6 +50,7 @@ type ActiveAdminSessionRow = {
 };
 
 type SettingsRow = { value_json: string };
+type LoginNameSnapshot = { adminId: string; displayName: string | null };
 
 const inner = worker as WorkerModule;
 const ADMIN_MESSAGE_READ = /^\/api\/sessions\/[^/]+\/messages$/;
@@ -58,6 +59,7 @@ const OPERATOR_PASSWORD_RESET = /^\/api\/admin\/operators\/[^/]+\/reset-password
 const SENSITIVE_PROFILE_MAX_BYTES = 16 * 1024;
 const ACTIVE_ADMIN_SESSION_PREFIX = 'admin_active_session:';
 const ADMIN_SESSION_META_PREFIX = 'admin_session_meta:';
+const LOGIN_USERNAME_RE = /^[A-Za-z0-9_.@-]{3,64}$/;
 
 function hardenedPlain(status: number, body: string, extraHeaders: Record<string, string> = {}) {
   return new Response(body, {
@@ -159,6 +161,17 @@ function responseCookieValue(response: Response, cookieName: string) {
   const setCookie = response.headers.get('set-cookie') || '';
   const match = setCookie.match(new RegExp(`(?:^|,\\s*)${escapeRegExp(cookieName)}=([^;]+)`));
   return match?.[1]?.trim() || '';
+}
+
+function sameOriginWrite(req: Request) {
+  const url = new URL(req.url);
+  const origin = req.headers.get('origin');
+  if (origin) return origin === url.origin;
+  const referer = req.headers.get('referer');
+  if (referer) {
+    try { return new URL(referer).origin === url.origin; } catch { return false; }
+  }
+  return false;
 }
 
 async function limitedByIp(req: Request, env: Env, key: string, limit: number, windowMs: number) {
@@ -370,7 +383,7 @@ async function handleActiveAdminSessions(req: Request, env: Env) {
         deviceLabel = typeof parsed.deviceLabel === 'string' ? parsed.deviceLabel : '';
         approximateLocation = typeof parsed.approximateLocation === 'string' ? parsed.approximateLocation : '';
       } catch {
-        // Old or malformed metadata is shown as unknown instead of guessed.
+        // Unknown metadata stays unknown; do not infer device or location.
       }
     }
     sessions.push({
@@ -389,20 +402,90 @@ async function handleActiveAdminSessions(req: Request, env: Env) {
   return hardenedJson(200, { sessions });
 }
 
-async function preserveDisplayNameForLoginUsernameChange(req: Request, env: Env, response: Response, profileReq: Request) {
-  if (!response.ok) return response;
-  const parsed = await profileReq.json().catch(() => null) as { username?: unknown; displayName?: unknown } | null;
+async function loginNameSnapshot(req: Request, env: Env, profileReq: Request): Promise<LoginNameSnapshot | null> {
+  const parsed = await profileReq.clone().json().catch(() => null) as { username?: unknown } | null;
   const username = typeof parsed?.username === 'string' ? parsed.username.trim() : '';
-  if (!username || typeof parsed?.displayName === 'string') return response;
+  if (!username) return null;
+  if (!LOGIN_USERNAME_RE.test(username)) throw hardenedJson(400, { error: 'invalid_username' });
   const current = await activeAdminContext(env, req);
-  if (!current || current.role !== 'SUPER_ADMIN') return response;
-  const stored = await env.DB.prepare('SELECT display_name FROM admins WHERE id=? LIMIT 1')
+  if (!current || current.role !== 'SUPER_ADMIN') return null;
+  const row = await env.DB.prepare('SELECT display_name FROM admins WHERE id=? LIMIT 1')
     .bind(current.adminId).first<{ display_name: string | null }>();
-  if (stored?.display_name === undefined) return response;
-  // runtimeWorker historically couples username and display_name. Restore the independent
-  // public display name immediately after a login-username-only change.
-  await env.DB.prepare('UPDATE admins SET display_name=? WHERE id=?').bind(stored.display_name, current.adminId).run();
+  return { adminId: current.adminId, displayName: row?.display_name ?? null };
+}
+
+async function restoreDisplayNameAfterLoginNameChange(env: Env, response: Response, snapshot: LoginNameSnapshot | null) {
+  if (!response.ok || !snapshot) return response;
+  await env.DB.prepare('UPDATE admins SET display_name=? WHERE id=?')
+    .bind(snapshot.displayName, snapshot.adminId).run();
   return response;
+}
+
+async function maybeHandleDisplayNameProfile(req: Request, env: Env) {
+  const url = new URL(req.url);
+  if (url.pathname !== '/api/admins/profile' || req.method.toUpperCase() !== 'PATCH') return null;
+  const parsed = await readJsonObjectWithinLimit(req.clone(), SENSITIVE_PROFILE_MAX_BYTES);
+  if (parsed.tooLarge) return hardenedJson(413, { error: 'request_too_large' });
+  const displayName = typeof parsed.body.displayName === 'string' ? parsed.body.displayName.trim() : '';
+  const hasIdentityMutation = typeof parsed.body.username === 'string' || typeof parsed.body.password === 'string';
+  if (!displayName || hasIdentityMutation) return null;
+  if (!sameOriginWrite(req)) return hardenedJson(403, { error: 'forbidden' });
+  if (Array.from(displayName).length > 80) return hardenedJson(400, { error: 'invalid_display_name' });
+  const limited = await limitedByIp(req, env, 'display-name', 30, 60 * 1000);
+  if (limited) return limited;
+  const current = await activeAdminContext(env, req);
+  if (!current) return hardenedJson(401, { error: 'unauthenticated' });
+  const timestamp = new Date().toISOString();
+  await env.DB.prepare('UPDATE admins SET display_name=?,updated_at=? WHERE id=? AND COALESCE(is_disabled,0)=0')
+    .bind(displayName, timestamp, current.adminId).run();
+  return hardenedJson(200, { profile: { username: current.username, displayName } });
+}
+
+async function handleAdminHost(req: Request, env: Env, ctx: ExecutionContext) {
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  const adminReq = requestWithOnlyCookie(req, COOKIE_NAMES.admin);
+  const isLogin = url.pathname === '/api/auth/login' && method === 'POST';
+
+  const setupLimit = await adminSetupLimited(req, env);
+  if (setupLimit) return setupLimit;
+  if (crossSiteReadMutation(req)) return hardenedPlain(403, 'Forbidden');
+
+  if (!isLogin) {
+    const replaced = await enforceSingleAdminSession(adminReq, env);
+    if (replaced) return replaced;
+  }
+
+  if (url.pathname === '/api/admin/security/sessions' && method === 'GET') {
+    return handleActiveAdminSessions(adminReq, env);
+  }
+
+  const displayNameResponse = await maybeHandleDisplayNameProfile(adminReq, env);
+  if (displayNameResponse) return displayNameResponse;
+
+  if (await sensitiveIdentityMutation(req.clone()) && !(await recentAdminSession(env, adminReq))) {
+    return hardenedJson(403, { error: 'reauthentication_required' });
+  }
+
+  if (isLogin) {
+    const response = await inner.fetch(adminReq, env, ctx);
+    return activateLoginSession(req, env, response);
+  }
+
+  const profileReq = url.pathname === '/api/admins/profile' && method === 'PATCH'
+    ? req.clone() as unknown as Request
+    : null;
+  let snapshot: LoginNameSnapshot | null = null;
+  if (profileReq) {
+    try {
+      snapshot = await loginNameSnapshot(adminReq, env, profileReq);
+    } catch (response) {
+      if (response instanceof Response) return response;
+      throw response;
+    }
+  }
+  const response = await inner.fetch(adminReq, env, ctx);
+  return restoreDisplayNameAfterLoginNameChange(env, response, snapshot);
 }
 
 export default {
@@ -418,39 +501,7 @@ export default {
     const domains = productionDomains(env);
     if (!domains) return hardenedPlain(503, 'Service unavailable');
 
-    if (host === domains.admin) {
-      const adminReq = requestWithOnlyCookie(req, COOKIE_NAMES.admin);
-      const method = req.method.toUpperCase();
-      const isLogin = url.pathname === '/api/auth/login' && method === 'POST';
-
-      const setupLimit = await adminSetupLimited(req, env);
-      if (setupLimit) return setupLimit;
-      if (crossSiteReadMutation(req)) return hardenedPlain(403, 'Forbidden');
-
-      if (!isLogin) {
-        const replaced = await enforceSingleAdminSession(adminReq, env);
-        if (replaced) return replaced;
-      }
-
-      if (url.pathname === '/api/admin/security/sessions' && method === 'GET') {
-        return handleActiveAdminSessions(adminReq, env);
-      }
-
-      if (await sensitiveIdentityMutation(req) && !(await recentAdminSession(env, adminReq))) {
-        return hardenedJson(403, { error: 'reauthentication_required' });
-      }
-
-      if (isLogin) {
-        const response = await inner.fetch(adminReq, env, ctx);
-        return activateLoginSession(req, env, response);
-      }
-
-      const profileReq = url.pathname === '/api/admins/profile' && method === 'PATCH'
-        ? req.clone() as unknown as Request
-        : null;
-      const response = await inner.fetch(adminReq, env, ctx);
-      return profileReq ? preserveDisplayNameForLoginUsernameChange(adminReq, env, response, profileReq) : response;
-    }
+    if (host === domains.admin) return handleAdminHost(req, env, ctx);
 
     const visitor = visitorContext(host, domains.visitorRoots);
     if (!visitor) return hardenedPlain(404, 'Not found');
