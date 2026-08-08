@@ -3,17 +3,17 @@ export const D1_DATABASE_NAME = 'customer_chat_db';
 
 export function workersBuildBranchDecision(env = process.env) {
   if (env.WORKERS_CI !== '1') {
-    return { workersBuild: false, allowed: true, branch: '', reason: 'not_workers_build' };
+    return { workersBuild: false, allowed: true, branch: '', reason: 'not_workers_build', production: false };
   }
 
   const branch = String(env.WORKERS_CI_BRANCH || '').trim();
   if (!branch) {
-    return { workersBuild: true, allowed: false, branch: '', reason: 'missing_branch' };
+    return { workersBuild: true, allowed: false, branch: '', reason: 'missing_branch', production: false };
   }
   if (branch !== CLOUDFLARE_PRODUCTION_BRANCH) {
-    return { workersBuild: true, allowed: false, branch, reason: 'non_production_branch' };
+    return { workersBuild: true, allowed: true, branch, reason: 'preview_branch', production: false };
   }
-  return { workersBuild: true, allowed: true, branch, reason: 'production_branch' };
+  return { workersBuild: true, allowed: true, branch, reason: 'production_branch', production: true };
 }
 
 export function wranglerInvocation(wranglerBin, npxBin, args) {
