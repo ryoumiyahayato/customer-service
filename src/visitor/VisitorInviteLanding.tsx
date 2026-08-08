@@ -8,7 +8,6 @@ type VisitorInviteLandingProps = {
 
 type OperatorPresentation = {
   displayName?: string;
-  welcomeText?: string;
   avatarUrl?: string;
 };
 
@@ -26,7 +25,6 @@ export default function VisitorInviteLanding({ token }: VisitorInviteLandingProp
       const value = detail as Record<string, unknown>;
       setPresentation({
         displayName: typeof value.displayName === 'string' ? value.displayName : '',
-        welcomeText: typeof value.welcomeText === 'string' ? value.welcomeText : '',
         avatarUrl: typeof value.avatarUrl === 'string' ? value.avatarUrl : '',
       });
     };
@@ -40,13 +38,11 @@ export default function VisitorInviteLanding({ token }: VisitorInviteLandingProp
   if (!token) return null;
 
   const avatarUrl = String(presentation?.avatarUrl || '');
-  const welcomeText = String(presentation?.welcomeText || '').trim();
   const displayName = String(presentation?.displayName || '在线客服').trim() || '在线客服';
   const shellClass = [
     'personalized-visitor-shell',
     presentation ? 'has-operator' : '',
     avatarUrl ? 'has-avatar' : '',
-    welcomeText ? 'has-welcome' : '',
   ].filter(Boolean).join(' ');
   const avatarStyle = avatarUrl
     ? ({ '--operator-avatar-url': `url("${avatarUrl}")` } as CSSProperties)
@@ -61,17 +57,6 @@ export default function VisitorInviteLanding({ token }: VisitorInviteLandingProp
             {avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{displayName.slice(0, 1)}</span>}
           </div>
           <b>{displayName}</b>
-        </div>
-      ) : null}
-      {welcomeText ? (
-        <div className="operator-welcome-overlay">
-          <div className="operator-welcome-avatar" aria-hidden="true">
-            {avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{displayName.slice(0, 1)}</span>}
-          </div>
-          <div className="operator-welcome-content">
-            <b>{displayName}</b>
-            <p>{welcomeText}</p>
-          </div>
         </div>
       ) : null}
     </div>
