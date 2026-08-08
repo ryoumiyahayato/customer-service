@@ -93,5 +93,6 @@ export default function AdminUnreadBadge() {
   return <>{targets.map(target => createPortal(
     <span className="admin-unread-badge" aria-label={`${count} 条未读消息`}>{label}</span>,
     target,
+    target.closest('.desktop-tg-rail') ? 'desktop-unread' : 'mobile-unread',
   ))}</>;
 }
