@@ -70,8 +70,7 @@ function isSameOriginWrite(req: Request) {
 function shouldProtectAgainstCsrf(req: Request) {
   const path = new URL(req.url).pathname;
   if (!path.startsWith('/api/') || path.startsWith('/api/ws')) return false;
-  if (!SAFE_METHODS.has(req.method.toUpperCase())) return true;
-  return req.method.toUpperCase() === 'GET' && /^\/api\/sessions\/[^/]+\/messages$/.test(path);
+  return !SAFE_METHODS.has(req.method.toUpperCase());
 }
 
 function jsonObject(value: unknown): Record<string, unknown> {
@@ -91,7 +90,6 @@ function isSameOriginWebSocket(req: Request) {
   const requestHost = req.headers.get('host') || url.host;
   return isLocalDevHost(url.hostname) || isLocalDevHost(requestHost);
 }
-
 
 const getCookie = readCookie;
 const clearCookie = clearSessionCookie;
