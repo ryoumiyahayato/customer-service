@@ -7,14 +7,16 @@ function isServerMessage(message: ChatMessage) {
 }
 
 function sameClientIdentity(left: ChatMessage, right: ChatMessage) {
-  return Boolean(
-    left.clientMessageId
-    && right.clientMessageId
-    && left.clientMessageId === right.clientMessageId
-    && left.sessionId === right.sessionId
-    && left.senderType === right.senderType
-    && left.senderId === right.senderId,
-  );
+  if (!left.clientMessageId
+    || !right.clientMessageId
+    || left.clientMessageId !== right.clientMessageId
+    || left.sessionId !== right.sessionId
+    || left.senderType !== right.senderType) return false;
+
+  // Visitor responses deliberately strip internal sender principal ids. A null/omitted
+  // sender id therefore cannot make the optimistic and authoritative copies distinct.
+  if (left.senderId && right.senderId && left.senderId !== right.senderId) return false;
+  return true;
 }
 
 function laterTimestamp(left: string | null, right: string | null) {
