@@ -91,7 +91,7 @@ export function isLocalSelfHostDomain(value: string): boolean {
 }
 
 export function assertExperimentalPublicExposure(config: GenericServerConfig, env: NodeJS.ProcessEnv = process.env) {
-  if (env.NODE_ENV !== 'production' || config.experimentalPublicAcknowledged) return;
+  if (env.NODE_ENV !== 'production') return;
 
   const requiredDomains = [config.appDomain, config.visitorRootDomain];
   const domainsMissing = requiredDomains.some((domain) => !domain.trim());
@@ -100,9 +100,9 @@ export function assertExperimentalPublicExposure(config: GenericServerConfig, en
 
   const reason = domainsMissing
     ? 'required production domains are missing'
-    : 'public domains are configured';
+    : 'the self-host adapter does not yet implement the production admin/visitor bundle and token-subdomain isolation boundary';
   throw new Error(
-    `server-generic public exposure is blocked because ${reason} and the adapter remains experimental; set SELF_HOST_EXPERIMENTAL_PUBLIC_ACK=${EXPERIMENTAL_PUBLIC_ACK} only after reviewing the documented risks`,
+    `server-generic public exposure is blocked because ${reason}; use the Cloudflare production entry until the self-host adapter has equivalent host-capability isolation`,
   );
 }
 
