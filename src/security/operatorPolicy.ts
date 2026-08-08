@@ -16,11 +16,11 @@ export const LEGACY_ENABLED_OPERATOR_POLICY: Readonly<OperatorPolicy> = Object.f
   canUploadImages: true,
 });
 
-type PolicyRow = { value_json: string };
-
-export function operatorPolicyKey(adminId: string) {
-  return `operator_policy:${adminId}`;
-}
+type PolicyRow = {
+  can_create_invites: number;
+  can_use_staff_chat: number;
+  can_upload_images: number;
+};
 
 export function normalizeOperatorPolicy(value: unknown): OperatorPolicy {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { ...DENY_OPERATOR_POLICY };
@@ -37,27 +37,35 @@ export function normalizeOperatorPolicy(value: unknown): OperatorPolicy {
   };
 }
 
-export function parseStoredOperatorPolicy(valueJson: string | null | undefined): OperatorPolicy {
-  if (!valueJson) return { ...DENY_OPERATOR_POLICY };
-  try {
-    return normalizeOperatorPolicy(JSON.parse(valueJson));
-  } catch {
-    return { ...DENY_OPERATOR_POLICY };
-  }
-}
-
 export async function readOperatorPolicy(db: D1Database, adminId: string) {
-  const row = await db.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(operatorPolicyKey(adminId))
-    .first<PolicyRow>();
-  return parseStoredOperatorPolicy(row?.value_json);
+  const row = await db.prepare(
+    `SELECT can_create_invites,can_use_staff_chat,can_upload_images
+       FROM operator_policies WHERE admin_id=? LIMIT 1`,
+  ).bind(adminId).first<PolicyRow>();
+  if (!row) return { ...DENY_OPERATOR_POLICY };
+  return {
+    canCreateInvites: row.can_create_invites === 1,
+    canUseStaffChat: row.can_use_staff_chat === 1,
+    canUploadImages: row.can_upload_images === 1,
+  };
 }
 
 export async function writeOperatorPolicy(db: D1Database, adminId: string, policy: OperatorPolicy) {
   const normalized = normalizeOperatorPolicy(policy);
   await db.prepare(
-    `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-  ).bind(operatorPolicyKey(adminId), JSON.stringify(normalized), new Date().toISOString()).run();
+    `INSERT INTO operator_policies(admin_id,can_create_invites,can_use_staff_chat,can_upload_images,updated_at)
+     VALUES(?,?,?,?,?)
+     ON CONFLICT(admin_id) DO UPDATE SET
+       can_create_invites=excluded.can_create_invites,
+       can_use_staff_chat=excluded.can_use_staff_chat,
+       can_upload_images=excluded.can_upload_images,
+       updated_at=excluded.updated_at`,
+  ).bind(
+    adminId,
+    normalized.canCreateInvites ? 1 : 0,
+    normalized.canUseStaffChat ? 1 : 0,
+    normalized.canUploadImages ? 1 : 0,
+    new Date().toISOString(),
+  ).run();
   return normalized;
 }
