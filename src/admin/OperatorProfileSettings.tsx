@@ -157,6 +157,7 @@ export default function OperatorProfileSettings({ username, role }: { username: 
   };
 
   const displayName = presentation.displayName || username || '当前账号';
+  const roleLabel = role === 'SUPER_ADMIN' ? '超级管理员' : role === 'OPERATOR' ? '客服' : '身份加载中';
 
   return (
     <section className="account-presentation-card" aria-busy={loading}>
@@ -187,7 +188,7 @@ export default function OperatorProfileSettings({ username, role }: { username: 
               <b>{displayName}</b><small>点击修改</small>
             </button>
           )}
-          <span>{role === 'SUPER_ADMIN' ? '超级管理员' : '客服'}</span>
+          <span>{roleLabel}</span>
         </div>
       </header>
 
