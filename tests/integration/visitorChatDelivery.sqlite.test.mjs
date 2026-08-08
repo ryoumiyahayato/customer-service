@@ -126,8 +126,7 @@ function createDatabase() {
       created_by_type TEXT NOT NULL,
       created_by_id TEXT NOT NULL,
       expires_at TEXT,
-      deleted_at TEXT,
-      claim_token TEXT
+      deleted_at TEXT
     );
   `);
   return database;
@@ -240,7 +239,18 @@ function adminRequest(path, init = {}) {
   return new Request(`https://${ADMIN_HOST}${path}`, { ...init, headers });
 }
 
-test('consumed visitor invite delivers text and image messages into the same backend session and admin surface', async () => {
+function pngForm(sessionId, filename) {
+  const pngBytes = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  ]);
+  const form = new FormData();
+  form.append('file', new File([pngBytes], filename, { type: 'image/png' }));
+  form.append('sessionId', sessionId);
+  return form;
+}
+
+test('pre-0010 database still delivers visitor and administrator images into the same backend session', async () => {
   const database = createDatabase();
   const uploads = fakeR2();
   const env = environment(database, uploads);
@@ -276,23 +286,11 @@ test('consumed visitor invite delivers text and image messages into the same bac
     assert.equal(textPayload?.message?.content, '你好');
     assert.equal(textPayload?.message?.senderId, null);
     assert.equal(textPayload?.message?.clientMessageId, 'visitor-text-1');
-    const storedText = database.prepare(
-      "SELECT content,sender_type FROM messages WHERE session_id=? AND client_message_id='visitor-text-1'",
-    ).get(sessionId);
-    assert.equal(storedText?.content, '你好');
-    assert.equal(storedText?.sender_type, 'VISITOR');
 
-    const pngBytes = new Uint8Array([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-    ]);
-    const form = new FormData();
-    form.append('file', new File([pngBytes], 'smoke.png', { type: 'image/png' }));
-    form.append('sessionId', sessionId);
     const upload = await worker.fetch(visitorRequest(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, {
       method: 'POST',
       headers: { Cookie: cookie },
-      body: form,
+      body: pngForm(sessionId, 'visitor.png'),
     }), env, ctx);
     assert.equal(upload.status, 200);
     const uploaded = await upload.json();
@@ -316,32 +314,62 @@ test('consumed visitor invite delivers text and image messages into the same bac
     assert.equal(imagePayload?.message?.senderId, null);
     assert.equal(imagePayload?.message?.clientMessageId, 'visitor-image-1');
 
-    const storedImage = database.prepare(`
-      SELECT m.id,m.message_type,a.message_id,a.conversation_id,a.created_by_type
+    const adminCookie = await seedAdminCookie(database);
+    const adminUpload = await worker.fetch(adminRequest(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, {
+      method: 'POST',
+      headers: { Cookie: adminCookie },
+      body: pngForm(sessionId, 'admin.png'),
+    }), env, ctx);
+    assert.equal(adminUpload.status, 200);
+    const adminUploaded = await adminUpload.json();
+    assert.match(adminUploaded.path || '', /^\/api\/attachments\/[0-9a-f-]+\.png$/i);
+
+    const adminImageSend = await worker.fetch(adminRequest('/api/messages', {
+      method: 'POST',
+      headers: { Cookie: adminCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        clientMessageId: 'admin-image-1',
+        content: '',
+        senderType: 'OPERATOR',
+        messageType: 'image',
+        imagePath: adminUploaded.path,
+      }),
+    }), env, ctx);
+    assert.equal(adminImageSend.status, 200);
+    const adminImagePayload = await adminImageSend.json();
+    assert.equal(adminImagePayload?.message?.messageType || adminImagePayload?.message?.message_type, 'image');
+    assert.equal(adminImagePayload?.message?.clientMessageId || adminImagePayload?.message?.client_message_id, 'admin-image-1');
+
+    const storedImages = database.prepare(`
+      SELECT m.id,m.client_message_id,m.sender_type,a.message_id,a.conversation_id,a.created_by_type
         FROM messages m
         JOIN attachments a ON a.message_id=m.id
-       WHERE m.session_id=? AND m.client_message_id='visitor-image-1'
-    `).get(sessionId);
-    assert.equal(storedImage?.message_type, 'image');
-    assert.equal(storedImage?.message_id, storedImage?.id);
-    assert.equal(storedImage?.conversation_id, sessionId);
-    assert.equal(storedImage?.created_by_type, 'VISITOR');
-    assert.equal(uploads.objects.size, 1);
+       WHERE m.session_id=? AND m.message_type='image'
+       ORDER BY m.client_message_id
+    `).all(sessionId);
+    assert.equal(storedImages.length, 2);
+    assert.deepEqual(storedImages.map(row => row.client_message_id), ['admin-image-1', 'visitor-image-1']);
+    assert.equal(storedImages.every(row => row.message_id === row.id), true);
+    assert.equal(storedImages.every(row => row.conversation_id === sessionId), true);
+    assert.equal(uploads.objects.size, 2);
 
-    const adminCookie = await seedAdminCookie(database);
     const adminMessages = await worker.fetch(adminRequest(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: 'GET',
       headers: { Cookie: adminCookie },
     }), env, ctx);
     assert.equal(adminMessages.status, 200);
     const adminPayload = await adminMessages.json();
-    assert.equal(adminPayload?.messages?.length, 2);
+    assert.equal(adminPayload?.messages?.length, 3);
     const adminText = adminPayload.messages.find(message => message.clientMessageId === 'visitor-text-1' || message.client_message_id === 'visitor-text-1');
-    const adminImage = adminPayload.messages.find(message => message.clientMessageId === 'visitor-image-1' || message.client_message_id === 'visitor-image-1');
+    const visitorImage = adminPayload.messages.find(message => message.clientMessageId === 'visitor-image-1' || message.client_message_id === 'visitor-image-1');
+    const administratorImage = adminPayload.messages.find(message => message.clientMessageId === 'admin-image-1' || message.client_message_id === 'admin-image-1');
     assert.equal(adminText?.content, '你好');
     assert.equal(adminText?.senderType || adminText?.sender_type, 'VISITOR');
-    assert.equal(adminImage?.messageType || adminImage?.message_type, 'image');
-    assert.equal(adminImage?.senderType || adminImage?.sender_type, 'VISITOR');
+    assert.equal(visitorImage?.messageType || visitorImage?.message_type, 'image');
+    assert.equal(visitorImage?.senderType || visitorImage?.sender_type, 'VISITOR');
+    assert.equal(administratorImage?.messageType || administratorImage?.message_type, 'image');
+    assert.equal(administratorImage?.senderType || administratorImage?.sender_type, 'OPERATOR');
 
     await Promise.allSettled(ctx.pending);
   } finally {
