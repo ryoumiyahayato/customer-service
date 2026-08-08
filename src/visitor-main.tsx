@@ -17,6 +17,10 @@ function tokenFromPath() {
   }
 }
 
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted && location.pathname === '/session') location.reload();
+});
+
 const root = document.getElementById('root');
 if (root) {
   const token = tokenFromPath();
