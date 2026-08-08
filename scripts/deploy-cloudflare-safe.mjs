@@ -158,7 +158,7 @@ async function main() {
   }
   print(`main revision: ${localHead.stdout.trim()}`);
 
-  for (const script of ['check:obvious', 'typecheck', 'doctor', 'lifecycle:ci-check', 'build']) requireScript(script);
+  for (const script of ['check:obvious', 'typecheck', 'doctor', 'doctor:online', 'lifecycle:ci-check', 'build']) requireScript(script);
 
   run(npmBin, ['run', 'check:obvious']);
   if (existsSync(path.join(root, 'scripts', 'check-chat-message-text.mjs'))) {
@@ -192,7 +192,8 @@ async function main() {
     fail('Deployment completed but the working tree is not clean; inspect generated files before continuing.');
   }
 
-  print('Deployment completed successfully.');
+  run(npmBin, ['run', 'doctor:online']);
+  print('Deployment completed successfully and online smoke check passed.');
 }
 
 await main();
