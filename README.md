@@ -10,7 +10,7 @@ This project is a customer support chat system using a Cloudflare-native product
 - Database: D1 database named `customer_chat_db`.
 - Attachments/images: R2 bucket named `customer-chat-uploads`.
 - Sessions: HttpOnly signed cookies backed by D1 `admin_sessions` and `visitor_sessions` tables.
-- Deployment: Wrangler.
+- Deployment: Wrangler through the repository guarded deployment entry point.
 
 ## Feature inventory
 
@@ -97,23 +97,23 @@ Generate `SESSION_SECRET` as a long random value with a password manager or cryp
 
 ## Deployment
 
-Run checks before production deployment:
-
-```bash
-npm run typecheck
-npm run build
-npx wrangler deploy
-```
-
-Before remote migration/deploy, replace the placeholder D1 `database_id` in `wrangler.toml` with the real value from `npx wrangler d1 create customer_chat_db`.
-
-For routine guarded deployment, prefer:
+Production deployment has one supported repository entry point:
 
 ```bash
 npm run deploy:safe
 ```
 
-`deploy:safe` checks the current branch, working tree, obvious code issues, lifecycle CI-safe checks, typecheck, doctor, build, and pending migrations before deploying. It does not modify Wrangler secrets, does not delete R2 objects, and does not auto commit, push, or tag.
+If the guarded deploy reports pending D1 migrations, review them and rerun explicitly:
+
+```bash
+npm run deploy:safe -- --apply-migrations
+```
+
+Do not use direct `wrangler deploy`, `npx wrangler deploy`, or a legacy repository deploy wrapper for production. The guarded deploy requires a clean local `main` that exactly matches `origin/main`, runs repository validation, requires the remote D1 migration state to be readable, blocks on pending migrations by default, applies migrations only after an interactive yes/no confirmation, re-checks migration state, builds, and only then deploys.
+
+Cloudflare Workers Builds are also fail-closed at build time: repository builds from non-`main` branches are rejected, and a `main` Workers Build is rejected when the remote D1 migration state cannot be verified or when unapplied migrations exist. This prevents a pull-request branch or a schema/code mismatch from becoming an automatic production deployment.
+
+Before remote migration/deploy, ensure the D1 `database_id` in `wrangler.toml` is the intended production database.
 
 ## Self-hosting track
 
