@@ -67,10 +67,13 @@ Migration application requires an interactive confirmation. After applying,
 the command queries D1 again. The Worker build/deploy does not proceed while a
 migration is still pending or while remote migration state cannot be verified.
 
-For the PR #52 architecture transition, production must apply migrations `0012`
-and `0013` in repository order if they are still pending. `0013` moves dynamic
-operator/session runtime state out of overloaded `settings:*` JSON keys into
-structured tables.
+For the PR #52 architecture transition, production must apply migrations `0012`,
+`0013`, and `0014` in repository order if they are still pending. `0013` moves
+dynamic operator/session runtime state out of overloaded `settings:*` JSON keys
+into structured tables. `0014` creates the operator preset-message/application
+tables and migrates any existing configured welcome text into a real first
+preset chat message. The Worker that depends on these tables must not be deployed
+before the migrations are verified as applied.
 
 ## Pull requests
 
