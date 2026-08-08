@@ -48,11 +48,15 @@ export default function SessionClientInfo() {
     <details className="session-client-info">
       <summary>客户信息</summary>
       <dl>
-        <div><dt>设备</dt><dd>{session.deviceLabel || '未识别'}</dd></div>
-        <div><dt>大致位置</dt><dd>{session.approximateLocation || '未提供'}</dd></div>
+        <div><dt>设备环境</dt><dd>{session.deviceLabel || '未知'}</dd></div>
+        <div><dt>大致位置</dt><dd>{session.approximateLocation || '未知'}</dd></div>
         {session.ipAddress ? <div><dt>网络 IP</dt><dd>{session.ipAddress}</dd></div> : null}
       </dl>
-      <small>{session.ipAddress ? 'IP 只在超级管理员响应中返回；普通客服无法通过会话列表 API 获取。' : '位置来自 Cloudflare 网络边缘的城市/地区级推测；普通客服不返回访客 IP。'}</small>
+      <small>
+        {session.ipAddress
+          ? '设备信息仅来自请求头中能够明确识别的字段；位置仅采用 Cloudflare 返回的粗粒度网络位置；IP 仅向超级管理员返回。'
+          : '设备信息仅显示请求头中能够明确识别的字段，不猜测未知设备或应用版本；位置仅采用 Cloudflare 返回的粗粒度网络位置。'}
+      </small>
     </details>,
     target,
   );
