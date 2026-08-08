@@ -238,7 +238,8 @@ test('consumed visitor invite delivers text and image messages into the same bac
     const storedText = database.prepare(
       "SELECT content,sender_type FROM messages WHERE session_id=? AND client_message_id='visitor-text-1'",
     ).get(sessionId);
-    assert.deepEqual(storedText, { content: '你好', sender_type: 'VISITOR' });
+    assert.equal(storedText?.content, '你好');
+    assert.equal(storedText?.sender_type, 'VISITOR');
 
     const pngBytes = new Uint8Array([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
