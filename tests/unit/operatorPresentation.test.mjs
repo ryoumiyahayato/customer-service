@@ -7,10 +7,9 @@ import {
   normalizeOperatorPresentation,
 } from '../../src/operatorPresentation.ts';
 
-
-test('operator presentation normalizes editable fields', () => {
+test('operator presentation normalizes visual identity fields only', () => {
   const normalized = normalizeOperatorPresentation({
-    welcomeText: '  您好，欢迎咨询  ',
+    welcomeText: 'this legacy field must be ignored',
     avatarKey: 'operator-avatars/admin_1/0123456789abcdef0123456789abcdef.webp',
     qrBackgroundColor: '#ABCDEF',
     qrAccentColor: '#12AB34',
@@ -18,13 +17,13 @@ test('operator presentation normalizes editable fields', () => {
     qrBottomText: '  一次性二维码  ',
   });
   assert.deepEqual(normalized, {
-    welcomeText: '您好，欢迎咨询',
     avatarKey: 'operator-avatars/admin_1/0123456789abcdef0123456789abcdef.webp',
     qrBackgroundColor: '#abcdef',
     qrAccentColor: '#12ab34',
     qrTopText: '扫码联系客服',
     qrBottomText: '一次性二维码',
   });
+  assert.equal('welcomeText' in normalized, false);
 });
 
 test('QR card text is capped to the visual card capacity', () => {
