@@ -1,14 +1,15 @@
 name: Apply visitor security hotfix once
 
 on:
-  pull_request:
+  push:
+    branches:
+      - hotfix/visitor-admin-domain-isolation-20260808
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.head_ref == 'hotfix/visitor-admin-domain-isolation-20260808'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -44,7 +45,6 @@ jobs:
             if old not in s:
               raise SystemExit(f'missing GuestChat anchor: {old[:80]}')
             s = s.replace(old, new)
-          # There are two optimistic senderId occurrences in the original file.
           s = s.replace('senderId: visitorId,', 'senderId: null,')
           p.write_text(s)
 
