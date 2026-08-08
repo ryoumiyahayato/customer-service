@@ -16,6 +16,10 @@ type ClearResponse = {
 type StaffViewEvent = CustomEvent<{ active?: boolean }>;
 const CLEAR_CONFIRMATION = 'CLEAR_STAFF_CHAT';
 
+function actualStaffViewVisible() {
+  return Boolean(document.querySelector('.staff-composer'));
+}
+
 export default function SuperAdminStaffClearControl() {
   const [isSuper, setIsSuper] = useState(false);
   const [staffViewVisible, setStaffViewVisible] = useState(false);
@@ -35,13 +39,34 @@ export default function SuperAdminStaffClearControl() {
   }, []);
 
   useEffect(() => {
+    let frame = 0;
+    const syncFromDom = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const visible = actualStaffViewVisible();
+        setStaffViewVisible(visible);
+        if (!visible) setError('');
+      });
+    };
     const onView = (event: Event) => {
       const detail = (event as StaffViewEvent).detail;
-      setStaffViewVisible(Boolean(detail?.active));
-      if (!detail?.active) setError('');
+      setStaffViewVisible(Boolean(detail?.active) || actualStaffViewVisible());
+      if (!detail?.active && !actualStaffViewVisible()) setError('');
+      requestAnimationFrame(syncFromDom);
     };
+
+    const observer = new MutationObserver(syncFromDom);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
     window.addEventListener('admin-staff-view', onView);
-    return () => window.removeEventListener('admin-staff-view', onView);
+    document.addEventListener('click', syncFromDom, true);
+    syncFromDom();
+
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener('admin-staff-view', onView);
+      document.removeEventListener('click', syncFromDom, true);
+    };
   }, []);
 
   if (!isSuper || !staffViewVisible) return null;
