@@ -39,13 +39,19 @@ export type WebSocketHub = {
   subscriberCount: (sessionId: string) => number;
 };
 
+type SocketAuth =
+  | { kind: 'admin'; token: string; sessionId?: string }
+  | { kind: 'visitor'; token: string; sessionId: string };
+
 type ClientState = {
   room: string;
   alive: boolean;
+  auth: SocketAuth;
 };
 
 type UpgradeBinding = {
   room: string;
+  auth: SocketAuth;
 };
 
 export function createBroadcastPayload<TMessage extends object>(event: WebSocketBroadcast<TMessage>): string {
@@ -77,8 +83,10 @@ async function authenticateUpgrade(db: PostgresAdapter, request: IncomingMessage
   const url = new URL(request.url || '/', `http://${host}`);
 
   if (url.pathname === '/api/ws/admin' || url.pathname === '/api/ws/staff') {
-    await requireCurrentAdmin(db, getAdminSessionToken(request.headers.cookie));
-    return { room: url.pathname === '/api/ws/admin' ? 'admin-feed' : 'staff' };
+    const token = getAdminSessionToken(request.headers.cookie);
+    if (!token) throw Object.assign(new Error('unauthenticated'), { status: 401 });
+    await requireCurrentAdmin(db, token);
+    return { room: url.pathname === '/api/ws/admin' ? 'admin-feed' : 'staff', auth: { kind: 'admin', token } };
   }
 
   const conversation = /^\/api\/ws\/conversations\/([^/]+)$/.exec(url.pathname);
@@ -91,11 +99,41 @@ async function authenticateUpgrade(db: PostgresAdapter, request: IncomingMessage
   if (adminToken) {
     const admin = await requireCurrentAdmin(db, adminToken);
     await requireAdminSessionAccess(db, admin, sessionId);
-    return { room: sessionId };
+    return { room: sessionId, auth: { kind: 'admin', token: adminToken, sessionId } };
   }
 
-  await requireVisitorSession(db, sessionId, visitorCookieToken(request));
-  return { room: sessionId };
+  const visitorToken = visitorCookieToken(request);
+  if (!visitorToken) throw Object.assign(new Error('unauthenticated'), { status: 401 });
+  await requireVisitorSession(db, sessionId, visitorToken);
+  return { room: sessionId, auth: { kind: 'visitor', token: visitorToken, sessionId } };
+}
+
+function sanitizeVisitorBroadcastPayload(payload: string) {
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return payload;
+    const message = parsed.message;
+    if (message && typeof message === 'object' && !Array.isArray(message)) {
+      parsed.message = { ...(message as Record<string, unknown>), senderId: null, sender_id: null };
+    }
+    const session = parsed.session;
+    if (session && typeof session === 'object' && !Array.isArray(session)) {
+      const source = session as Record<string, unknown>;
+      parsed.session = {
+        id: source.id,
+        status: source.status,
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt,
+        closedAt: source.closedAt,
+        archivedAt: source.archivedAt,
+        deletedAt: source.deletedAt,
+        historyClearedAt: source.historyClearedAt,
+      };
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return payload;
+  }
 }
 
 export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
@@ -112,14 +150,32 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
     states.delete(socket);
   }
 
-  function bindAuthenticatedSocket(socket: WebSocket, room: string) {
-    let set = subscribers.get(room);
+  async function remainsAuthorized(state: ClientState) {
+    try {
+      if (state.auth.kind === 'admin') {
+        const admin = await requireCurrentAdmin(db, state.auth.token);
+        if (state.auth.sessionId) await requireAdminSessionAccess(db, admin, state.auth.sessionId);
+        return true;
+      }
+      await requireVisitorSession(db, state.auth.sessionId, state.auth.token);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function closeRevoked(socket: WebSocket) {
+    try { socket.close(1008, 'access_revoked'); } catch { socket.terminate(); }
+  }
+
+  function bindAuthenticatedSocket(socket: WebSocket, binding: UpgradeBinding) {
+    let set = subscribers.get(binding.room);
     if (!set) {
       set = new Set<WebSocket>();
-      subscribers.set(room, set);
+      subscribers.set(binding.room, set);
     }
     set.add(socket);
-    states.set(socket, { room, alive: true });
+    states.set(socket, { room: binding.room, alive: true, auth: binding.auth });
 
     socket.on('pong', () => {
       const state = states.get(socket);
@@ -143,6 +199,9 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
           socket.terminate();
           continue;
         }
+        void remainsAuthorized(state).then((allowed) => {
+          if (!allowed && socket.readyState === WebSocket.OPEN) closeRevoked(socket);
+        });
         state.alive = false;
         socket.ping();
       }
@@ -159,7 +218,7 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
           return;
         }
         server.handleUpgrade(request, socket, head, (websocket) => {
-          bindAuthenticatedSocket(websocket, binding.room);
+          bindAuthenticatedSocket(websocket, binding);
         });
       } catch (error) {
         const status = errorStatus(error);
@@ -169,7 +228,16 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
     broadcastToSession(sessionId, event) {
       const payload = createBroadcastPayload(event);
       for (const socket of subscribers.get(sessionId) || []) {
-        if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+        const state = states.get(socket);
+        if (!state || socket.readyState !== WebSocket.OPEN) continue;
+        void remainsAuthorized(state).then((allowed) => {
+          if (!allowed) {
+            if (socket.readyState === WebSocket.OPEN) closeRevoked(socket);
+            return;
+          }
+          if (socket.readyState !== WebSocket.OPEN) return;
+          socket.send(state.auth.kind === 'visitor' ? sanitizeVisitorBroadcastPayload(payload) : payload);
+        });
       }
     },
     subscriberCount(sessionId) {
