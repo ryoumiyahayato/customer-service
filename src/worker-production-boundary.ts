@@ -3,7 +3,8 @@ import worker from './worker-public-gate';
 import type { Env } from './worker';
 import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { consumeRateLimit } from './security/rateLimit';
-import { hmacHex } from './security/signing';
+import { hmacHex, verifySignedValue } from './security/signing';
+import { hashSessionToken } from './security/sessionTokens';
 import {
   DEFAULT_ADMIN_PUBLIC_HOST,
   DEFAULT_VISITOR_ROOT_DOMAIN,
@@ -32,6 +33,7 @@ type InviteEntryRow = {
 const inner = worker as WorkerModule;
 const ADMIN_MESSAGE_READ = /^\/api\/sessions\/[^/]+\/messages$/;
 const INVITE_CONSUME = /^\/api\/guest\/[a-f0-9]{40}$/i;
+const OPERATOR_PASSWORD_RESET = /^\/api\/admin\/operators\/[^/]+\/reset-password$/;
 
 function hardenedPlain(status: number, body: string, extraHeaders: Record<string, string> = {}) {
   return new Response(body, {
@@ -45,6 +47,21 @@ function hardenedPlain(status: number, body: string, extraHeaders: Record<string
       'X-Frame-Options': 'DENY',
       'X-Robots-Tag': 'noindex, nofollow, noarchive',
       ...extraHeaders,
+    },
+  });
+}
+
+function hardenedJson(status: number, body: Record<string, unknown>) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Cache-Control': 'no-store',
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'X-Robots-Tag': 'noindex, nofollow, noarchive',
     },
   });
 }
@@ -93,6 +110,7 @@ function requestWithOnlyCookie(req: Request, cookieName: string) {
   const value = readCookie(req, cookieName);
   if (value) headers.set('cookie', `${cookieName}=${value}`);
   else headers.delete('cookie');
+  headers.delete('authorization');
   return new Request(req, { headers });
 }
 
@@ -141,6 +159,32 @@ function crossSiteReadMutation(req: Request) {
   return false;
 }
 
+function sensitiveIdentityMutation(req: Request) {
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  if (method === 'POST' && url.pathname === '/api/admins') return true;
+  if (method === 'PATCH' && url.pathname === '/api/admins/profile') return true;
+  return method === 'POST' && OPERATOR_PASSWORD_RESET.test(url.pathname);
+}
+
+async function recentAdminSession(env: Env, req: Request) {
+  const signed = readCookie(req, COOKIE_NAMES.admin);
+  const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
+  if (!sessionId) return false;
+  const tokenHash = await hashSessionToken(env.SESSION_SECRET, sessionId);
+  const row = await env.DB.prepare(
+    `SELECT s.id
+       FROM admin_sessions s
+       JOIN admins a ON a.id=s.admin_id
+      WHERE s.id=? AND s.token_hash=? AND s.revoked_at IS NULL
+        AND datetime(s.expires_at)>datetime('now')
+        AND datetime(s.created_at)>datetime('now','-10 minutes')
+        AND COALESCE(a.is_disabled,0)=0
+      LIMIT 1`,
+  ).bind(sessionId, tokenHash).first<{ id: string }>();
+  return Boolean(row?.id);
+}
+
 export default {
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     await inner.scheduled?.(controller, env, ctx);
@@ -156,8 +200,11 @@ export default {
 
     if (host === domains.admin) {
       if (crossSiteReadMutation(req)) return hardenedPlain(403, 'Forbidden');
+      if (sensitiveIdentityMutation(req) && !(await recentAdminSession(env, req))) {
+        return hardenedJson(403, { error: 'reauthentication_required' });
+      }
       // The admin hostname accepts only the host-bound admin session. Manually replayed
-      // guest/account cookies cannot activate visitor branches in shared inner handlers.
+      // guest/account cookies and Authorization headers cannot activate visitor branches.
       return inner.fetch(requestWithOnlyCookie(req, COOKIE_NAMES.admin), env, ctx);
     }
 
@@ -175,7 +222,7 @@ export default {
     }
 
     // The visitor hostname can authenticate only as its guest session. A stolen admin
-    // cookie replayed by a raw HTTP client is discarded before any shared business route.
+    // cookie or Authorization credential replayed by a raw HTTP client is discarded.
     return inner.fetch(requestWithOnlyCookie(req, COOKIE_NAMES.guest), env, ctx);
   },
 };
