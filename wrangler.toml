@@ -31,10 +31,6 @@ tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
 
 [[routes]]
-pattern = "*.vx9qn7zr.org/*"
-zone_name = "vx9qn7zr.org"
-
-[[routes]]
 pattern = "vx9qn7zr.org/*"
 zone_name = "vx9qn7zr.org"
 
