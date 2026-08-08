@@ -11,7 +11,9 @@ test('visitor frontend has a dedicated entry that does not import admin applicat
 
   const visitorLanding = read('src/visitor/VisitorInviteLanding.tsx');
   assert.match(visitorLanding, /visitorPresentation\.css/);
+  assert.match(visitorLanding, /visitor:presentation/);
   assert.doesNotMatch(visitorLanding, /admin\/operatorPresentation\.css/);
+  assert.doesNotMatch(visitorLanding, /api\/invite-presentation/);
 
   const adminEntry = read('src/admin-main.tsx');
   assert.match(adminEntry, /AdminApp/);
@@ -39,9 +41,32 @@ test('outer worker gates visitor and admin assets before application routing', (
   assert.match(worker, /url\.pathname\.startsWith\('\/visitor\/'\)/);
   assert.match(worker, /url\.pathname\.startsWith\('\/assets\/'\)/);
   assert.match(worker, /serveVisitorAsset\(req, env, '\/visitor\/visitor\.html'\)/);
-  assert.match(worker, /INVITE_PATH/);
-  assert.match(worker, /SELECT expires_at,revoked_at,consumed_at FROM invite_links/);
+  assert.match(worker, /allowedVisitorAssetPath/);
+  assert.match(worker, /consumed_at,consumed_session_id/);
+  assert.match(worker, /consumedInviteBlock/);
+  assert.match(worker, /rewriteGuestBootstrapResponse/);
+  assert.match(worker, /'\/api\/guest-avatar'/);
   assert.match(worker, /invite\.consumed_at/);
+});
+
+test('visitor presentation is published only from a successful one-time consume response', () => {
+  const api = read('src/api.ts');
+  assert.match(api, /\^\\\/api\\\/guest\\\/[a-f0-9]\{40\}/i);
+  assert.match(api, /visitor:presentation/);
+  assert.match(api, /publishVisitorPresentation\(path, data\)/);
+
+  const landing = read('src/visitor/VisitorInviteLanding.tsx');
+  assert.match(landing, /addEventListener\('visitor:presentation'/);
+  assert.match(landing, /setPresentation\(null\)/);
+  assert.doesNotMatch(landing, /apiFetch/);
+});
+
+test('visitor client does not persist or send legacy visitor identifiers', () => {
+  const guest = read('src/visitor/GuestChat.tsx');
+  assert.doesNotMatch(guest, /localStorage\.setItem\(['"]chat_(?:session|visitor)_id/);
+  assert.doesNotMatch(guest, /JSON\.stringify\(\{[^}]*visitorId/);
+  assert.match(guest, /localStorage\.removeItem\('chat_session_id'\)/);
+  assert.match(guest, /localStorage\.removeItem\('chat_visitor_id'\)/);
 });
 
 test('visitor HTML does not opt into PWA discovery or indexing', () => {
