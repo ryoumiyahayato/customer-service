@@ -1,7 +1,12 @@
 export { ChatRoom } from './worker-final';
 import worker from './worker-final';
 import type { Env } from './worker';
-import { hmacHex } from './security/signing';
+import { COOKIE_NAMES, readCookie } from './security/cookies';
+import { hmacHex, verifySignedValue } from './security/signing';
+import { hashSessionToken } from './security/sessionTokens';
+import { consumeRateLimit } from './security/rateLimit';
+import { readJsonObjectWithinLimit, requestStreamExceeds } from './security/requestLimits';
+import { jsonResponse } from './security/responseHeaders';
 import {
   DEFAULT_ADMIN_PUBLIC_HOST,
   DEFAULT_VISITOR_ROOT_DOMAIN,
@@ -26,6 +31,21 @@ type InviteEntryRow = {
   revoked_at: string | null;
   consumed_at: string | null;
 };
+type AdminContext = {
+  id: string;
+  username: string;
+  displayName: string;
+  role: 'SUPER_ADMIN' | 'OPERATOR';
+  sessionId: string;
+};
+type InviteStatusRow = {
+  id: string;
+  source_operator_id: string | null;
+  created_by_admin_id: string;
+  expires_at: string;
+  revoked_at: string | null;
+  consumed_at: string | null;
+};
 
 const inner = worker as WorkerModule;
 const INVITE_CONSUME = /^\/api\/guest\/([a-f0-9]{40})$/i;
@@ -33,7 +53,10 @@ const MESSAGE_LIST = /^\/api\/sessions\/[^/]+\/messages$/;
 const CUSTOMER_READ = /^\/api\/sessions\/[^/]+\/customer-read$/;
 const CONVERSATION_SOCKET = /^\/api\/ws\/conversations\/[^/]+$/;
 const ATTACHMENT = /^\/api\/attachments\/[^/]+$/;
+const INVITE_STATUS = /^\/api\/invites\/(inv_[A-Za-z0-9_-]{1,96})\/status$/;
 const ADMIN_LOGIN_RESPONSE_FLOOR_MS = 450;
+const ADMIN_JSON_MAX_BYTES = 16 * 1024;
+const AVATAR_REQUEST_MAX_BYTES = 2 * 1024 * 1024 + 64 * 1024;
 const SESSION_ENDED_PUBLIC_ERROR = '\u4f1a\u8bdd\u5df2\u7ed3\u675f';
 
 function visitorRoot(env: Env) {
@@ -100,6 +123,177 @@ function adminLegacyVisitorApi(path: string) {
     || path === '/api/visitor'
     || path === '/api/account'
     || path.startsWith('/api/account/');
+}
+
+function sameOriginWrite(req: Request) {
+  const url = new URL(req.url);
+  const origin = req.headers.get('origin');
+  if (origin) {
+    try { return new URL(origin).origin === url.origin; } catch { return false; }
+  }
+  const referer = req.headers.get('referer');
+  if (referer) {
+    try { return new URL(referer).origin === url.origin; } catch { return false; }
+  }
+  return isLocalDevelopmentHost(url.hostname);
+}
+
+async function currentAdminContext(env: Env, req: Request): Promise<AdminContext | null> {
+  const sessionId = await verifySignedValue(env.SESSION_SECRET, readCookie(req, COOKIE_NAMES.admin));
+  if (!sessionId) return null;
+  const row = await env.DB.prepare(
+    `SELECT a.id,a.username,a.display_name,a.role,s.id session_id
+       FROM admin_sessions s
+       JOIN admins a ON a.id=s.admin_id
+      WHERE s.id=? AND s.token_hash=? AND s.revoked_at IS NULL
+        AND datetime(s.expires_at)>datetime('now')
+        AND datetime(s.created_at)>datetime('now','-1 day')
+        AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
+        AND COALESCE(a.is_disabled,0)=0
+        AND a.role IN ('SUPER_ADMIN','OPERATOR')
+      LIMIT 1`,
+  ).bind(sessionId, await hashSessionToken(env.SESSION_SECRET, sessionId))
+    .first<{ id: string; username: string; display_name: string | null; role: 'SUPER_ADMIN' | 'OPERATOR'; session_id: string }>();
+  if (!row?.id) return null;
+  const seenAt = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL').bind(seenAt, sessionId),
+    env.DB.prepare('UPDATE admins SET last_seen_at=? WHERE id=? AND COALESCE(is_disabled,0)=0').bind(seenAt, row.id),
+  ]);
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: String(row.display_name || row.username || ''),
+    role: row.role,
+    sessionId: row.session_id,
+  };
+}
+
+function b64(bytes: Uint8Array) {
+  let value = '';
+  for (const byte of bytes) value += String.fromCharCode(byte);
+  return btoa(value);
+}
+
+async function hashAdminPassword(password: string) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const iterations = 210000;
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256);
+  return `pbkdf2:${iterations}:${b64(salt)}:${b64(new Uint8Array(bits))}`;
+}
+
+async function adminMutationLimit(env: Env, req: Request, admin: AdminContext, bucket: string, limit: number, windowMs: number) {
+  const ip = String(req.headers.get('cf-connecting-ip') || 'unknown').slice(0, 80);
+  return consumeRateLimit(env.DB, `${bucket}:${admin.id}:${ip}`.slice(0, 240), limit, windowMs);
+}
+
+async function handleOwnProfilePatch(req: Request, env: Env) {
+  if (!sameOriginWrite(req)) return jsonResponse({ error: 'forbidden' }, { status: 403 });
+  const admin = await currentAdminContext(env, req);
+  if (!admin) return jsonResponse({ error: 'unauthenticated' }, { status: 401 });
+  const retryAfter = await adminMutationLimit(env, req, admin, 'profile', 12, 10 * 60 * 1000);
+  if (retryAfter !== null) return jsonResponse({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
+
+  const parsed = await readJsonObjectWithinLimit(req, ADMIN_JSON_MAX_BYTES);
+  if (parsed.tooLarge) return jsonResponse({ error: 'request_too_large' }, { status: 413 });
+  const body = parsed.body;
+  const usernameProvided = typeof body.username === 'string' && body.username.trim().length > 0;
+  const displayNameProvided = typeof body.displayName === 'string';
+  const passwordProvided = typeof body.password === 'string' && body.password.length > 0;
+  if (!usernameProvided && !displayNameProvided && !passwordProvided) return jsonResponse({ error: 'no_changes' }, { status: 400 });
+
+  const username = usernameProvided ? String(body.username).trim() : admin.username;
+  const displayName = displayNameProvided ? String(body.displayName).trim() : admin.displayName;
+  const password = passwordProvided ? String(body.password) : '';
+  if (!/^[A-Za-z0-9_.@-]{3,64}$/.test(username)) return jsonResponse({ error: 'invalid_username' }, { status: 400 });
+  if (!displayName || Array.from(displayName).length > 80) return jsonResponse({ error: 'invalid_display_name' }, { status: 400 });
+  if (passwordProvided && (password.length < 12 || password.length > 128)) return jsonResponse({ error: 'invalid_password' }, { status: 400 });
+
+  const at = new Date().toISOString();
+  try {
+    if (passwordProvided) {
+      await env.DB.batch([
+        env.DB.prepare(
+          'UPDATE admins SET username=?,display_name=?,password_hash=?,must_change_password=0,updated_at=? WHERE id=? AND COALESCE(is_disabled,0)=0',
+        ).bind(username, displayName, await hashAdminPassword(password), at, admin.id),
+        env.DB.prepare(
+          'UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE admin_id=? AND id<>? AND revoked_at IS NULL',
+        ).bind(at, admin.id, admin.sessionId),
+      ]);
+    } else {
+      await env.DB.prepare(
+        'UPDATE admins SET username=?,display_name=?,updated_at=? WHERE id=? AND COALESCE(is_disabled,0)=0',
+      ).bind(username, displayName, at, admin.id).run();
+    }
+  } catch {
+    return jsonResponse({ error: 'profile_conflict' }, { status: 409 });
+  }
+  return jsonResponse({ ok: true, profile: { username, displayName } });
+}
+
+async function inviteStatus(req: Request, env: Env, inviteId: string) {
+  const admin = await currentAdminContext(env, req);
+  if (!admin) return jsonResponse({ error: 'unauthenticated' }, { status: 401 });
+  const retryAfter = await adminMutationLimit(env, req, admin, 'invite-status', 90, 60 * 1000);
+  if (retryAfter !== null) return jsonResponse({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
+  const row = await env.DB.prepare(
+    `SELECT id,source_operator_id,created_by_admin_id,expires_at,revoked_at,consumed_at
+       FROM invite_links WHERE id=? LIMIT 1`,
+  ).bind(inviteId).first<InviteStatusRow>();
+  if (!row?.id) return notFound('admin');
+  if (admin.role !== 'SUPER_ADMIN' && row.created_by_admin_id !== admin.id && row.source_operator_id !== admin.id) return notFound('admin');
+  const state = row.revoked_at
+    ? 'revoked'
+    : row.consumed_at
+      ? 'consumed'
+      : row.expires_at <= new Date().toISOString()
+        ? 'expired'
+        : 'active';
+  return jsonResponse({ invite: { handle: row.id, state, expiresAt: row.expires_at } });
+}
+
+async function enrichInviteHandle(req: Request, env: Env, response: Response) {
+  if (!response.ok) return response;
+  const admin = await currentAdminContext(env, req);
+  if (!admin) return response;
+  const payload = await response.clone().json().catch(() => null) as Record<string, unknown> | null;
+  const invite = payload?.invite && typeof payload.invite === 'object' && !Array.isArray(payload.invite)
+    ? payload.invite as Record<string, unknown>
+    : null;
+  if (!invite) return response;
+  const row = await env.DB.prepare(
+    `SELECT id,expires_at FROM invite_links
+      WHERE created_by_admin_id=? AND revoked_at IS NULL AND consumed_at IS NULL
+        AND datetime(expires_at)>datetime('now')
+      ORDER BY datetime(created_at) DESC LIMIT 1`,
+  ).bind(admin.id).first<{ id: string; expires_at: string }>();
+  if (!row?.id) return response;
+  invite.inviteHandle = row.id;
+  if (invite.expiresAt === undefined && invite.expires_at === undefined) invite.expiresAt = row.expires_at;
+  const headers = new Headers(response.headers);
+  headers.set('Content-Type', 'application/json; charset=utf-8');
+  headers.set('Cache-Control', 'no-store');
+  headers.delete('Content-Length');
+  return new Response(JSON.stringify(payload), { status: response.status, statusText: response.statusText, headers });
+}
+
+async function avatarMagicMatches(req: Request) {
+  const form = await req.clone().formData().catch(() => null);
+  const file = form?.get('file');
+  if (!(file instanceof File)) return true;
+  const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  if (file.type === 'image/jpeg') return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (file.type === 'image/png') {
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    return bytes.length >= sig.length && sig.every((byte, index) => bytes[index] === byte);
+  }
+  if (file.type === 'image/webp') {
+    return bytes.length >= 12
+      && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+      && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
+  }
+  return false;
 }
 
 async function inviteAllowsInitialDocument(env: Env, token: string) {
@@ -291,10 +485,30 @@ export default {
     if (!visitor) {
       if (!isAdminSurfaceHost(host, adminHost(env))) return hardenResponse(await inner.fetch(req, env, ctx), 'admin');
       if (adminLegacyVisitorApi(url.pathname)) return notFound('admin');
+
+      if (req.method.toUpperCase() === 'PATCH' && url.pathname === '/api/admins/profile') {
+        return hardenResponse(await handleOwnProfilePatch(req, env), 'admin');
+      }
+      const statusMatch = url.pathname.match(INVITE_STATUS);
+      if (req.method.toUpperCase() === 'GET' && statusMatch) {
+        return hardenResponse(await inviteStatus(req, env, statusMatch[1]), 'admin');
+      }
+      if (req.method.toUpperCase() === 'POST' && url.pathname === '/api/admins/presentation/avatar') {
+        if (await requestStreamExceeds(req, AVATAR_REQUEST_MAX_BYTES)) {
+          return hardenResponse(jsonResponse({ error: 'avatar_too_large' }, { status: 413 }), 'admin');
+        }
+        if (!(await avatarMagicMatches(req))) {
+          return hardenResponse(jsonResponse({ error: 'avatar_content_mismatch' }, { status: 400 }), 'admin');
+        }
+      }
+
       const isLogin = req.method.toUpperCase() === 'POST' && url.pathname === '/api/auth/login';
       const startedAt = Date.now();
       let response = await inner.fetch(req, env, ctx);
       if (isLogin) response = await finishAdminLogin(response, startedAt);
+      if (req.method.toUpperCase() === 'POST' && url.pathname === '/api/invites') {
+        response = await enrichInviteHandle(req, env, response);
+      }
       return hardenResponse(response, 'admin');
     }
 
