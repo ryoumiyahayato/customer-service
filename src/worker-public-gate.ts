@@ -13,7 +13,7 @@ type WorkerModule = {
   scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>;
 };
 
-type DomainEnv = Env & { VISITOR_ROOT_DOMAIN?: string };
+type DomainEnv = Env & { VISITOR_ROOT_DOMAIN?: string; VISITOR_PUBLIC_HOSTS?: string };
 const inner = worker as WorkerModule;
 const INVITE_CONSUME = /^\/api\/guest\/[a-f0-9]{40}$/i;
 const MESSAGE_LIST = /^\/api\/sessions\/[^/]+\/messages$/;
@@ -23,6 +23,15 @@ const ATTACHMENT = /^\/api\/attachments\/[^/]+$/;
 
 function visitorRoot(env: Env) {
   return normalizePublicHost((env as DomainEnv).VISITOR_ROOT_DOMAIN || DEFAULT_VISITOR_ROOT_DOMAIN) || DEFAULT_VISITOR_ROOT_DOMAIN;
+}
+
+function visitorHosts(env: Env) {
+  const configured = String((env as DomainEnv).VISITOR_PUBLIC_HOSTS || visitorRoot(env));
+  return [...new Set(configured.split(',').map(normalizePublicHost).filter(Boolean))];
+}
+
+function isConfiguredVisitorHost(host: string, env: Env) {
+  return visitorHosts(env).some(candidate => isVisitorSurfaceHost(host, candidate));
 }
 
 function notFound() {
@@ -61,7 +70,7 @@ export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(req.url);
     const host = normalizePublicHost(url.hostname);
-    const visitorHost = !isLocalDevelopmentHost(host) && isVisitorSurfaceHost(host, visitorRoot(env));
+    const visitorHost = !isLocalDevelopmentHost(host) && isConfiguredVisitorHost(host, env);
     if (visitorHost && url.pathname.startsWith('/api/') && !isAllowedVisitorApiRequest(req)) return notFound();
     return inner.fetch(req, env, ctx);
   },
