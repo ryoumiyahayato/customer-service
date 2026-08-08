@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import InviteLinkPanel from './InviteLinkPanel';
 import OperatorProfileSettings from './OperatorProfileSettings';
+import PresetMessageEditor from './PresetMessageEditor';
 import AdminRiskCenter from './AdminRiskCenter';
 import { useAdminWorkspace } from './AdminWorkspaceContext';
 import './adminMobileShell.css';
 import './qrComposer.css';
 
 type RootTab = 'messages' | 'qr' | 'me';
-type NestedPage = 'staff' | 'operators' | 'security' | '';
+type NestedPage = 'preset' | 'staff' | 'operators' | 'security' | '';
 
 function TabIcon({ type }: { type: RootTab }) {
   if (type === 'messages') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v11H9l-5 3v-14Z" /></svg>;
@@ -62,6 +63,13 @@ export default function AdminMobileShell() {
     openView('sessions', 'dir');
   };
 
+  const openPreset = () => {
+    setError('');
+    setTab('me');
+    setNestedPage('preset');
+    openView('sessions', 'dir');
+  };
+
   const openStaff = () => {
     if (!capabilities.canUseStaffChat) {
       setError('当前客服账号未被授予内部消息权限，或权限信息暂时不可用。');
@@ -110,6 +118,9 @@ export default function AdminMobileShell() {
         <section className="mobile-account-tab" aria-label="我的">
           <OperatorProfileSettings username={admin.username} role={admin.role} />
           <div className="mobile-account-menu">
+            <button type="button" onClick={openPreset}>
+              <span>预设消息</span><small>访客进入后由服务器自动发送文字或图片</small><i>›</i>
+            </button>
             <button type="button" onClick={openStaff} disabled={!capabilities.canUseStaffChat}>
               <span>内部消息</span><small>{capabilities.canUseStaffChat ? '客服团队内部沟通' : '管理员已关闭此权限或权限暂不可用'}</small><i>›</i>
             </button>
@@ -129,6 +140,10 @@ export default function AdminMobileShell() {
           </div>
           {error ? <p className="mobile-shell-error">{error}</p> : null}
         </section>
+      ) : null}
+
+      {nestedPage === 'preset' ? (
+        <section className="mobile-root-page mobile-preset-page"><PresetMessageEditor /></section>
       ) : null}
 
       {nestedPage === 'security' && isSuper ? (
