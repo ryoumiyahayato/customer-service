@@ -22,7 +22,7 @@ const env = {
 test('visitor invite URLs are always built on the dedicated visitor domain', () => {
   assert.equal(buildVisitorInviteUrl(TOKEN), `https://${DEFAULT_VISITOR_ROOT_DOMAIN}/g/${TOKEN}`);
   assert.equal(isVisitorSurfaceHost(DEFAULT_VISITOR_ROOT_DOMAIN), true);
-  assert.equal(isVisitorSurfaceHost(`legacy.${DEFAULT_VISITOR_ROOT_DOMAIN}`), true);
+  assert.equal(isVisitorSurfaceHost(`legacy.${DEFAULT_VISITOR_ROOT_DOMAIN}`), false);
   assert.equal(isVisitorSurfaceHost(DEFAULT_ADMIN_PUBLIC_HOST), false);
   assert.equal(isAdminSurfaceHost(DEFAULT_ADMIN_PUBLIC_HOST), true);
   assert.equal(isAdminSurfaceHost(DEFAULT_VISITOR_ROOT_DOMAIN), false);
@@ -59,4 +59,5 @@ test('frontend invite generation cannot fall back to the current admin origin', 
   const wrangler = readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8');
   assert.match(wrangler, /VISITOR_ROOT_DOMAIN = "vx9qn7zr\.org"/);
   assert.match(wrangler, /ADMIN_PUBLIC_HOST = "denglu\.kefuxitong\.net"/);
+  assert.doesNotMatch(wrangler, /\*\.vx9qn7zr\.org/);
 });
