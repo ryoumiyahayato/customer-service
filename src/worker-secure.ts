@@ -1,13 +1,12 @@
-export { ChatRoom } from './worker-business-hardening';
-import worker from './worker-business-hardening';
+export { ChatRoom } from './worker';
+import worker from './worker';
 import type { Env } from './worker';
-import { runLifecycle } from './sessionLifecycle';
-import { consumeRateLimit } from './security/rateLimit';
 import { COOKIE_NAMES, clearSessionCookie, readCookie } from './security/cookies';
-import { hashSessionToken } from './security/sessionTokens';
 import { verifySignedValue } from './security/signing';
-import { requestStreamExceeds } from './security/requestLimits';
-import { withSecurityHeaders } from './security/responseHeaders';
+import { hashSessionToken } from './security/sessionTokens';
+import { jsonResponse, withSecurityHeaders } from './security/responseHeaders';
+import { contentLengthExceeds, requestStreamExceeds } from './security/requestLimits';
+import { consumeRateLimit } from './security/rateLimit';
 
 type WorkerModule = {
   fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response>;
@@ -15,81 +14,57 @@ type WorkerModule = {
 };
 
 type AuditActor = { id: string; username: string; role: string };
-type AuditEvent = {
-  event: string;
-  resource?: string;
-  path: string;
-  method: string;
-  details?: Record<string, unknown>;
-};
-type VisitorSessionRecord = { visitor_key?: string | null };
+type AuditEvent = { event: string; resource?: string; path: string; method: string; details?: Record<string, unknown> };
 
 const inner = worker as WorkerModule;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-const JSON_REQUEST_MAX_BYTES = 64 * 1024;
-const UPLOAD_REQUEST_MAX_BYTES = 6 * 1024 * 1024;
-const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
-const CHAT_MESSAGE_MAX_LENGTH = 8000;
-const STAFF_MESSAGE_MAX_LENGTH = 8000;
-const PASSWORD_MAX_LENGTH = 128;
-const PUBLIC_PASSWORD_MIN_LENGTH = 10;
-const ADMIN_PASSWORD_MIN_LENGTH = 12;
-const LOGIN_IP_LIMIT = 20;
-const LOGIN_ACCOUNT_LIMIT = 10;
-const LOGIN_WINDOW_MS = 10 * 60 * 1000;
-const SETUP_IP_LIMIT = 5;
-const SETUP_WINDOW_MS = 10 * 60 * 1000;
-const REGISTER_IP_LIMIT = 8;
-const REGISTER_WINDOW_MS = 60 * 60 * 1000;
+const ADMIN_USERNAME_RE = /^[A-Za-z0-9_.@-]{3,64}$/;
 const PUBLIC_USERNAME_RE = /^[A-Za-z0-9_.@-]{3,64}$/;
-const HEX_INVITE_TOKEN = /^[a-f0-9]{40}$/i;
+const ADMIN_PASSWORD_MIN_LENGTH = 12;
+const PUBLIC_PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MAX_LENGTH = 128;
+const LOGIN_IP_LIMIT = 20;
+const LOGIN_ACCOUNT_LIMIT = 8;
+const REGISTER_IP_LIMIT = 10;
+const LOGIN_WINDOW_MS = 5 * 60 * 1000;
+const REGISTER_WINDOW_MS = 10 * 60 * 1000;
+const JSON_REQUEST_MAX_BYTES = 64 * 1024;
+const CHAT_MESSAGE_MAX_LENGTH = 4000;
+const STAFF_MESSAGE_MAX_LENGTH = 2000;
+const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+const UPLOAD_REQUEST_MAX_BYTES = 6 * 1024 * 1024;
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
+const HEX_INVITE_TOKEN = /^[a-f0-9]{40}$/;
 const ADMIN_COOKIE = COOKIE_NAMES.admin;
 const VISITOR_COOKIE = COOKIE_NAMES.visitor;
 const GUEST_COOKIE = COOKIE_NAMES.guest;
-
-function json(body: unknown, init: ResponseInit = {}) {
-  return new Response(JSON.stringify(body), {
-    ...init,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', ...(init.headers || {}) },
-  });
-}
-
-function invalidInput(message: string, status = 400) {
-  return json({ error: message }, { status });
-}
-
-function contentLengthExceeds(req: Request, maxBytes: number) {
-  const raw = req.headers.get('content-length');
-  if (!raw) return false;
-  const value = Number(raw);
-  return Number.isFinite(value) && value > maxBytes;
-}
-
-async function readJsonClone(req: Request) {
-  try { return jsonObject(await req.clone().json()); } catch { return {}; }
-}
-
-function jsonObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
+const json = jsonResponse;
 
 function isLocalDevHost(host: string) {
-  const normalized = host.split(':')[0].toLowerCase();
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1';
+  let normalized = String(host || '').toLowerCase();
+  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
+  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) normalized = normalized.slice(0, normalized.lastIndexOf(':'));
+  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1';
+}
+
+function sameOriginUrl(value: string, expectedOrigin: string) {
+  try {
+    return new URL(value).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
 }
 
 function isSameOriginWrite(req: Request) {
   const url = new URL(req.url);
   const origin = req.headers.get('origin');
-  if (origin) {
-    try { return new URL(origin).origin === url.origin; } catch { return false; }
-  }
+  if (origin) return sameOriginUrl(origin, url.origin);
+
   const referer = req.headers.get('referer');
-  if (referer) {
-    try { return new URL(referer).origin === url.origin; } catch { return false; }
-  }
-  return isLocalDevHost(url.hostname);
+  if (referer) return sameOriginUrl(referer, url.origin);
+
+  const requestHost = req.headers.get('host') || url.host;
+  return isLocalDevHost(url.hostname) || isLocalDevHost(requestHost);
 }
 
 function shouldProtectAgainstCsrf(req: Request) {
@@ -98,33 +73,49 @@ function shouldProtectAgainstCsrf(req: Request) {
   return !SAFE_METHODS.has(req.method.toUpperCase());
 }
 
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+async function readJsonClone(req: Request) {
+  return jsonObject(await req.clone().json().catch(() => null));
+}
+
 function isSameOriginWebSocket(req: Request) {
   const url = new URL(req.url);
   const origin = req.headers.get('origin');
-  if (origin) {
-    try { return new URL(origin).origin === url.origin; } catch { return false; }
-  }
-  const requestHost = req.headers.get('host') || '';
+  if (origin) return sameOriginUrl(origin, url.origin);
+  const requestHost = req.headers.get('host') || url.host;
   return isLocalDevHost(url.hostname) || isLocalDevHost(requestHost);
 }
 
 const getCookie = readCookie;
 const clearCookie = clearSessionCookie;
 async function verifySignedId(env: Env, token?: string) { return verifySignedValue(env.SESSION_SECRET, token); }
-async function tokenHash(env: Env, sessionId: string) { return hashSessionToken(env.SESSION_SECRET, sessionId); }
+async function tokenHash(env: Env, value: string) { return hashSessionToken(env.SESSION_SECRET, value); }
 
 async function currentGuestVisitorKey(env: Env, req: Request) {
   const sessionId = await verifySignedId(env, getCookie(req, GUEST_COOKIE));
-  if (!sessionId) return '';
+  if (!sessionId) return null;
   const row = await env.DB.prepare(
-    `SELECT visitor_key FROM visitor_sessions
-     WHERE id=? AND token_hash=? AND revoked_at IS NULL AND datetime(expires_at)>datetime('now') LIMIT 1`,
-  ).bind(sessionId, await tokenHash(env, sessionId)).first<VisitorSessionRecord>();
-  return String(row?.visitor_key || '');
+    'SELECT visitor_key FROM visitor_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL AND expires_at>? AND visitor_key IS NOT NULL',
+  ).bind(sessionId, await tokenHash(env, sessionId), new Date().toISOString()).first<{ visitor_key: string }>();
+  return row?.visitor_key || null;
 }
 
-function validAdminUsername(username: string) { return PUBLIC_USERNAME_RE.test(username); }
-function validAdminPassword(password: string) { return password.length >= ADMIN_PASSWORD_MIN_LENGTH && password.length <= PASSWORD_MAX_LENGTH; }
+function validAdminUsername(username: string) {
+  return ADMIN_USERNAME_RE.test(username);
+}
+
+function validAdminPassword(password: string) {
+  return typeof password === 'string' && password.length >= ADMIN_PASSWORD_MIN_LENGTH && password.length <= PASSWORD_MAX_LENGTH;
+}
+
+function invalidInput(message: string, status = 400) {
+  return json({ error: message }, { status });
+}
 
 function clientIp(req: Request) {
   return (req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown').trim().slice(0, 120);
@@ -156,17 +147,10 @@ async function protectBootstrapConfig(env: Env) {
   return null;
 }
 
-async function protectSetupMutation(req: Request, env: Env) {
+async function protectSetupMutation(req: Request) {
   const path = new URL(req.url).pathname;
   if (!path.startsWith('/api/setup/') || req.method === 'GET') return null;
   if (contentLengthExceeds(req, JSON_REQUEST_MAX_BYTES)) return invalidInput('请求体过大', 413);
-  const limited = await consumeLimit(
-    env,
-    rateLimitKey(`setup:ip:${clientIp(req)}`),
-    SETUP_IP_LIMIT,
-    SETUP_WINDOW_MS,
-  );
-  if (limited) return limited;
   return null;
 }
 
@@ -513,7 +497,7 @@ async function preflightSecurity(req: Request, env: Env) {
   const bootstrapRejected = await protectBootstrapConfig(env);
   if (bootstrapRejected) return bootstrapRejected;
 
-  const setupRejected = await protectSetupMutation(req, env);
+  const setupRejected = await protectSetupMutation(req);
   if (setupRejected) return setupRejected;
 
   const guestRejected = await protectGuestInvite(req);
