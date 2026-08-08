@@ -5,7 +5,7 @@ import { registerTypeScriptHooks } from '../helpers/tsExtensionLoader.mjs';
 import { SqliteD1Adapter } from '../helpers/sqliteD1Adapter.mjs';
 
 registerTypeScriptHooks();
-const { default: worker } = await import('../../src/worker-public-gate.ts');
+const { default: worker } = await import('../../src/worker-production-boundary.ts');
 const { hmacHex, signValue } = await import('../../src/security/signing.ts');
 const { hashSessionToken } = await import('../../src/security/sessionTokens.ts');
 const { COOKIE_NAMES } = await import('../../src/security/cookies.ts');
@@ -124,6 +124,21 @@ test('only a live token subdomain receives the visitor HTML shell', async () => 
     const unknown = await worker.fetch(new Request(`https://${OTHER_VISITOR_HOST}/`), env(database), context());
     assert.equal(unknown.status, 404);
     assert.equal(unknown.headers.get('cache-control'), 'no-store');
+  } finally {
+    database.close();
+  }
+});
+
+test('the outer production boundary rejects unknown hosts and invalid domain configuration', async () => {
+  const database = createDatabase();
+  try {
+    const unknown = await worker.fetch(new Request(`https://${TOKEN}.attacker.example/`), env(database), context());
+    assert.equal(unknown.status, 404);
+
+    const brokenEnv = { ...env(database), VISITOR_ROOT_DOMAIN: '' };
+    const broken = await worker.fetch(new Request(`https://${ADMIN_HOST}/`), brokenEnv, context());
+    assert.equal(broken.status, 503);
+    assert.equal(broken.headers.get('cache-control'), 'no-store');
   } finally {
     database.close();
   }
