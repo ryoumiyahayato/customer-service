@@ -1,6 +1,8 @@
 export { ChatRoom } from './worker-public-gate';
 import worker from './worker-public-gate';
 import type { Env } from './worker';
+import { COOKIE_NAMES, readCookie } from './security/cookies';
+import { consumeRateLimit } from './security/rateLimit';
 import { hmacHex } from './security/signing';
 import {
   DEFAULT_ADMIN_PUBLIC_HOST,
@@ -29,8 +31,9 @@ type InviteEntryRow = {
 
 const inner = worker as WorkerModule;
 const ADMIN_MESSAGE_READ = /^\/api\/sessions\/[^/]+\/messages$/;
+const INVITE_CONSUME = /^\/api\/guest\/[a-f0-9]{40}$/i;
 
-function hardenedPlain(status: number, body: string) {
+function hardenedPlain(status: number, body: string, extraHeaders: Record<string, string> = {}) {
   return new Response(body, {
     status,
     headers: {
@@ -41,6 +44,7 @@ function hardenedPlain(status: number, body: string) {
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
       'X-Robots-Tag': 'noindex, nofollow, noarchive',
+      ...extraHeaders,
     },
   });
 }
@@ -84,6 +88,35 @@ function visitorContext(host: string, roots: string[]) {
   return null;
 }
 
+function requestWithOnlyCookie(req: Request, cookieName: string) {
+  const headers = new Headers(req.headers);
+  const value = readCookie(req, cookieName);
+  if (value) headers.set('cookie', `${cookieName}=${value}`);
+  else headers.delete('cookie');
+  return new Request(req, { headers });
+}
+
+function clientIp(req: Request) {
+  return String(req.headers.get('cf-connecting-ip') || 'unknown').trim().slice(0, 80);
+}
+
+async function visitorEntryLimited(req: Request, env: Env) {
+  const url = new URL(req.url);
+  const method = req.method.toUpperCase();
+  const entry = (method === 'GET' || method === 'HEAD') && url.pathname === '/';
+  const consume = method === 'POST' && INVITE_CONSUME.test(url.pathname);
+  if (!entry && !consume) return null;
+  const retryAfter = await consumeRateLimit(
+    env.DB,
+    `surface:visitor-entry:${clientIp(req)}`.slice(0, 240),
+    60,
+    5 * 60 * 1000,
+  );
+  return retryAfter === null
+    ? null
+    : hardenedPlain(429, 'Too many requests', { 'Retry-After': String(retryAfter) });
+}
+
 async function liveInvite(env: Env, token: string) {
   const tokenHash = await hmacHex(env.SESSION_SECRET, `invite:${token.toLowerCase()}`);
   const row = await env.DB.prepare(
@@ -123,11 +156,16 @@ export default {
 
     if (host === domains.admin) {
       if (crossSiteReadMutation(req)) return hardenedPlain(403, 'Forbidden');
-      return inner.fetch(req, env, ctx);
+      // The admin hostname accepts only the host-bound admin session. Manually replayed
+      // guest/account cookies cannot activate visitor branches in shared inner handlers.
+      return inner.fetch(requestWithOnlyCookie(req, COOKIE_NAMES.admin), env, ctx);
     }
 
     const visitor = visitorContext(host, domains.visitorRoots);
     if (!visitor) return hardenedPlain(404, 'Not found');
+
+    const limited = await visitorEntryLimited(req, env);
+    if (limited) return limited;
 
     const method = req.method.toUpperCase();
     const initialDocument = (method === 'GET' || method === 'HEAD') && url.pathname === '/';
@@ -136,6 +174,8 @@ export default {
       return hardenedPlain(404, 'Not found');
     }
 
-    return inner.fetch(req, env, ctx);
+    // The visitor hostname can authenticate only as its guest session. A stolen admin
+    // cookie replayed by a raw HTTP client is discarded before any shared business route.
+    return inner.fetch(requestWithOnlyCookie(req, COOKIE_NAMES.guest), env, ctx);
   },
 };
