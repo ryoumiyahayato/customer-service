@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
+const publicGate = read('src/worker-public-gate.ts');
 const finalWrapper = read('src/worker-final.ts');
 const entryWrapper = read('src/worker-entry.ts');
 const presentationWrapper = read('src/worker-presentation.ts');
@@ -26,7 +27,11 @@ const genericSetup = read('server-generic/src/setup.ts');
 const preflight = read('deploy/linux/preflight.sh');
 const adminDashboard = read('src/admin/AdminDashboard.tsx');
 
-assert.match(wrangler, /main\s*=\s*"src\/worker-final\.ts"/);
+assert.match(wrangler, /main\s*=\s*"src\/worker-public-gate\.ts"/);
+assert.match(publicGate, /export \{ ChatRoom \} from '\.\/worker-final'/);
+assert.match(publicGate, /import worker from '\.\/worker-final'/);
+assert.match(publicGate, /isAllowedVisitorApiRequest/);
+assert.match(publicGate, /visitorHost[\s\S]*?url\.pathname\.startsWith\('\/api\/'\)[\s\S]*?!isAllowedVisitorApiRequest/);
 assert.match(finalWrapper, /export \{ ChatRoom \} from '\.\/worker-entry'/);
 assert.match(finalWrapper, /import worker from '\.\/worker-entry'/);
 assert.match(finalWrapper, /url\.pathname === '\/api\/ws\/staff'/);
