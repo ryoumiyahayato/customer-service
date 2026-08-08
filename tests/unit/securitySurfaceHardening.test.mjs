@@ -6,6 +6,7 @@ const productionBoundary = readFileSync(new URL('../../src/worker-production-bou
 const publicGate = readFileSync(new URL('../../src/worker-public-gate.ts', import.meta.url), 'utf8');
 const chatRoom = readFileSync(new URL('../../src/durable-objects/ChatRoom.ts', import.meta.url), 'utf8');
 const requestLimits = readFileSync(new URL('../../src/security/requestLimits.ts', import.meta.url), 'utf8');
+const cookies = readFileSync(new URL('../../src/security/cookies.ts', import.meta.url), 'utf8');
 const wrangler = readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8');
 const genericAuth = readFileSync(new URL('../../server-generic/src/auth.ts', import.meta.url), 'utf8');
 const genericCompat = readFileSync(new URL('../../server-generic/src/frontendCompat.ts', import.meta.url), 'utf8');
@@ -20,6 +21,7 @@ test('production visitor and admin surfaces are restricted at the outermost work
   assert.match(productionBoundary, /if \(!visitor\) return hardenedPlain\(404/);
   assert.match(productionBoundary, /requestWithOnlyCookie\(req, COOKIE_NAMES\.admin\)/);
   assert.match(productionBoundary, /requestWithOnlyCookie\(req, COOKIE_NAMES\.guest\)/);
+  assert.match(productionBoundary, /headers\.delete\('authorization'\)/);
   assert.match(productionBoundary, /surface:visitor-entry/);
   assert.match(productionBoundary, /surface:visitor-upload/);
   assert.match(productionBoundary, /visitorUploadLimited/);
@@ -34,6 +36,32 @@ test('production visitor and admin surfaces are restricted at the outermost work
   assert.match(publicGate, /Referrer-Policy': 'no-referrer'/);
   assert.match(wrangler, /workers_dev\s*=\s*false/);
   assert.match(wrangler, /preview_urls\s*=\s*false/);
+});
+
+test('browser session cookies are __Host- scoped and cannot be widened to sibling subdomains', () => {
+  assert.match(cookies, /admin:\s*'__Host-support_admin'/);
+  assert.match(cookies, /visitor:\s*'__Host-visitor_account'/);
+  assert.match(cookies, /guest:\s*'__Host-guest_session'/);
+  assert.match(cookies, /Path=\//);
+  assert.match(cookies, /HttpOnly/);
+  assert.match(cookies, /Secure/);
+  assert.doesNotMatch(cookies, /Domain=/i);
+});
+
+test('persistent identity changes require a recently created administrator session', () => {
+  assert.match(productionBoundary, /function sensitiveIdentityMutation/);
+  assert.match(productionBoundary, /url\.pathname === '\/api\/admins'/);
+  assert.match(productionBoundary, /url\.pathname === '\/api\/admins\/profile'/);
+  assert.match(productionBoundary, /OPERATOR_PASSWORD_RESET/);
+  assert.match(productionBoundary, /datetime\(s\.created_at\)>datetime\('now','-10 minutes'\)/);
+  assert.match(productionBoundary, /reauthentication_required/);
+});
+
+test('read endpoints with side effects reject same-site sibling origins as well as cross-site browsers', () => {
+  const readGuard = productionBoundary.match(/function crossSiteReadMutation[\s\S]*?\n}/)?.[0] || '';
+  assert.match(readGuard, /site && site !== 'same-origin'/);
+  assert.match(readGuard, /mode === 'navigate'/);
+  assert.match(readGuard, /dest && dest !== 'empty'/);
 });
 
 test('request body size guards fail closed when a request stream cannot be read', () => {
