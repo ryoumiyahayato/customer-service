@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 
 const productionBoundary = readFileSync(new URL('../../src/worker-production-boundary.ts', import.meta.url), 'utf8');
 const publicGate = readFileSync(new URL('../../src/worker-public-gate.ts', import.meta.url), 'utf8');
-const secureWorker = readFileSync(new URL('../../src/worker-secure.ts', import.meta.url), 'utf8');
 const chatRoom = readFileSync(new URL('../../src/durable-objects/ChatRoom.ts', import.meta.url), 'utf8');
 const requestLimits = readFileSync(new URL('../../src/security/requestLimits.ts', import.meta.url), 'utf8');
 const cookies = readFileSync(new URL('../../src/security/cookies.ts', import.meta.url), 'utf8');
@@ -23,10 +22,10 @@ test('production visitor and admin surfaces are restricted at the outermost work
   assert.match(productionBoundary, /requestWithOnlyCookie\(req, COOKIE_NAMES\.admin\)/);
   assert.match(productionBoundary, /requestWithOnlyCookie\(req, COOKIE_NAMES\.guest\)/);
   assert.match(productionBoundary, /headers\.delete\('authorization'\)/);
-  assert.match(productionBoundary, /surface:visitor-entry/);
-  assert.match(productionBoundary, /surface:visitor-upload/);
+  assert.match(productionBoundary, /visitor-entry/);
+  assert.match(productionBoundary, /visitor-upload/);
   assert.match(productionBoundary, /visitorUploadLimited/);
-  assert.match(productionBoundary, /20,[\s\S]*?10 \* 60 \* 1000/);
+  assert.match(productionBoundary, /20, 10 \* 60 \* 1000/);
   assert.match(productionBoundary, /visitorAsset[\s\S]*?liveInvite/);
   assert.match(productionBoundary, /crossSiteReadMutation/);
   assert.match(publicGate, /Content-Security-Policy/);
@@ -70,11 +69,10 @@ test('read endpoints with side effects reject same-site sibling origins as well 
 });
 
 test('setup token mutation attempts are rate-limited before first-admin initialization', () => {
-  assert.match(secureWorker, /SETUP_IP_LIMIT = 5/);
-  assert.match(secureWorker, /SETUP_WINDOW_MS = 10 \* 60 \* 1000/);
-  assert.match(secureWorker, /async function protectSetupMutation\(req: Request, env: Env\)/);
-  assert.match(secureWorker, /setup:ip:\$\{clientIp\(req\)\}/);
-  assert.match(secureWorker, /protectSetupMutation\(req, env\)/);
+  assert.match(productionBoundary, /async function adminSetupLimited\(req: Request, env: Env\)/);
+  assert.match(productionBoundary, /pathname\.startsWith\('\/api\/setup\/'\)/);
+  assert.match(productionBoundary, /limitedByIp\(req, env, 'admin-setup', 5, 10 \* 60 \* 1000\)/);
+  assert.match(productionBoundary, /adminSetupLimited\(req, env\)/);
 });
 
 test('request body size guards fail closed when a request stream cannot be read', () => {
