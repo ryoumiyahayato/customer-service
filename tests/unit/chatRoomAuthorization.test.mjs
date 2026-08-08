@@ -16,6 +16,7 @@ const {
 const { default: worker } = await import('../../src/worker-business-hardening.ts');
 const { signValue } = await import('../../src/security/signing.ts');
 const { hashSessionToken } = await import('../../src/security/sessionTokens.ts');
+const { COOKIE_NAMES } = await import('../../src/security/cookies.ts');
 
 const SECRET = 'chat-room-authorization-test-secret';
 const NOW = new Date().toISOString();
@@ -242,7 +243,7 @@ async function addAdminSession(database, adminId) {
   database.prepare(
     'INSERT INTO admin_sessions(id,admin_id,token_hash,created_at,last_seen_at,expires_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)',
   ).run(sessionId, adminId, await hashSessionToken(SECRET, sessionId), NOW, NOW, FUTURE);
-  return `support_admin=${await signValue(SECRET, sessionId)}`;
+  return `${COOKIE_NAMES.admin}=${await signValue(SECRET, sessionId)}`;
 }
 
 async function addGuestSession(database, visitorKey) {
@@ -250,7 +251,7 @@ async function addGuestSession(database, visitorKey) {
   database.prepare(
     'INSERT INTO visitor_sessions(id,visitor_key,token_hash,created_at,expires_at,revoked_at) VALUES(?,?,?,?,?,NULL)',
   ).run(sessionId, visitorKey, await hashSessionToken(SECRET, sessionId), NOW, FUTURE);
-  return `guest_session=${await signValue(SECRET, sessionId)}`;
+  return `${COOKIE_NAMES.guest}=${await signValue(SECRET, sessionId)}`;
 }
 
 function request(path, cookie, init = {}) {
