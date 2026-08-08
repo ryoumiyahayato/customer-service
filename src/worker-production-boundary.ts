@@ -1,11 +1,12 @@
 export { ChatRoom } from './worker-public-gate';
 import worker from './worker-public-gate';
 import type { Env } from './worker';
-import { COOKIE_NAMES, readCookie } from './security/cookies';
+import { COOKIE_NAMES, clearSessionCookie, readCookie } from './security/cookies';
 import { consumeRateLimit } from './security/rateLimit';
 import { readJsonObjectWithinLimit } from './security/requestLimits';
 import { hmacHex, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
+import { clientMetadataFromRequest } from './sessionClientMetadata';
 import {
   DEFAULT_ADMIN_PUBLIC_HOST,
   DEFAULT_VISITOR_ROOT_DOMAIN,
@@ -31,11 +32,32 @@ type InviteEntryRow = {
   consumed_at: string | null;
 };
 
+type ActiveAdminContext = {
+  sessionId: string;
+  adminId: string;
+  username: string;
+  role: 'SUPER_ADMIN' | 'OPERATOR';
+};
+
+type ActiveAdminSessionRow = {
+  id: string;
+  admin_id: string;
+  username: string;
+  role: 'SUPER_ADMIN' | 'OPERATOR';
+  created_at: string;
+  last_seen_at: string | null;
+  expires_at: string;
+};
+
+type SettingsRow = { value_json: string };
+
 const inner = worker as WorkerModule;
 const ADMIN_MESSAGE_READ = /^\/api\/sessions\/[^/]+\/messages$/;
 const INVITE_CONSUME = /^\/api\/guest\/[a-f0-9]{40}$/i;
 const OPERATOR_PASSWORD_RESET = /^\/api\/admin\/operators\/[^/]+\/reset-password$/;
 const SENSITIVE_PROFILE_MAX_BYTES = 16 * 1024;
+const ACTIVE_ADMIN_SESSION_PREFIX = 'admin_active_session:';
+const ADMIN_SESSION_META_PREFIX = 'admin_session_meta:';
 
 function hardenedPlain(status: number, body: string, extraHeaders: Record<string, string> = {}) {
   return new Response(body, {
@@ -53,7 +75,7 @@ function hardenedPlain(status: number, body: string, extraHeaders: Record<string
   });
 }
 
-function hardenedJson(status: number, body: Record<string, unknown>) {
+function hardenedJson(status: number, body: Record<string, unknown>, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -64,6 +86,7 @@ function hardenedJson(status: number, body: Record<string, unknown>) {
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
       'X-Robots-Tag': 'noindex, nofollow, noarchive',
+      ...extraHeaders,
     },
   });
 }
@@ -118,6 +141,24 @@ function requestWithOnlyCookie(req: Request, cookieName: string) {
 
 function clientIp(req: Request) {
   return String(req.headers.get('cf-connecting-ip') || 'unknown').trim().slice(0, 80);
+}
+
+function activeAdminSessionKey(adminId: string) {
+  return `${ACTIVE_ADMIN_SESSION_PREFIX}${adminId}`;
+}
+
+function adminSessionMetaKey(sessionId: string) {
+  return `${ADMIN_SESSION_META_PREFIX}${sessionId}`;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function responseCookieValue(response: Response, cookieName: string) {
+  const setCookie = response.headers.get('set-cookie') || '';
+  const match = setCookie.match(new RegExp(`(?:^|,\\s*)${escapeRegExp(cookieName)}=([^;]+)`));
+  return match?.[1]?.trim() || '';
 }
 
 async function limitedByIp(req: Request, env: Env, key: string, limit: number, windowMs: number) {
@@ -185,7 +226,7 @@ async function sensitiveIdentityMutation(req: Request) {
   if (method !== 'PATCH' || url.pathname !== '/api/admins/profile') return false;
 
   const { body, tooLarge } = await readJsonObjectWithinLimit(req, SENSITIVE_PROFILE_MAX_BYTES);
-  if (tooLarge) return false; // the inner request-size boundary returns 413 without parsing it as a profile change
+  if (tooLarge) return false;
   const username = typeof body.username === 'string' ? body.username.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
   return Boolean(username || password);
@@ -209,6 +250,161 @@ async function recentAdminSession(env: Env, req: Request) {
   return Boolean(row?.id);
 }
 
+async function activeAdminContext(env: Env, req: Request): Promise<ActiveAdminContext | null> {
+  const signed = readCookie(req, COOKIE_NAMES.admin);
+  const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
+  if (!sessionId) return null;
+  const tokenHash = await hashSessionToken(env.SESSION_SECRET, sessionId);
+  const row = await env.DB.prepare(
+    `SELECT s.id session_id,a.id admin_id,a.username,a.role
+       FROM admin_sessions s
+       JOIN admins a ON a.id=s.admin_id
+      WHERE s.id=? AND s.token_hash=? AND s.revoked_at IS NULL
+        AND datetime(s.expires_at)>datetime('now')
+        AND datetime(s.created_at)>datetime('now','-1 day')
+        AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
+        AND COALESCE(a.is_disabled,0)=0
+      LIMIT 1`,
+  ).bind(sessionId, tokenHash).first<{
+    session_id: string;
+    admin_id: string;
+    username: string;
+    role: 'SUPER_ADMIN' | 'OPERATOR';
+  }>();
+  if (!row?.session_id || !row.admin_id) return null;
+  return { sessionId: row.session_id, adminId: row.admin_id, username: row.username, role: row.role };
+}
+
+async function writeAdminSessionMetadata(env: Env, req: Request, sessionId: string, timestamp = new Date().toISOString()) {
+  const metadata = clientMetadataFromRequest(req, timestamp);
+  await env.DB.prepare(
+    `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+  ).bind(adminSessionMetaKey(sessionId), JSON.stringify(metadata), timestamp).run();
+}
+
+async function activateLoginSession(req: Request, env: Env, response: Response) {
+  if (!response.ok) return response;
+  const signed = responseCookieValue(response, COOKIE_NAMES.admin);
+  const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
+  if (!sessionId) return response;
+  const tokenHash = await hashSessionToken(env.SESSION_SECRET, sessionId);
+  const session = await env.DB.prepare(
+    'SELECT admin_id FROM admin_sessions WHERE id=? AND token_hash=? AND revoked_at IS NULL LIMIT 1',
+  ).bind(sessionId, tokenHash).first<{ admin_id: string }>();
+  if (!session?.admin_id) {
+    return hardenedJson(503, { error: 'session_activation_failed' }, { 'Set-Cookie': clearSessionCookie(COOKIE_NAMES.admin) });
+  }
+  const timestamp = new Date().toISOString();
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        'UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE admin_id=? AND id<>? AND revoked_at IS NULL',
+      ).bind(timestamp, session.admin_id, sessionId),
+      env.DB.prepare(
+        `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
+          ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+      ).bind(activeAdminSessionKey(session.admin_id), sessionId, timestamp),
+    ]);
+    await writeAdminSessionMetadata(env, req, sessionId, timestamp);
+    return response;
+  } catch (error) {
+    console.error('Failed to activate single admin session', error);
+    await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=?')
+      .bind(timestamp, sessionId).run().catch(() => {});
+    return hardenedJson(503, { error: 'session_activation_failed' }, { 'Set-Cookie': clearSessionCookie(COOKIE_NAMES.admin) });
+  }
+}
+
+async function enforceSingleAdminSession(req: Request, env: Env) {
+  const context = await activeAdminContext(env, req);
+  if (!context) return null;
+  const key = activeAdminSessionKey(context.adminId);
+  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
+    .bind(key).first<SettingsRow>();
+  const timestamp = new Date().toISOString();
+  if (!row?.value_json) {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
+          ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+      ).bind(key, context.sessionId, timestamp),
+      env.DB.prepare(
+        'UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE admin_id=? AND id<>? AND revoked_at IS NULL',
+      ).bind(timestamp, context.adminId, context.sessionId),
+    ]);
+    await writeAdminSessionMetadata(env, req, context.sessionId, timestamp).catch(() => {});
+    return null;
+  }
+  if (row.value_json === context.sessionId) return null;
+  await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=? AND revoked_at IS NULL')
+    .bind(timestamp, context.sessionId).run().catch(() => {});
+  return hardenedJson(401, { error: 'session_replaced' }, { 'Set-Cookie': clearSessionCookie(COOKIE_NAMES.admin) });
+}
+
+async function handleActiveAdminSessions(req: Request, env: Env) {
+  const current = await activeAdminContext(env, req);
+  if (!current) return hardenedJson(401, { error: 'unauthenticated' });
+  if (current.role !== 'SUPER_ADMIN') return hardenedJson(403, { error: 'forbidden' });
+  const rows = await env.DB.prepare(
+    `SELECT s.id,a.id admin_id,a.username,a.role,s.created_at,s.last_seen_at,s.expires_at
+       FROM admin_sessions s
+       JOIN admins a ON a.id=s.admin_id
+       JOIN settings active ON active.key=('admin_active_session:' || a.id) AND active.value_json=s.id
+      WHERE s.revoked_at IS NULL
+        AND datetime(s.expires_at)>datetime('now')
+        AND datetime(s.created_at)>datetime('now','-1 day')
+        AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
+        AND COALESCE(a.is_disabled,0)=0
+      ORDER BY datetime(COALESCE(s.last_seen_at,s.created_at)) DESC`,
+  ).all<ActiveAdminSessionRow>();
+  const sessions = [];
+  for (const row of rows.results || []) {
+    let deviceLabel = '';
+    let approximateLocation = '';
+    const meta = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
+      .bind(adminSessionMetaKey(row.id)).first<SettingsRow>();
+    if (meta?.value_json) {
+      try {
+        const parsed = JSON.parse(meta.value_json) as { deviceLabel?: unknown; approximateLocation?: unknown };
+        deviceLabel = typeof parsed.deviceLabel === 'string' ? parsed.deviceLabel : '';
+        approximateLocation = typeof parsed.approximateLocation === 'string' ? parsed.approximateLocation : '';
+      } catch {
+        // Old or malformed metadata is shown as unknown instead of guessed.
+      }
+    }
+    sessions.push({
+      id: row.id,
+      adminId: row.admin_id,
+      username: row.username,
+      role: row.role,
+      createdAt: row.created_at,
+      lastSeenAt: row.last_seen_at,
+      expiresAt: row.expires_at,
+      deviceLabel,
+      approximateLocation,
+      isCurrent: row.id === current.sessionId,
+    });
+  }
+  return hardenedJson(200, { sessions });
+}
+
+async function preserveDisplayNameForLoginUsernameChange(req: Request, env: Env, response: Response, profileReq: Request) {
+  if (!response.ok) return response;
+  const parsed = await profileReq.json().catch(() => null) as { username?: unknown; displayName?: unknown } | null;
+  const username = typeof parsed?.username === 'string' ? parsed.username.trim() : '';
+  if (!username || typeof parsed?.displayName === 'string') return response;
+  const current = await activeAdminContext(env, req);
+  if (!current || current.role !== 'SUPER_ADMIN') return response;
+  const stored = await env.DB.prepare('SELECT display_name FROM admins WHERE id=? LIMIT 1')
+    .bind(current.adminId).first<{ display_name: string | null }>();
+  if (stored?.display_name === undefined) return response;
+  // runtimeWorker historically couples username and display_name. Restore the independent
+  // public display name immediately after a login-username-only change.
+  await env.DB.prepare('UPDATE admins SET display_name=? WHERE id=?').bind(stored.display_name, current.adminId).run();
+  return response;
+}
+
 export default {
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     await inner.scheduled?.(controller, env, ctx);
@@ -223,15 +419,37 @@ export default {
     if (!domains) return hardenedPlain(503, 'Service unavailable');
 
     if (host === domains.admin) {
+      const adminReq = requestWithOnlyCookie(req, COOKIE_NAMES.admin);
+      const method = req.method.toUpperCase();
+      const isLogin = url.pathname === '/api/auth/login' && method === 'POST';
+
       const setupLimit = await adminSetupLimited(req, env);
       if (setupLimit) return setupLimit;
       if (crossSiteReadMutation(req)) return hardenedPlain(403, 'Forbidden');
-      if (await sensitiveIdentityMutation(req) && !(await recentAdminSession(env, req))) {
+
+      if (!isLogin) {
+        const replaced = await enforceSingleAdminSession(adminReq, env);
+        if (replaced) return replaced;
+      }
+
+      if (url.pathname === '/api/admin/security/sessions' && method === 'GET') {
+        return handleActiveAdminSessions(adminReq, env);
+      }
+
+      if (await sensitiveIdentityMutation(req) && !(await recentAdminSession(env, adminReq))) {
         return hardenedJson(403, { error: 'reauthentication_required' });
       }
-      // The admin hostname accepts only the host-bound admin session. Manually replayed
-      // guest/account cookies and Authorization headers cannot activate visitor branches.
-      return inner.fetch(requestWithOnlyCookie(req, COOKIE_NAMES.admin), env, ctx);
+
+      if (isLogin) {
+        const response = await inner.fetch(adminReq, env, ctx);
+        return activateLoginSession(req, env, response);
+      }
+
+      const profileReq = url.pathname === '/api/admins/profile' && method === 'PATCH'
+        ? req.clone() as unknown as Request
+        : null;
+      const response = await inner.fetch(adminReq, env, ctx);
+      return profileReq ? preserveDisplayNameForLoginUsernameChange(adminReq, env, response, profileReq) : response;
     }
 
     const visitor = visitorContext(host, domains.visitorRoots);
@@ -249,8 +467,6 @@ export default {
       return hardenedPlain(404, 'Not found');
     }
 
-    // The visitor hostname can authenticate only as its guest session. A stolen admin
-    // cookie or Authorization credential replayed by a raw HTTP client is discarded.
     return inner.fetch(requestWithOnlyCookie(req, COOKIE_NAMES.guest), env, ctx);
   },
 };
