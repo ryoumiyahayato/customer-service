@@ -1,24 +1,20 @@
 name: PR52 P2 convergence
 
 on:
-  push:
-    branches:
-      - fix/p0-security-boundaries-20260809
-    paths:
-      - scripts/apply-pr52-p2-fixes.mjs
-      - .github/workflows/pr52-p2-transform.yml
+  pull_request:
+    types: [synchronize, opened, reopened, ready_for_review]
 
 permissions:
   contents: write
 
 jobs:
   transform:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.number == 52 && github.event.pull_request.head.ref == 'fix/p0-security-boundaries-20260809' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fix/p0-security-boundaries-20260809
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -29,11 +25,10 @@ jobs:
         run: node scripts/apply-pr52-p2-fixes.mjs
       - name: Typecheck
         run: npm run typecheck
-      - name: Unit tests
-        run: npm test -- --runInBand
-        continue-on-error: true
       - name: Repository unit tests
-        run: node --test tests/unit/*.test.mjs
+        run: npm run test:unit
+      - name: SQLite integration tests
+        run: npm run test:integration
       - name: Remove one-shot transformer
         run: |
           rm -f scripts/apply-pr52-p2-fixes.mjs
