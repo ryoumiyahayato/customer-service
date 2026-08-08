@@ -3,6 +3,7 @@ import worker from './worker-public-gate';
 import type { Env } from './worker';
 import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { consumeRateLimit } from './security/rateLimit';
+import { readJsonObjectWithinLimit } from './security/requestLimits';
 import { hmacHex, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import {
@@ -34,6 +35,7 @@ const inner = worker as WorkerModule;
 const ADMIN_MESSAGE_READ = /^\/api\/sessions\/[^/]+\/messages$/;
 const INVITE_CONSUME = /^\/api\/guest\/[a-f0-9]{40}$/i;
 const OPERATOR_PASSWORD_RESET = /^\/api\/admin\/operators\/[^/]+\/reset-password$/;
+const SENSITIVE_PROFILE_MAX_BYTES = 16 * 1024;
 
 function hardenedPlain(status: number, body: string, extraHeaders: Record<string, string> = {}) {
   return new Response(body, {
@@ -173,12 +175,18 @@ function crossSiteReadMutation(req: Request) {
   return false;
 }
 
-function sensitiveIdentityMutation(req: Request) {
+async function sensitiveIdentityMutation(req: Request) {
   const url = new URL(req.url);
   const method = req.method.toUpperCase();
   if (method === 'POST' && url.pathname === '/api/admins') return true;
-  if (method === 'PATCH' && url.pathname === '/api/admins/profile') return true;
-  return method === 'POST' && OPERATOR_PASSWORD_RESET.test(url.pathname);
+  if (method === 'POST' && OPERATOR_PASSWORD_RESET.test(url.pathname)) return true;
+  if (method !== 'PATCH' || url.pathname !== '/api/admins/profile') return false;
+
+  const { body, tooLarge } = await readJsonObjectWithinLimit(req, SENSITIVE_PROFILE_MAX_BYTES);
+  if (tooLarge) return false; // the inner request-size boundary returns 413 without parsing it as a profile change
+  const username = typeof body.username === 'string' ? body.username.trim() : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  return Boolean(username || password);
 }
 
 async function recentAdminSession(env: Env, req: Request) {
@@ -214,7 +222,7 @@ export default {
 
     if (host === domains.admin) {
       if (crossSiteReadMutation(req)) return hardenedPlain(403, 'Forbidden');
-      if (sensitiveIdentityMutation(req) && !(await recentAdminSession(env, req))) {
+      if (await sensitiveIdentityMutation(req) && !(await recentAdminSession(env, req))) {
         return hardenedJson(403, { error: 'reauthentication_required' });
       }
       // The admin hostname accepts only the host-bound admin session. Manually replayed
