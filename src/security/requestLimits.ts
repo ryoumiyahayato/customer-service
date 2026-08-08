@@ -4,12 +4,17 @@ export function jsonObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export function contentLengthExceeds(request: Request, maxBytes: number) {
+// Cloudflare's Request type carries host/CF metadata generics at the Worker entrypoint.
+// The size guards use only standard request fields, so accept any metadata specialization
+// instead of forcing the default generic and rejecting otherwise-valid Worker requests.
+type WorkerRequest = Request<any, any>;
+
+export function contentLengthExceeds(request: WorkerRequest, maxBytes: number) {
   const raw = request.headers.get('content-length');
   return Boolean(raw && Number(raw) > maxBytes);
 }
 
-export async function requestStreamExceeds(request: Request, maxBytes: number) {
+export async function requestStreamExceeds(request: WorkerRequest, maxBytes: number) {
   if (contentLengthExceeds(request, maxBytes)) return true;
   const reader = request.clone().body?.getReader();
   if (!reader) return false;
@@ -30,7 +35,7 @@ export async function requestStreamExceeds(request: Request, maxBytes: number) {
   }
 }
 
-export async function readJsonObjectWithinLimit(request: Request, maxBytes: number) {
+export async function readJsonObjectWithinLimit(request: WorkerRequest, maxBytes: number) {
   if (await requestStreamExceeds(request, maxBytes)) {
     return { body: {}, tooLarge: true } as const;
   }
