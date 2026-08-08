@@ -24,6 +24,8 @@ jobs:
         run: node scripts/prepare-pr52-transform-shapes.mjs
       - name: Apply asserted P2 transform
         run: node scripts/apply-pr52-final-p2.mjs
+      - name: Align typed runtime consumers
+        run: node scripts/prepare-pr52-type-fixes.mjs
       - name: Align static architecture assertions
         run: node scripts/prepare-pr52-static-checks.mjs
       - name: Security and architecture checks
@@ -41,7 +43,7 @@ jobs:
           set -euo pipefail
           git fetch -q origin main
           git checkout origin/main -- .github/workflows/productization-validation.yml
-          rm -f scripts/apply-pr52-final-p2.mjs scripts/prepare-pr52-transform-shapes.mjs scripts/prepare-pr52-static-checks.mjs
+          rm -f scripts/apply-pr52-final-p2.mjs scripts/prepare-pr52-transform-shapes.mjs scripts/prepare-pr52-static-checks.mjs scripts/prepare-pr52-type-fixes.mjs
       - name: Commit only after validation passes
         run: |
           set -euo pipefail
