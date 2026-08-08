@@ -9,16 +9,43 @@ import {
   wranglerInvocation,
 } from '../../scripts/deployment-safety-lib.mjs';
 
-test('Workers Builds fail closed outside main and when branch metadata is missing', () => {
+test('Workers Builds require branch metadata and separate preview from production intent', () => {
   assert.deepEqual(workersBuildBranchDecision({}), {
     workersBuild: false,
     allowed: true,
     branch: '',
     reason: 'not_workers_build',
+    production: false,
   });
-  assert.equal(workersBuildBranchDecision({ WORKERS_CI: '1' }).allowed, false);
-  assert.equal(workersBuildBranchDecision({ WORKERS_CI: '1', WORKERS_CI_BRANCH: 'feature/test' }).allowed, false);
-  assert.equal(workersBuildBranchDecision({ WORKERS_CI: '1', WORKERS_CI_BRANCH: 'main' }).allowed, true);
+  assert.deepEqual(workersBuildBranchDecision({ WORKERS_CI: '1' }), {
+    workersBuild: true,
+    allowed: false,
+    branch: '',
+    reason: 'missing_branch',
+    production: false,
+  });
+  assert.deepEqual(workersBuildBranchDecision({ WORKERS_CI: '1', WORKERS_CI_BRANCH: 'feature/test' }), {
+    workersBuild: true,
+    allowed: true,
+    branch: 'feature/test',
+    reason: 'preview_branch',
+    production: false,
+  });
+  assert.deepEqual(workersBuildBranchDecision({ WORKERS_CI: '1', WORKERS_CI_BRANCH: 'main' }), {
+    workersBuild: true,
+    allowed: true,
+    branch: 'main',
+    reason: 'production_branch',
+    production: true,
+  });
+});
+
+test('Cloudflare build gate permits version builds but keeps migration verification main-only', async () => {
+  const gate = await readFile(new URL('../../scripts/guard-cloudflare-workers-build.mjs', import.meta.url), 'utf8');
+  assert.match(gate, /if \(!decision\.production\)/);
+  assert.match(gate, /may build\/upload a version; production promotion is not authorized/);
+  assert.ok(gate.indexOf('if (!decision.production)') < gate.indexOf('migrationListArgs()'));
+  assert.match(gate, /Pending remote D1 migrations block automatic production deployment/);
 });
 
 test('wrangler migration invocation never drops the d1 subcommand', () => {
