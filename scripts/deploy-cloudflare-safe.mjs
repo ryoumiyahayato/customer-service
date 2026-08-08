@@ -1,389 +1,198 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import readline from 'node:readline';
+import {
+  extractPendingMigrationNames,
+  migrationApplyArgs,
+  migrationListArgs,
+  wranglerInvocation,
+} from './deployment-safety-lib.mjs';
 
 const root = process.cwd();
-const isWin = process.platform === 'win32';
-const npmCmd = isWin ? 'npm.cmd' : 'npm';
-const npxCmd = isWin ? 'npx.cmd' : 'npx';
+const isWindows = process.platform === 'win32';
+const npmBin = isWindows ? 'npm.cmd' : 'npm';
+const npxBin = isWindows ? 'npx.cmd' : 'npx';
+const rawArgs = process.argv.slice(2);
+const applyMigrations = rawArgs.includes('--apply-migrations');
+const showHelp = rawArgs.includes('--help') || rawArgs.includes('-h');
+const unknownArgs = rawArgs.filter(arg => !['--apply-migrations', '--help', '-h'].includes(arg));
 
-const args = new Set(process.argv.slice(2));
-const applyMigrations = args.has('--apply-migrations');
-const showHelp = args.has('--help') || args.has('-h');
-
-function print(...msg) { console.log(...msg); }
-function fail(msg) { console.error(`ERROR: ${msg}`); process.exit(1); }
-
-function run(cmd, argsArr, opts = {}) {
-  const { cwd = root, stdio = 'inherit', env = process.env, ignoreError = false } = opts;
-  const result = spawnSync(cmd, argsArr, { cwd, stdio, env, shell: isWin, timeout: 120000 });
-  if (result.error && !ignoreError) fail(`Command failed: ${cmd} ${argsArr.join(' ')}\n${result.error.message}`);
-  const ok = result.status === 0;
-  return { ok, status: result.status, stdout: result.stdout?.toString() || '', stderr: result.stderr?.toString() || '' };
+function print(...values) {
+  console.log(...values);
 }
 
-function capture(cmd, argsArr, opts = {}) {
-  const { cwd = root, env = process.env, ignoreError = true } = opts;
-  const result = spawnSync(cmd, argsArr, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env, shell: isWin, timeout: 120000 });
+function fail(message) {
+  console.error(`ERROR: ${message}`);
+  process.exit(1);
+}
+
+function commandResult(command, args, { capture = false, ignoreError = false } = {}) {
+  const result = spawnSync(command, args, {
+    cwd: root,
+    env: process.env,
+    stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+    encoding: capture ? 'utf8' : undefined,
+    shell: isWindows,
+    timeout: 120000,
+  });
+  if (result.error && !ignoreError) fail(`${command} failed: ${result.error.message}`);
   return {
-    ok: result.status === 0,
+    ok: !result.error && result.status === 0,
     status: result.status,
-    stdout: result.stdout?.toString() || '',
-    stderr: result.stderr?.toString() || '',
+    stdout: String(result.stdout || ''),
+    stderr: String(result.stderr || ''),
   };
 }
 
-function checkScriptExists(name) {
-  const pkgPath = path.join(root, 'package.json');
-  if (!existsSync(pkgPath)) fail('package.json not found');
-  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-  if (!pkg.scripts?.[name]) fail(`Script "${name}" is missing from package.json`);
+function run(command, args) {
+  const result = commandResult(command, args);
+  if (!result.ok) fail(`Command failed: ${command} ${args.join(' ')}`);
+  return result;
 }
 
-function askQuestion(query) {
+function capture(command, args) {
+  return commandResult(command, args, { capture: true, ignoreError: true });
+}
+
+function packageScript(name) {
+  const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+  return typeof pkg.scripts?.[name] === 'string' ? pkg.scripts[name] : '';
+}
+
+function requireScript(name) {
+  if (!packageScript(name)) fail(`Required package script is missing: ${name}`);
+}
+
+function ask(query) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => rl.question(query, answer => { rl.close(); resolve(answer); }));
+  return new Promise(resolve => rl.question(query, answer => {
+    rl.close();
+    resolve(answer);
+  }));
 }
 
-if (showHelp) {
-  print('Safe Cloudflare Deploy Tool');
+function wrangler(args) {
+  const local = path.join(root, 'node_modules', '.bin', `wrangler${isWindows ? '.cmd' : ''}`);
+  return wranglerInvocation(existsSync(local) ? local : '', npxBin, args);
+}
+
+function remoteMigrationState() {
+  const invocation = wrangler(migrationListArgs());
+  const result = capture(invocation.command, invocation.args);
+  if (!result.ok) {
+    const detail = String(result.stderr || result.stdout || '').trim();
+    fail(`Could not verify remote D1 migration state; deployment is blocked.${detail ? ` ${detail}` : ''}`);
+  }
+  return extractPendingMigrationNames(`${result.stdout}\n${result.stderr}`);
+}
+
+async function ensureMigrations() {
+  let pending = remoteMigrationState();
+  if (!pending.length) {
+    print('Remote D1 migrations: none pending');
+    return;
+  }
+
+  print('Pending remote D1 migrations:');
+  for (const migration of pending) print(`  - ${migration}`);
+  if (!applyMigrations) {
+    fail(`Pending D1 migrations block deployment. Re-run with: ${npmBin} run deploy:safe -- --apply-migrations`);
+  }
+  if (!process.stdin.isTTY) {
+    fail('Migration application requires an interactive terminal; refusing non-interactive production mutation.');
+  }
+
+  const answer = String(await ask('Apply these remote D1 migrations before deployment? Type yes or no: ')).trim().toLowerCase();
+  if (answer !== 'yes' && answer !== 'y') fail('Migration application cancelled; deployment was not started.');
+
+  const invocation = wrangler(migrationApplyArgs());
+  run(invocation.command, invocation.args);
+
+  pending = remoteMigrationState();
+  if (pending.length) {
+    fail(`Remote D1 migrations remain pending after apply: ${pending.join(', ')}`);
+  }
+  print('Remote D1 migrations applied and re-verified.');
+}
+
+function showUsage() {
+  print('Guarded Cloudflare production deploy');
   print('');
   print('Usage:');
-  print(`  ${npmCmd} run deploy:safe`);
-  print(`  ${npmCmd} run deploy:safe -- --apply-migrations`);
-  print(`  ${npmCmd} run deploy:safe -- --help`);
+  print(`  ${npmBin} run deploy:safe`);
+  print(`  ${npmBin} run deploy:safe -- --apply-migrations`);
   print('');
-  print('Description:');
-  print('  Deploys the current main branch to Cloudflare test environment.');
-  print('  Runs pre-deployment checks, typecheck, build, and deploy.');
-  print('');
-  print('Options:');
-  print('  --apply-migrations  Allow applying pending D1 remote migrations');
-  print('                      (requires yes/no confirmation)');
-  print('  --help, -h          Show this help');
-  print('');
-  print('Security:');
-  print('  - Does NOT run lifecycle:dry-run');
-  print('  - Does NOT modify Wrangler secrets');
-  print('  - Does NOT delete R2 objects');
-  print('  - Does NOT auto commit/push/tag');
-  print('  - Does NOT run setup initialize');
-  print('  - Does NOT run git add .');
-  print('  - Pending D1 migrations block deployment unless --apply-migrations is used');
-  print('  - Migration requires yes/no confirmation (empty input defaults to no)');
-  print('  - Non-interactive environments cannot confirm migration');
-  process.exit(0);
+  print('The deploy is allowed only from a clean main branch exactly matching origin/main.');
+  print('Remote D1 migration state must be readable. Pending migrations block deploy unless');
+  print('--apply-migrations is provided and explicitly confirmed in an interactive terminal.');
 }
 
-const summary = {};
-
-function main() {
-  print('========================================');
-  print('  Safe Cloudflare Deploy Tool');
-  print('========================================');
-  print('');
-  print('  This tool deploys the current main branch to the');
-  print('  Cloudflare test environment.');
-  print('');
-  print('  What it does:');
-  print('  - Git status check');
-  print('  - TypeScript type check');
-  print('  - Doctor security check');
-  print('  - CI lifecycle check');
-  print('  - Obvious code issue scan');
-  print('  - Pending D1 migration check');
-  print('  - Build and Wrangler deploy');
-  print('  - dist cleanup');
-  print('');
-  print('  What it does NOT do:');
-  print('  - lifecycle:dry-run');
-  print('  - Modify Wrangler secrets');
-  print('  - Delete R2 objects');
-  print('  - Auto commit/push/tag');
-  print('  - git add .');
-  print('  - Setup initialize');
-  print('  - SSH/VPS operations');
-  print('  - Build EXE/APK/IPA');
-  print('');
-  print('  Migration confirmation:');
-  print('  - No pending migration: auto-deploy, no confirmation needed');
-  print('  - Pending migration: blocked unless --apply-migrations is used');
-  print('  - With --apply-migrations: yes/no prompt (default: no)');
-  print('');
-
-  // 1. Git checks
-  print('--- Step 1: Git checks ---');
-  summary.branch = '';
-  summary.head = '';
-  summary.originSynced = '';
-
-  const branchResult = capture('git', ['branch', '--show-current']);
-  if (!branchResult.ok) fail('Not a git repository');
-  const branch = branchResult.stdout.trim();
-  summary.branch = branch;
-  print(`Current branch: ${branch}`);
-
-  if (branch !== 'main') fail(`Current branch is "${branch}", not "main". Switch to main first.`);
-
-  const statusResult = capture('git', ['status', '--short']);
-  if (!statusResult.ok) fail('Could not read git status');
-  if (statusResult.stdout.trim().length > 0) {
-    print('Working tree has uncommitted changes:');
-    print(statusResult.stdout.trim());
-    fail('Working tree is not clean. Commit or stash changes first.');
+async function main() {
+  if (showHelp) {
+    showUsage();
+    return;
   }
-  print('Working tree: clean');
+  if (unknownArgs.length) fail(`Unsupported arguments: ${unknownArgs.join(' ')}`);
 
-  const logResult = capture('git', ['log', '-1', '--oneline']);
-  summary.head = logResult.stdout.trim();
-  print(`HEAD: ${summary.head}`);
+  print('=== Guarded Cloudflare production deploy ===');
 
-  print('Fetching origin/main...');
-  const fetchResult = capture('git', ['fetch', 'origin', 'main']);
-  if (!fetchResult.ok) fail('Could not fetch origin/main. Check your network or git remote.');
+  const branch = capture('git', ['branch', '--show-current']);
+  if (!branch.ok) fail('Not a git repository.');
+  if (branch.stdout.trim() !== 'main') fail(`Current branch is "${branch.stdout.trim()}", not "main".`);
 
-  const syncResult = capture('git', ['status', '-sb']);
-  const syncOutput = syncResult.stdout.trim();
-  summary.originSynced = true;
-  if (syncOutput.includes('behind')) {
-    summary.originSynced = false;
-    fail('Local main is behind origin/main. Pull latest changes first.');
+  const status = capture('git', ['status', '--porcelain']);
+  if (!status.ok) fail('Could not read git status.');
+  if (status.stdout.trim()) fail('Working tree is not clean. Commit or stash changes first.');
+
+  const fetch = capture('git', ['fetch', 'origin', 'main']);
+  if (!fetch.ok) fail('Could not fetch origin/main; refusing deployment without remote branch verification.');
+  const localHead = capture('git', ['rev-parse', 'HEAD']);
+  const remoteHead = capture('git', ['rev-parse', 'origin/main']);
+  if (!localHead.ok || !remoteHead.ok) fail('Could not resolve local and remote main revisions.');
+  if (localHead.stdout.trim() !== remoteHead.stdout.trim()) {
+    fail(`Local main (${localHead.stdout.trim()}) does not exactly match origin/main (${remoteHead.stdout.trim()}).`);
   }
-  if (syncOutput.includes('ahead')) {
-    summary.originSynced = false;
-    fail('Local main is ahead of origin/main. Push or reset first.');
+  print(`main revision: ${localHead.stdout.trim()}`);
+
+  for (const script of ['check:obvious', 'typecheck', 'doctor', 'lifecycle:ci-check', 'build']) requireScript(script);
+
+  run(npmBin, ['run', 'check:obvious']);
+  if (existsSync(path.join(root, 'scripts', 'check-chat-message-text.mjs'))) {
+    run('node', ['scripts/check-chat-message-text.mjs']);
   }
-  print('Origin synced: yes');
-  print('');
+  if (existsSync(path.join(root, 'scripts', 'check-session-lifecycle.mjs'))) {
+    run('node', ['scripts/check-session-lifecycle.mjs']);
+  }
+  run(npmBin, ['run', 'typecheck']);
+  run(npmBin, ['run', 'doctor']);
+  run(npmBin, ['run', 'lifecycle:ci-check']);
 
-  // 2. Package script checks
-  print('--- Step 2: Package script validation ---');
-  const requiredScripts = ['typecheck', 'doctor', 'lifecycle:ci-check', 'build', 'deploy', 'check:obvious'];
-  for (const script of requiredScripts) checkScriptExists(script);
-  print('All required scripts exist: typecheck, doctor, lifecycle:ci-check, build, deploy, check:obvious');
-  print('');
+  await ensureMigrations();
 
-  // 3. Run obvious code issues check
-  print('--- Step 3: Obvious code issues check ---');
-  summary.checkObvious = '';
-  const obviousResult = run(npmCmd, ['run', 'check:obvious']);
-  if (!obviousResult.ok) fail('Obvious code issues found. Fix them and rerun.');
-  summary.checkObvious = 'PASS';
-  print('');
+  run(npmBin, ['run', 'build']);
 
-  // 4. Run existing checks
-  print('--- Step 4: Running existing checks ---');
+  const deployInvocation = wrangler(['deploy']);
+  const deploy = commandResult(deployInvocation.command, deployInvocation.args, { capture: true });
+  if (!deploy.ok) {
+    process.stdout.write(deploy.stdout);
+    process.stderr.write(deploy.stderr);
+    fail('Wrangler deploy failed.');
+  }
+  process.stdout.write(deploy.stdout);
+  process.stderr.write(deploy.stderr);
 
-  // check-chat-message-text
-  summary.checkChatMessageText = '';
-  const chatMsgScript = path.join(root, 'scripts', 'check-chat-message-text.mjs');
-  if (existsSync(chatMsgScript)) {
-    print('Running check-chat-message-text...');
-    const chatResult = run('node', ['scripts/check-chat-message-text.mjs']);
-    if (!chatResult.ok) fail('check-chat-message-text failed.');
-    summary.checkChatMessageText = 'PASS';
-  } else {
-    summary.checkChatMessageText = 'SKIP (not found)';
+  commandResult('git', ['checkout', '--', 'dist'], { ignoreError: true });
+  commandResult('git', ['clean', '-fd', '--', 'dist'], { ignoreError: true });
+  const finalStatus = capture('git', ['status', '--porcelain']);
+  if (!finalStatus.ok || finalStatus.stdout.trim()) {
+    fail('Deployment completed but the working tree is not clean; inspect generated files before continuing.');
   }
 
-  // check-session-lifecycle
-  summary.checkSessionLifecycle = '';
-  const sessionLifecycleScript = path.join(root, 'scripts', 'check-session-lifecycle.mjs');
-  if (existsSync(sessionLifecycleScript)) {
-    print('Running check-session-lifecycle...');
-    const sessionResult = run('node', ['scripts/check-session-lifecycle.mjs']);
-    if (!sessionResult.ok) fail('check-session-lifecycle failed.');
-    summary.checkSessionLifecycle = 'PASS';
-  } else {
-    summary.checkSessionLifecycle = 'SKIP (not found)';
-  }
-
-  // typecheck
-  print('Running typecheck...');
-  summary.typecheck = '';
-  const tcResult = run(npmCmd, ['run', 'typecheck']);
-  if (!tcResult.ok) fail('Typecheck failed. Fix TypeScript errors and rerun.');
-  summary.typecheck = 'PASS';
-  print('');
-
-  // doctor
-  print('Running doctor...');
-  summary.doctor = '';
-  const docResult = run(npmCmd, ['run', 'doctor']);
-  if (!docResult.ok) fail('Doctor check failed. Resolve issues and rerun.');
-  summary.doctor = 'PASS';
-  print('');
-
-  // lifecycle:ci-check
-  print('Running lifecycle:ci-check...');
-  summary.lifecycleCiCheck = '';
-  const ciResult = run(npmCmd, ['run', 'lifecycle:ci-check']);
-  if (!ciResult.ok) fail('Lifecycle CI check failed. Resolve issues and rerun.');
-  summary.lifecycleCiCheck = 'PASS';
-  print('');
-
-  // 5. Check pending D1 migrations
-  print('--- Step 5: Checking pending D1 migrations ---');
-  summary.pendingMigrations = '';
-  summary.migrationsApplied = '';
-
-  const wranglerBin = path.join(root, 'node_modules', '.bin', `wrangler${isWin ? '.cmd' : ''}`);
-  const wranglerCmd = existsSync(wranglerBin) ? wranglerBin : npxCmd;
-  const wranglerArgs = existsSync(wranglerBin) ? [] : ['wrangler'];
-
-  const migListCmd = existsSync(wranglerBin) ? [wranglerBin] : [npxCmd];
-  const migListArgs = existsSync(wranglerBin) ? ['d1', 'migrations', 'list', 'customer_chat_db', '--remote'] : ['wrangler', 'd1', 'migrations', 'list', 'customer_chat_db', '--remote'];
-
-  print('Checking pending migrations...');
-  const migResult = capture(migListCmd[0], migListArgs.slice(1), { ignoreError: true });
-  let pendingMigs = [];
-
-  if (migResult.ok) {
-    const lines = migResult.stdout.split(/\r?\n/);
-    for (const line of lines) {
-      if (line.includes('No migrations')) {
-        break;
-      }
-      if (line.includes('pending') || line.includes('not yet applied')) {
-        pendingMigs.push(line.trim());
-      }
-    }
-  } else {
-    print('Warning: Could not list remote D1 migrations. Continuing but be aware there may be pending migrations.');
-  }
-
-  if (pendingMigs.length > 0) {
-    summary.pendingMigrations = pendingMigs.join(', ');
-    summary.migrationConfirmation = 'not-required';
-    summary.migrationsApplied = 'no';
-    summary.deployStarted = 'no';
-    print(`Pending migrations detected:`);
-    for (const mig of pendingMigs) print(`  - ${mig}`);
-
-    if (!applyMigrations) {
-      fail(
-        `Pending D1 remote migrations detected.\n` +
-        `To apply migrations and deploy, rerun with:\n` +
-        `  ${npmCmd} run deploy:safe -- --apply-migrations`
-      );
-    }
-
-    print('');
-    print('WARNING: Remote D1 migrations will modify the production');
-    print('Cloudflare D1 database. Migration must complete before deploy.');
-    print('');
-
-    if (!process.stdin.isTTY) {
-      fail('Non-interactive environment detected. Cannot confirm migration. Run in an interactive terminal.');
-    }
-
-    const answer = awaitAsk('Continue? Type yes or no: ');
-    const normalized = answer.trim().toLowerCase();
-
-    if (normalized !== 'yes' && normalized !== 'y') {
-      summary.migrationConfirmation = 'cancelled';
-      print('Migration cancelled. Deploy was not started.');
-      process.exit(1);
-    }
-
-    summary.migrationConfirmation = 'yes';
-    print('Applying pending migrations...');
-    const applyCmd = existsSync(wranglerBin) ? wranglerBin : npxCmd;
-    const applyArgs = existsSync(wranglerBin)
-      ? ['d1', 'migrations', 'apply', 'customer_chat_db', '--remote']
-      : ['wrangler', 'd1', 'migrations', 'apply', 'customer_chat_db', '--remote'];
-    const applyResult = run(applyCmd, applyArgs);
-    if (!applyResult.ok) fail('D1 migration apply failed.');
-    summary.migrationsApplied = 'yes';
-    print('Migrations applied successfully.');
-  } else {
-    summary.pendingMigrations = 'none';
-    summary.migrationConfirmation = 'not-required';
-    summary.migrationsApplied = 'N/A';
-    print('No pending migrations. Safe to proceed.');
-  }
-  summary.deployStarted = 'yes';
-  print('');
-
-  // 6. Build
-  print('--- Step 6: Build ---');
-  summary.build = '';
-  print('Running build...');
-  const buildResult = run(npmCmd, ['run', 'build']);
-  if (!buildResult.ok) fail('Build failed.');
-  summary.build = 'PASS';
-  print('');
-
-  // 7. Deploy
-  print('--- Step 7: Deploy ---');
-  summary.deploy = '';
-  summary.cloudflareVersionId = '';
-  print('Running deploy...');
-  const deployResult = capture('npx.cmd', ['wrangler', 'deploy']);
-  if (!deployResult.ok) fail('Deploy failed.');
-  summary.deploy = 'PASS';
-
-  const versionMatch = deployResult.stdout.match(/version_id\s*=\s*['"]([^'"]+)['"]/i) || deployResult.stdout.match(/Version\s*ID:\s*(\S+)/i) || deployResult.stdout.match(/versionId\s*:\s*['"]([^'"]+)['"]/i);
-  summary.cloudflareVersionId = versionMatch ? versionMatch[1] : '(see deploy output)';
-  print('');
-
-  // 8. Cleanup dist
-  print('--- Step 8: dist cleanup ---');
-  summary.distCleanup = '';
-  print('Cleaning dist...');
-
-  const checkoutResult = run('git', ['checkout', '--', 'dist'], { ignoreError: true });
-  const cleanResult = run('git', ['clean', '-fd', '--', 'dist'], { ignoreError: true });
-
-  const finalStatus = capture('git', ['status', '-sb']);
-  summary.finalGitStatus = finalStatus.stdout.trim();
-
-  if (checkoutResult.ok && cleanResult.ok) {
-    summary.distCleanup = 'PASS';
-    print('dist cleaned.');
-  } else {
-    summary.distCleanup = 'WARN (see output)';
-  }
-  print('');
-
-  // 9. Summary
-  print('========================================');
-  print('  Safe Cloudflare Deploy Summary');
-  print('========================================');
-  print(`  branch:                           ${summary.branch}`);
-  print(`  head:                             ${summary.head}`);
-  print(`  origin synced:                    ${summary.originSynced ? 'yes' : 'no'}`);
-  print(`  check:obvious:                    ${summary.checkObvious}`);
-  print(`  check-chat-message-text:          ${summary.checkChatMessageText}`);
-  print(`  check-session-lifecycle:          ${summary.checkSessionLifecycle}`);
-  print(`  typecheck:                        ${summary.typecheck}`);
-  print(`  doctor:                           ${summary.doctor}`);
-  print(`  lifecycle:ci-check:               ${summary.lifecycleCiCheck}`);
-  print(`  pending migrations:               ${summary.pendingMigrations}`);
-  print(`  migration confirmation:           ${summary.migrationConfirmation}`);
-  print(`  migrations applied:               ${summary.migrationsApplied}`);
-  print(`  deploy started:                   ${summary.deployStarted}`);
-  print(`  build:                            ${summary.build}`);
-  print(`  deploy:                           ${summary.deploy}`);
-  print(`  cloudflare version id:            ${summary.cloudflareVersionId}`);
-  print(`  dist cleanup:                     ${summary.distCleanup}`);
-  print(`  final git status:                 ${summary.finalGitStatus}`);
-  print('');
-
-  if (summary.finalGitStatus.includes('??') || summary.finalGitStatus.includes(' M') || summary.finalGitStatus.includes('M ')) {
-    print('WARNING: Final git status is not clean. dist may have leftover changes.');
-  } else {
-    print('Deployment completed successfully. Working tree is clean.');
-  }
+  print('Deployment completed successfully.');
 }
 
-function awaitAsk(query) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => rl.question(query, answer => { rl.close(); resolve(answer); }));
-}
-
-main();
+await main();
