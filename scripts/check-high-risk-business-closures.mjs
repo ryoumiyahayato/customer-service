@@ -74,7 +74,9 @@ assert.match(rateLimit, /reset_at <= \? OR count < \?/);
 assert.match(secureWorker, /requestPath !== '\/api\/upload'/);
 assert.match(secureWorker, /requestPath\.startsWith\('\/api\/'\)/);
 assert.match(secureWorker, /protectUpload[\s\S]*?requestStreamExceeds\(req, UPLOAD_REQUEST_MAX_BYTES\)/);
-assert.match(secureWorker, /GET'[\s\S]*?\/api\\\/sessions\\\/\[\^\/\]\+\\\/messages/);
+assert.match(secureWorker, /const SAFE_METHODS = new Set\(\['GET', 'HEAD', 'OPTIONS'\]\)/);
+assert.match(secureWorker, /shouldProtectAgainstCsrf[\s\S]*?return !SAFE_METHODS\.has\(req\.method\.toUpperCase\(\)\)/);
+assert.match(secureWorker, /shouldProtectAgainstCsrf\(req\)[\s\S]*?!isSameOriginWrite\(req\)/);
 assert.match(secureWorker, /pathname\.startsWith\('\/api\/ws'\)[\s\S]*?!isSameOriginWebSocket/);
 assert.ok(secureWorker.indexOf('const blocked = await preflightSecurity') < secureWorker.indexOf('const eventPromise = auditReq'));
 
