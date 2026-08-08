@@ -167,7 +167,7 @@ function crossSiteReadMutation(req: Request) {
   const site = String(req.headers.get('sec-fetch-site') || '').toLowerCase();
   const mode = String(req.headers.get('sec-fetch-mode') || '').toLowerCase();
   const dest = String(req.headers.get('sec-fetch-dest') || '').toLowerCase();
-  if (site === 'cross-site') return true;
+  if (site && site !== 'same-origin') return true;
   if (mode === 'navigate') return true;
   if (dest && dest !== 'empty') return true;
   return false;
