@@ -11,6 +11,7 @@ type OperatorPresentation = {
 };
 
 type PresentationResponse = { presentation?: OperatorPresentation };
+type ProfileResponse = { profile?: { username?: string; displayName?: string } };
 
 const DEFAULT_PRESENTATION: OperatorPresentation = {
   welcomeText: '您好，请问有什么可以帮您？',
@@ -23,6 +24,9 @@ export default function OperatorProfileSettings({ username, role }: { username: 
   const [saving, setSaving] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [nameEditing, setNameEditing] = useState(false);
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
   const [password, setPassword] = useState('');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -33,16 +37,51 @@ export default function OperatorProfileSettings({ username, role }: { username: 
     apiFetch<PresentationResponse>('/api/admins/presentation', { retryGet: false })
       .then((response) => {
         if (!active) return;
-        setPresentation({ ...DEFAULT_PRESENTATION, ...(response.presentation || {}) });
+        const next = { ...DEFAULT_PRESENTATION, ...(response.presentation || {}) };
+        setPresentation(next);
+        setNameDraft(next.displayName || username || '');
       })
       .catch((err) => { if (active) setError(getErrorMessage(err, '读取账号资料失败')); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [username]);
 
   const flash = (message: string) => {
     setNotice(message);
     setTimeout(() => setNotice(''), 1800);
+  };
+
+  const beginNameEdit = () => {
+    setNameDraft(presentation.displayName || username || '');
+    setNameEditing(true);
+    setError('');
+  };
+
+  const saveDisplayName = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    if (nameSaving) return;
+    const displayName = nameDraft.trim();
+    if (!displayName || Array.from(displayName).length > 80) {
+      setError('名称不能为空且不能超过 80 个字符');
+      return;
+    }
+    setNameSaving(true);
+    setError('');
+    try {
+      const response = await apiFetch<ProfileResponse>('/api/admins/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({ displayName }),
+      });
+      const saved = response.profile?.displayName || displayName;
+      setPresentation(prev => ({ ...prev, displayName: saved }));
+      setNameDraft(saved);
+      setNameEditing(false);
+      flash('名称已更新');
+    } catch (err) {
+      setError(getErrorMessage(err, '修改名称失败'));
+    } finally {
+      setNameSaving(false);
+    }
   };
 
   const saveWelcome = async () => {
@@ -117,13 +156,39 @@ export default function OperatorProfileSettings({ username, role }: { username: 
     }
   };
 
+  const displayName = presentation.displayName || username || '当前账号';
+
   return (
     <section className="account-presentation-card" aria-busy={loading}>
       <header className="account-presentation-header">
         <div className="account-presentation-avatar">
-          {presentation.avatarUrl ? <img src={presentation.avatarUrl} alt="当前头像" /> : <span>{(username || '客').slice(0, 1).toUpperCase()}</span>}
+          {presentation.avatarUrl ? <img src={presentation.avatarUrl} alt="当前头像" /> : <span>{displayName.slice(0, 1).toUpperCase()}</span>}
         </div>
-        <div><b>{presentation.displayName || username || '当前账号'}</b><span>{role === 'SUPER_ADMIN' ? '超级管理员' : '客服'}</span></div>
+        <div className="account-presentation-identity">
+          {nameEditing ? (
+            <form className="account-name-editor" onSubmit={saveDisplayName}>
+              <input
+                autoFocus
+                value={nameDraft}
+                maxLength={80}
+                aria-label="客服显示名称"
+                onChange={event => setNameDraft(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Escape') {
+                    setNameEditing(false);
+                    setNameDraft(displayName);
+                  }
+                }}
+              />
+              <button type="submit" disabled={nameSaving || !nameDraft.trim()}>{nameSaving ? '保存中' : '确认'}</button>
+            </form>
+          ) : (
+            <button type="button" className="account-display-name-view" onClick={beginNameEdit} title="点击修改名称">
+              <b>{displayName}</b><small>点击修改</small>
+            </button>
+          )}
+          <span>{role === 'SUPER_ADMIN' ? '超级管理员' : '客服'}</span>
+        </div>
       </header>
 
       <div className="account-setting-block">
