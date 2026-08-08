@@ -34,6 +34,7 @@ const CUSTOMER_READ = /^\/api\/sessions\/[^/]+\/customer-read$/;
 const CONVERSATION_SOCKET = /^\/api\/ws\/conversations\/[^/]+$/;
 const ATTACHMENT = /^\/api\/attachments\/[^/]+$/;
 const ADMIN_LOGIN_RESPONSE_FLOOR_MS = 450;
+const SESSION_ENDED_PUBLIC_ERROR = '\u4f1a\u8bdd\u5df2\u7ed3\u675f';
 
 function visitorRoot(env: Env) {
   return normalizePublicHost((env as DomainEnv).VISITOR_ROOT_DOMAIN || DEFAULT_VISITOR_ROOT_DOMAIN) || DEFAULT_VISITOR_ROOT_DOMAIN;
@@ -142,6 +143,120 @@ function visitorDocumentRequest(req: Request) {
   });
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function first(source: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) if (source[key] !== undefined) return source[key];
+  return undefined;
+}
+
+function safeVisitorMessage(value: unknown) {
+  const source = record(value);
+  if (!source.id) return null;
+  return {
+    id: source.id,
+    sessionId: first(source, 'sessionId', 'session_id'),
+    senderType: first(source, 'senderType', 'sender_type'),
+    senderId: null,
+    content: typeof source.content === 'string' ? source.content : typeof source.body === 'string' ? source.body : '',
+    messageType: first(source, 'messageType', 'message_type') || 'text',
+    imagePath: first(source, 'imagePath', 'image_path') ?? null,
+    status: source.status || 'sent',
+    createdAt: first(source, 'createdAt', 'created_at') || '',
+    readAt: first(source, 'readAt', 'read_at') ?? null,
+    isRead: Boolean(first(source, 'isRead', 'is_read')),
+    quoteMessageId: first(source, 'quoteMessageId', 'quote_message_id') ?? null,
+    clientMessageId: first(source, 'clientMessageId', 'client_message_id') ?? null,
+    recalledAt: first(source, 'recalledAt', 'recalled_at') ?? null,
+    deletedAt: first(source, 'deletedAt', 'deleted_at') ?? null,
+    imagePurgedAt: first(source, 'imagePurgedAt', 'image_purged_at') ?? null,
+  };
+}
+
+function safeVisitorSession(value: unknown) {
+  const source = record(value);
+  if (!source.id) return null;
+  return {
+    id: source.id,
+    status: source.status || 'UNKNOWN',
+    createdAt: first(source, 'createdAt', 'created_at') || '',
+    updatedAt: first(source, 'updatedAt', 'updated_at') || '',
+    historyClearedAt: first(source, 'historyClearedAt', 'history_cleared_at') ?? null,
+    unreadCount: 0,
+  };
+}
+
+function safeVisitorPresentation(value: unknown) {
+  const source = record(value);
+  return {
+    displayName: typeof source.displayName === 'string' ? source.displayName : '',
+    welcomeText: typeof source.welcomeText === 'string' ? source.welcomeText : '',
+    avatarUrl: typeof source.avatarUrl === 'string' ? source.avatarUrl : '',
+  };
+}
+
+function visitorErrorPayload(response: Response, source: Record<string, unknown>) {
+  const raw = typeof source.error === 'string' ? source.error : '';
+  if (response.status === 400 && (raw === SESSION_ENDED_PUBLIC_ERROR || raw === 'session_ended')) {
+    return { error: SESSION_ENDED_PUBLIC_ERROR };
+  }
+  if ([401, 403, 404, 410].includes(response.status)) return { error: 'unavailable' };
+  if (response.status === 413) return { error: 'request_too_large' };
+  if (response.status === 429) return { error: 'rate_limited' };
+  if (response.status >= 500) return { error: 'server_error' };
+  return { error: 'bad_request' };
+}
+
+async function minimizeVisitorJson(req: Request, response: Response) {
+  if ((response as Response & { webSocket?: unknown }).webSocket) return response;
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('application/json')) return response;
+
+  const value = await response.clone().json().catch(() => null);
+  const source = record(value);
+  let payload: Record<string, unknown>;
+  if (!response.ok) {
+    payload = visitorErrorPayload(response, source);
+  } else {
+    const path = new URL(req.url).pathname;
+    if (INVITE_CONSUME.test(path)) {
+      payload = {
+        session: safeVisitorSession(source.session),
+        messages: Array.isArray(source.messages) ? source.messages.map(safeVisitorMessage).filter(Boolean) : [],
+        presentation: safeVisitorPresentation(source.presentation),
+      };
+    } else if (MESSAGE_LIST.test(path)) {
+      payload = {
+        messages: Array.isArray(source.messages) ? source.messages.map(safeVisitorMessage).filter(Boolean) : [],
+      };
+    } else if (path === '/api/messages') {
+      payload = {
+        message: safeVisitorMessage(source.message),
+        session: source.session ? safeVisitorSession(source.session) : undefined,
+        deduped: Boolean(source.deduped),
+      };
+    } else if (path === '/api/upload') {
+      payload = { path: typeof source.path === 'string' ? source.path : '' };
+    } else if (CUSTOMER_READ.test(path)) {
+      payload = { ok: true };
+    } else {
+      payload = {};
+    }
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set('Content-Type', 'application/json; charset=utf-8');
+  headers.set('Cache-Control', 'no-store');
+  headers.delete('Content-Length');
+  return new Response(JSON.stringify(payload), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 function genericInvalidCredentials(response: Response) {
   const headers = new Headers(response.headers);
   headers.set('Content-Type', 'application/json; charset=utf-8');
@@ -199,7 +314,8 @@ export default {
     }
     if (url.pathname.startsWith('/api/')) {
       if (!isAllowedVisitorApiRequest(req, visitor.token)) return notFound('visitor');
-      return hardenResponse(await inner.fetch(req, env, ctx), 'visitor');
+      const response = await inner.fetch(req, env, ctx);
+      return hardenResponse(await minimizeVisitorJson(req, response), 'visitor');
     }
 
     return notFound('visitor');
