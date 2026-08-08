@@ -40,4 +40,5 @@ zone_name = "kefuxitong.net"
 
 [vars]
 VISITOR_ROOT_DOMAIN = "vx9qn7zr.org"
+VISITOR_PUBLIC_HOSTS = "vx9qn7zr.org"
 ADMIN_PUBLIC_HOST = "denglu.kefuxitong.net"
