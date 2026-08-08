@@ -97,11 +97,19 @@ Generate `SESSION_SECRET` as a long random value with a password manager or cryp
 
 ## Deployment
 
-Production deployment has one supported repository entry point:
+Production deployment has one authoritative repository entry point:
 
 ```bash
 npm run deploy:safe
 ```
+
+The compatibility wrapper preserves the documented non-deploying preflight mode:
+
+```bash
+npm run deploy:cloudflare
+```
+
+Without `--deploy`, that command runs doctor/bootstrap/typecheck/build and exits without deploying. `npm run deploy:cloudflare -- --deploy` is an explicit opt-in compatibility path that delegates the real deployment to `deploy:safe`; it does not invoke Wrangler deployment directly.
 
 If the guarded deploy reports pending D1 migrations, review them and rerun explicitly:
 
@@ -109,7 +117,7 @@ If the guarded deploy reports pending D1 migrations, review them and rerun expli
 npm run deploy:safe -- --apply-migrations
 ```
 
-Do not use direct `wrangler deploy`, `npx wrangler deploy`, or a legacy repository deploy wrapper for production. The guarded deploy requires a clean local `main` that exactly matches `origin/main`, runs repository validation, requires the remote D1 migration state to be readable, blocks on pending migrations by default, applies migrations only after an interactive yes/no confirmation, re-checks migration state, builds, and only then deploys.
+Do not use direct `wrangler deploy` or `npx wrangler deploy` for production. The guarded deploy requires a clean local `main` that exactly matches `origin/main`, runs repository validation, requires the remote D1 migration state to be readable, blocks on pending migrations by default, applies migrations only after an interactive yes/no confirmation, re-checks migration state, builds, and only then deploys.
 
 Cloudflare Workers Builds are also fail-closed at build time: repository builds from non-`main` branches are rejected, and a `main` Workers Build is rejected when the remote D1 migration state cannot be verified or when unapplied migrations exist. This prevents a pull-request branch or a schema/code mismatch from becoming an automatic production deployment.
 
