@@ -1,3 +1,5 @@
+import { parseStoredOperatorPolicy } from '../security/operatorPolicy';
+
 export const CHAT_ROOM_SESSION_HEADER = 'x-chat-room-session-id';
 export const CHAT_ROOM_PRINCIPAL_TYPE_HEADER = 'x-chat-room-principal-type';
 export const CHAT_ROOM_PRINCIPAL_ID_HEADER = 'x-chat-room-principal-id';
@@ -203,13 +205,7 @@ export class ChatRoom {
     if (!row) return false;
     if (row.role === 'SUPER_ADMIN') return true;
     if (row.role !== 'OPERATOR') return false;
-    if (!row.policy_json) return true;
-    try {
-      const policy = JSON.parse(row.policy_json) as { canUseStaffChat?: unknown };
-      return policy.canUseStaffChat !== false;
-    } catch {
-      return true;
-    }
+    return parseStoredOperatorPolicy(row.policy_json).canUseStaffChat;
   }
 
   private async canReceive(meta: ConnectionMeta | null, sessionId: string) {

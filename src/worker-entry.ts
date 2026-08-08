@@ -5,6 +5,16 @@ import { hmacHex, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { jsonResponse } from './security/responseHeaders';
+import { activeAdminSession } from './security/adminSession';
+import { hashPassword } from './security/passwords';
+import { isSameOriginWrite } from './security/requestOrigin';
+import {
+  LEGACY_ENABLED_OPERATOR_POLICY,
+  normalizeOperatorPolicy as normalizePolicy,
+  readOperatorPolicy as readPolicy,
+  writeOperatorPolicy as writePolicy,
+  type OperatorPolicy,
+} from './security/operatorPolicy';
 import { normalizeOperatorPresentation, operatorPresentationKey } from './operatorPresentation';
 import { buildQrMatrix } from './admin/inviteQr';
 import {
@@ -40,12 +50,6 @@ type AdminContext = {
   sessionId: string;
 };
 
-type OperatorPolicy = {
-  canCreateInvites: boolean;
-  canUseStaffChat: boolean;
-  canUploadImages: boolean;
-};
-
 type StoredSessionClientMetadata = SessionClientMetadata & { ipAddress?: string };
 type SettingsRow = { key?: string; value_json: string };
 type SessionListPayload = { sessions?: Array<Record<string, unknown>> };
@@ -55,31 +59,10 @@ type SecurityLogRow = { id: string; level: string; event: string; actor_id: stri
 
 const inner = presentationWorker as WorkerModule;
 const json = (body: unknown, status = 200) => jsonResponse(body, { status });
-const DEFAULT_OPERATOR_POLICY: OperatorPolicy = {
-  canCreateInvites: true,
-  canUseStaffChat: true,
-  canUploadImages: true,
-};
 const ADMIN_PASSWORD_MIN_LENGTH = 12;
 const ADMIN_PASSWORD_MAX_LENGTH = 128;
 
-function isLocalDevHost(host: string) {
-  let normalized = String(host || '').toLowerCase();
-  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
-  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) normalized = normalized.slice(0, normalized.lastIndexOf(':'));
-  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1';
-}
-
-function sameOriginWrite(req: Request) {
-  const url = new URL(req.url);
-  const origin = req.headers.get('origin');
-  if (origin) return origin === url.origin;
-  const referer = req.headers.get('referer');
-  if (referer) {
-    try { return new URL(referer).origin === url.origin; } catch { return false; }
-  }
-  return isLocalDevHost(url.hostname) || isLocalDevHost(req.headers.get('host') || '');
-}
+const sameOriginWrite = isSameOriginWrite;
 
 function clientIp(req: Request) {
   return String(req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')?.split(',')[0] || '')
@@ -87,51 +70,13 @@ function clientIp(req: Request) {
     .slice(0, 64);
 }
 
-function operatorPolicyKey(adminId: string) {
-  return `operator_policy:${adminId}`;
-}
-
-function normalizeOperatorPolicy(value: unknown): OperatorPolicy {
-  const input = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  return {
-    canCreateInvites: typeof input.canCreateInvites === 'boolean' ? input.canCreateInvites : DEFAULT_OPERATOR_POLICY.canCreateInvites,
-    canUseStaffChat: typeof input.canUseStaffChat === 'boolean' ? input.canUseStaffChat : DEFAULT_OPERATOR_POLICY.canUseStaffChat,
-    canUploadImages: typeof input.canUploadImages === 'boolean' ? input.canUploadImages : DEFAULT_OPERATOR_POLICY.canUploadImages,
-  };
-}
-
-async function readOperatorPolicy(env: Env, adminId: string) {
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(operatorPolicyKey(adminId)).first<SettingsRow>();
-  if (!row?.value_json) return { ...DEFAULT_OPERATOR_POLICY };
-  try { return normalizeOperatorPolicy(JSON.parse(row.value_json)); } catch { return { ...DEFAULT_OPERATOR_POLICY }; }
-}
-
-async function writeOperatorPolicy(env: Env, adminId: string, policy: OperatorPolicy) {
-  await env.DB.prepare(
-    `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-  ).bind(operatorPolicyKey(adminId), JSON.stringify(policy), new Date().toISOString()).run();
-}
+const normalizeOperatorPolicy = normalizePolicy;
+async function readOperatorPolicy(env: Env, adminId: string) { return readPolicy(env.DB, adminId); }
+async function writeOperatorPolicy(env: Env, adminId: string, policy: OperatorPolicy) { return writePolicy(env.DB, adminId, policy); }
 
 async function currentAdminContext(env: Env, req: Request): Promise<AdminContext | null> {
-  const signed = readCookie(req, COOKIE_NAMES.admin);
-  const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
-  if (!sessionId) return null;
-  const tokenHash = await hashSessionToken(env.SESSION_SECRET, sessionId);
-  const row = await env.DB.prepare(
-    `SELECT a.id,a.username,a.role,s.id session_id
-       FROM admin_sessions s
-       JOIN admins a ON a.id=s.admin_id
-      WHERE s.id=? AND s.token_hash=? AND s.revoked_at IS NULL
-        AND datetime(s.expires_at)>datetime('now')
-        AND datetime(s.created_at)>datetime('now','-1 day')
-        AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
-        AND COALESCE(a.is_disabled,0)=0
-      LIMIT 1`,
-  ).bind(sessionId, tokenHash).first<{ id: string; username: string; role: 'SUPER_ADMIN' | 'OPERATOR'; session_id: string }>();
-  if (!row?.id) return null;
-  return { id: row.id, username: row.username, role: row.role, sessionId: row.session_id };
+  const active = await activeAdminSession(env, req);
+  return active ? { id: active.id, username: active.username, role: active.role, sessionId: active.sessionId } : null;
 }
 
 async function requireSuperContext(env: Env, req: Request) {
@@ -349,7 +294,7 @@ async function enforceOperatorPolicy(req: Request, env: Env) {
 async function handleCapabilities(req: Request, env: Env) {
   const admin = await currentAdminContext(env, req);
   if (!admin) return json({ error: 'unauthenticated' }, 401);
-  const policy = admin.role === 'OPERATOR' ? await readOperatorPolicy(env, admin.id) : { ...DEFAULT_OPERATOR_POLICY };
+  const policy = admin.role === 'OPERATOR' ? await readOperatorPolicy(env, admin.id) : { ...LEGACY_ENABLED_OPERATOR_POLICY };
   return json({ capabilities: { ...policy, canViewRawInviteLink: admin.role === 'SUPER_ADMIN', canViewRiskCenter: admin.role === 'SUPER_ADMIN' } });
 }
 
@@ -452,19 +397,6 @@ async function handleRevokeOperatorSessions(req: Request, env: Env, operatorId: 
   return json({ ok: true, revoked: Number(result.meta?.changes || 0) });
 }
 
-function b64(bytes: Uint8Array) {
-  let value = '';
-  for (const byte of bytes) value += String.fromCharCode(byte);
-  return btoa(value);
-}
-
-async function hashAdminPassword(password: string) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const iterations = 210000;
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256);
-  return `pbkdf2:${iterations}:${b64(salt)}:${b64(new Uint8Array(bits))}`;
-}
 
 async function handleResetOperatorPassword(req: Request, env: Env, operatorId: string) {
   if (!sameOriginWrite(req)) return json({ error: 'forbidden' }, 403);
@@ -477,7 +409,7 @@ async function handleResetOperatorPassword(req: Request, env: Env, operatorId: s
   if (!target?.id) return json({ error: 'operator_not_found' }, 404);
   const at = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare('UPDATE admins SET password_hash=?,must_change_password=1,updated_at=? WHERE id=?').bind(await hashAdminPassword(password), at, operatorId),
+    env.DB.prepare('UPDATE admins SET password_hash=?,must_change_password=1,updated_at=? WHERE id=?').bind(await hashPassword(password), at, operatorId),
     env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE admin_id=? AND revoked_at IS NULL').bind(at, operatorId),
   ]);
   await writeSecurityLog(env, 'WARN', 'security.operator_password.reset', admin.id, { operatorId, username: target.username });

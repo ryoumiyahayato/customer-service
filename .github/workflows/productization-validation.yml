@@ -9,42 +9,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  converge-pr52:
-    name: P1 convergence gate
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/p0-security-boundaries-20260809' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: fix/p0-security-boundaries-20260809
-          fetch-depth: 0
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Apply convergence transformation
-        run: node scripts/apply-p1-convergence.mjs
-      - name: Install root dependencies
-        run: npm ci --no-audit --no-fund
-      - name: Typecheck transformed tree
-        run: npm run typecheck
-      - name: Unit tests on transformed tree
-        run: npm run test:unit
-      - name: Commit validated convergence
-        run: |
-          rm -f scripts/apply-p1-convergence.mjs .github/workflows/apply-p1-convergence.yml p1-transform-error.txt
-          git show origin/main:.github/workflows/productization-validation.yml > .github/workflows/productization-validation.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "refactor: converge admin state and security boundaries"
-          git push origin HEAD:fix/p0-security-boundaries-20260809
-
   validate:
     name: Linux CI validation
     runs-on: ubuntu-latest

@@ -36,7 +36,7 @@ async function derive(password: string, salt: Uint8Array, iterations: number, bi
   const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
   return new Uint8Array(await crypto.subtle.deriveBits({
     name: 'PBKDF2',
-    salt,
+    salt: Uint8Array.from(salt).buffer,
     iterations,
     hash: PASSWORD_HASH_ALGORITHM,
   }, key, bits));

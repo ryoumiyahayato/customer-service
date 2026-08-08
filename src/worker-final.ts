@@ -5,6 +5,9 @@ import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { hmacHex, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { jsonResponse } from './security/responseHeaders';
+import { activeAdminSession } from './security/adminSession';
+import { readOperatorPolicy } from './security/operatorPolicy';
+import { isSameOriginWebSocket as sameOriginWebSocket } from './security/requestOrigin';
 import { requestStreamExceeds } from './security/requestLimits';
 import { withStaffRoomAccess } from './durable-objects/ChatRoom';
 import { normalizeOperatorPresentation, operatorPresentationKey } from './operatorPresentation';
@@ -283,14 +286,6 @@ async function guestAvatarResponse(req: Request, env: Env) {
   });
 }
 
-function isSameOriginWebSocket(req: Request) {
-  const url = new URL(req.url);
-  const origin = req.headers.get('origin');
-  if (origin) {
-    try { return new URL(origin).origin === url.origin; } catch { return false; }
-  }
-  return isLocalDevHost(url.hostname) || isLocalDevHost(req.headers.get('host') || '');
-}
 
 function isBoundedAdminControlMutation(path: string, method: string) {
   if (method === 'PUT' && /^\/api\/admin\/operator-policies\/[^/]+$/.test(path)) return true;
@@ -298,48 +293,21 @@ function isBoundedAdminControlMutation(path: string, method: string) {
 }
 
 async function currentStaffAdmin(env: Env, req: Request): Promise<StaffAdminContext | null> {
-  const signed = readCookie(req, COOKIE_NAMES.admin);
-  const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
-  if (!sessionId) return null;
-  const row = await env.DB.prepare(
-    `SELECT a.id,a.role,s.id session_id
-       FROM admin_sessions s
-       JOIN admins a ON a.id=s.admin_id
-      WHERE s.id=? AND s.token_hash=? AND s.revoked_at IS NULL
-        AND datetime(s.expires_at)>datetime('now')
-        AND datetime(s.created_at)>datetime('now','-1 day')
-        AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
-        AND COALESCE(a.is_disabled,0)=0
-        AND a.role IN ('SUPER_ADMIN','OPERATOR')
-      LIMIT 1`,
-  ).bind(sessionId, await hashSessionToken(env.SESSION_SECRET, sessionId)).first<{ id: string; role: 'SUPER_ADMIN' | 'OPERATOR'; session_id: string }>();
-  if (!row?.id) return null;
-  const seenAt = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL').bind(seenAt, sessionId),
-    env.DB.prepare('UPDATE admins SET last_seen_at=? WHERE id=? AND COALESCE(is_disabled,0)=0').bind(seenAt, row.id),
-  ]);
-  return { id: row.id, role: row.role, sessionId: row.session_id };
+  const active = await activeAdminSession(env, req, { touch: true });
+  return active ? { id: active.id, role: active.role, sessionId: active.sessionId } : null;
 }
 
 async function staffChatAllowed(env: Env, admin: StaffAdminContext) {
   if (admin.role === 'SUPER_ADMIN') return true;
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(`operator_policy:${admin.id}`).first<SettingsRow>();
-  if (!row?.value_json) return true;
-  try {
-    const policy = JSON.parse(row.value_json) as { canUseStaffChat?: unknown };
-    return policy.canUseStaffChat !== false;
-  } catch {
-    return true;
-  }
+  if (admin.role !== 'OPERATOR') return false;
+  return (await readOperatorPolicy(env.DB, admin.id)).canUseStaffChat;
 }
 
 async function openStaffSocket(req: Request, env: Env) {
   if (req.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket', { status: 426 });
   }
-  if (!isSameOriginWebSocket(req)) {
+  if (!sameOriginWebSocket(req)) {
     return jsonResponse({ error: 'forbidden' }, { status: 403 });
   }
   const admin = await currentStaffAdmin(env, req);

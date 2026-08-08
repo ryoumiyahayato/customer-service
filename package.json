@@ -22,7 +22,6 @@
     "db:migrate:local": "wrangler d1 migrations apply customer_chat_db --local",
     "db:migrate:remote": "wrangler d1 migrations apply customer_chat_db --remote",
     "typegen": "wrangler types",
-    "pretypecheck": "node scripts/fix-p1-transform.mjs",
     "typecheck": "tsc --noEmit",
     "check:obvious": "node scripts/check-obvious-code-issues.mjs",
     "check:admin-race": "node scripts/check-admin-message-race-guard.mjs",
