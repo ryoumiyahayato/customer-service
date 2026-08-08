@@ -28,7 +28,7 @@ type ChatRoomEnv = {
 
 type StaffAccessRow = {
   role: string;
-  policy_json: string | null;
+  can_use_staff_chat: number | null;
 };
 
 function headerValue(req: Request, name: string) {
@@ -188,10 +188,10 @@ export class ChatRoom {
   private async canReceiveStaff(meta: ConnectionMeta | null) {
     if (!meta || meta.mode !== 'staff') return false;
     const row = await this.env.DB.prepare(
-      `SELECT a.role,
-              (SELECT value_json FROM settings WHERE key=('operator_policy:' || a.id) LIMIT 1) policy_json
+      `SELECT a.role,p.can_use_staff_chat
          FROM admins a
          JOIN admin_sessions auth ON auth.id=? AND auth.admin_id=a.id
+         LEFT JOIN operator_policies p ON p.admin_id=a.id
         WHERE a.id=?
           AND COALESCE(a.is_disabled,0)=0
           AND auth.revoked_at IS NULL
@@ -203,13 +203,7 @@ export class ChatRoom {
     if (!row) return false;
     if (row.role === 'SUPER_ADMIN') return true;
     if (row.role !== 'OPERATOR') return false;
-    if (!row.policy_json) return true;
-    try {
-      const policy = JSON.parse(row.policy_json) as { canUseStaffChat?: unknown };
-      return policy.canUseStaffChat !== false;
-    } catch {
-      return true;
-    }
+    return row.can_use_staff_chat === 1;
   }
 
   private async canReceive(meta: ConnectionMeta | null, sessionId: string) {

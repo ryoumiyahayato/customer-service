@@ -44,6 +44,13 @@ function createDatabase() {
       value_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE operator_policies (
+      admin_id TEXT PRIMARY KEY,
+      can_create_invites INTEGER NOT NULL DEFAULT 0,
+      can_use_staff_chat INTEGER NOT NULL DEFAULT 0,
+      can_upload_images INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE system_logs (
       id TEXT PRIMARY KEY,
       level TEXT NOT NULL,

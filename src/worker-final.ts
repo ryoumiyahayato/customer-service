@@ -1,13 +1,16 @@
-export { ChatRoom } from './worker-entry';
-import worker from './worker-entry';
+export { ChatRoom } from './worker-preset';
+import worker from './worker-preset';
 import type { Env } from './worker';
 import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { hmacHex, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { jsonResponse } from './security/responseHeaders';
+import { activeAdminSession } from './security/adminSession';
+import { readOperatorPolicy } from './security/operatorPolicy';
+import { isSameOriginWebSocket as sameOriginWebSocket } from './security/requestOrigin';
 import { requestStreamExceeds } from './security/requestLimits';
 import { withStaffRoomAccess } from './durable-objects/ChatRoom';
-import { normalizeOperatorPresentation, operatorPresentationKey } from './operatorPresentation';
+import { readOperatorPresentation } from './operatorPresentation';
 import {
   DEFAULT_ADMIN_PUBLIC_HOST,
   DEFAULT_VISITOR_ROOT_DOMAIN,
@@ -23,7 +26,6 @@ type WorkerModule = {
   scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>;
 };
 
-type SettingsRow = { value_json: string };
 type StaffAdminContext = {
   id: string;
   role: 'SUPER_ADMIN' | 'OPERATOR';
@@ -50,7 +52,6 @@ type GuestConversationRow = { id: string; purged_at: string | null };
 
 const inner = worker as WorkerModule;
 const ADMIN_CONTROL_JSON_MAX_BYTES = 16 * 1024;
-const INVITE_PATH = /^\/g\/([a-f0-9]{40})\/?$/i;
 const GUEST_CONSUME_PATH = /^\/api\/guest\/([a-f0-9]{40})$/i;
 
 function isLocalDevHost(host: string) {
@@ -119,7 +120,6 @@ function domainBoundaryBlock(req: Request, env: Env) {
 
   if (admin) {
     if (url.pathname.startsWith('/visitor/')
-      || url.pathname.startsWith('/g/')
       || url.pathname === '/chat'
       || isVisitorOnlyApi(url.pathname)) return notFound();
     return null;
@@ -137,11 +137,8 @@ function domainBoundaryBlock(req: Request, env: Env) {
     || isAdminOnlyApi(url.pathname)) return notFound();
 
   if (url.pathname.startsWith('/visitor/') && !allowedVisitorAssetPath(url.pathname)) return notFound();
-  if (url.pathname.startsWith('/g/') && !INVITE_PATH.test(url.pathname)) return notFound();
-
   if (!url.pathname.startsWith('/api/')
-    && !allowedVisitorAssetPath(url.pathname)
-    && !INVITE_PATH.test(url.pathname)) return notFound();
+    && !allowedVisitorAssetPath(url.pathname)) return notFound();
 
   return null;
 }
@@ -193,10 +190,7 @@ async function consumedInviteBlock(req: Request, env: Env) {
 }
 
 async function readPresentation(env: Env, adminId: string) {
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(operatorPresentationKey(adminId)).first<SettingsRow>();
-  if (!row?.value_json) return normalizeOperatorPresentation(null);
-  try { return normalizeOperatorPresentation(JSON.parse(row.value_json)); } catch { return normalizeOperatorPresentation(null); }
+  return readOperatorPresentation(env.DB, adminId);
 }
 
 async function publicPresentationForInvite(env: Env, token: string) {
@@ -211,7 +205,6 @@ async function publicPresentationForInvite(env: Env, token: string) {
   const presentation = await readPresentation(env, owner.id);
   return {
     displayName: String(owner.display_name || owner.username || '在线客服'),
-    welcomeText: presentation.welcomeText,
     avatarUrl: presentation.avatarKey ? '/api/guest-avatar' : '',
   };
 }
@@ -283,14 +276,6 @@ async function guestAvatarResponse(req: Request, env: Env) {
   });
 }
 
-function isSameOriginWebSocket(req: Request) {
-  const url = new URL(req.url);
-  const origin = req.headers.get('origin');
-  if (origin) {
-    try { return new URL(origin).origin === url.origin; } catch { return false; }
-  }
-  return isLocalDevHost(url.hostname) || isLocalDevHost(req.headers.get('host') || '');
-}
 
 function isBoundedAdminControlMutation(path: string, method: string) {
   if (method === 'PUT' && /^\/api\/admin\/operator-policies\/[^/]+$/.test(path)) return true;
@@ -298,48 +283,21 @@ function isBoundedAdminControlMutation(path: string, method: string) {
 }
 
 async function currentStaffAdmin(env: Env, req: Request): Promise<StaffAdminContext | null> {
-  const signed = readCookie(req, COOKIE_NAMES.admin);
-  const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
-  if (!sessionId) return null;
-  const row = await env.DB.prepare(
-    `SELECT a.id,a.role,s.id session_id
-       FROM admin_sessions s
-       JOIN admins a ON a.id=s.admin_id
-      WHERE s.id=? AND s.token_hash=? AND s.revoked_at IS NULL
-        AND datetime(s.expires_at)>datetime('now')
-        AND datetime(s.created_at)>datetime('now','-1 day')
-        AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
-        AND COALESCE(a.is_disabled,0)=0
-        AND a.role IN ('SUPER_ADMIN','OPERATOR')
-      LIMIT 1`,
-  ).bind(sessionId, await hashSessionToken(env.SESSION_SECRET, sessionId)).first<{ id: string; role: 'SUPER_ADMIN' | 'OPERATOR'; session_id: string }>();
-  if (!row?.id) return null;
-  const seenAt = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL').bind(seenAt, sessionId),
-    env.DB.prepare('UPDATE admins SET last_seen_at=? WHERE id=? AND COALESCE(is_disabled,0)=0').bind(seenAt, row.id),
-  ]);
-  return { id: row.id, role: row.role, sessionId: row.session_id };
+  const active = await activeAdminSession(env, req, { touch: true });
+  return active ? { id: active.id, role: active.role, sessionId: active.sessionId } : null;
 }
 
 async function staffChatAllowed(env: Env, admin: StaffAdminContext) {
   if (admin.role === 'SUPER_ADMIN') return true;
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(`operator_policy:${admin.id}`).first<SettingsRow>();
-  if (!row?.value_json) return true;
-  try {
-    const policy = JSON.parse(row.value_json) as { canUseStaffChat?: unknown };
-    return policy.canUseStaffChat !== false;
-  } catch {
-    return true;
-  }
+  if (admin.role !== 'OPERATOR') return false;
+  return (await readOperatorPolicy(env.DB, admin.id)).canUseStaffChat;
 }
 
 async function openStaffSocket(req: Request, env: Env) {
   if (req.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket', { status: 426 });
   }
-  if (!isSameOriginWebSocket(req)) {
+  if (!sameOriginWebSocket(req)) {
     return jsonResponse({ error: 'forbidden' }, { status: 403 });
   }
   const admin = await currentStaffAdmin(env, req);
@@ -386,9 +344,6 @@ export default {
     const method = req.method.toUpperCase();
     const visitorHost = isVisitorSurfaceHost(url.hostname, visitorRootDomain(env));
 
-    if (visitorHost && method === 'GET' && INVITE_PATH.test(url.pathname)) {
-      return serveVisitorAsset(req, env, '/visitor/visitor.html');
-    }
     if (visitorHost && method === 'GET' && allowedVisitorAssetPath(url.pathname)) {
       return serveVisitorAsset(req, env, url.pathname);
     }

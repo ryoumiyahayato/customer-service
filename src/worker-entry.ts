@@ -5,11 +5,21 @@ import { hmacHex, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { jsonResponse } from './security/responseHeaders';
-import { normalizeOperatorPresentation, operatorPresentationKey } from './operatorPresentation';
+import { activeAdminSession } from './security/adminSession';
+import { hashPassword } from './security/passwords';
+import { isSameOriginWrite } from './security/requestOrigin';
+import {
+  LEGACY_ENABLED_OPERATOR_POLICY,
+  normalizeOperatorPolicy as normalizePolicy,
+  readOperatorPolicy as readPolicy,
+  writeOperatorPolicy as writePolicy,
+  type OperatorPolicy,
+} from './security/operatorPolicy';
+import { readOperatorPresentation } from './operatorPresentation';
 import { buildQrMatrix } from './admin/inviteQr';
+import { buildVisitorInviteUrl, DEFAULT_VISITOR_ROOT_DOMAIN } from './domainIsolation';
 import {
   clientMetadataFromRequest,
-  sessionClientMetadataKey,
   type SessionClientMetadata,
 } from './sessionClientMetadata';
 
@@ -40,14 +50,14 @@ type AdminContext = {
   sessionId: string;
 };
 
-type OperatorPolicy = {
-  canCreateInvites: boolean;
-  canUseStaffChat: boolean;
-  canUploadImages: boolean;
-};
-
 type StoredSessionClientMetadata = SessionClientMetadata & { ipAddress?: string };
-type SettingsRow = { key?: string; value_json: string };
+type SessionMetadataRow = {
+  session_id: string;
+  device_label: string;
+  approximate_location: string;
+  captured_at: string;
+  ip_address: string;
+};
 type SessionListPayload = { sessions?: Array<Record<string, unknown>> };
 type PresentationPayload = { presentation?: Record<string, unknown> | null };
 type AdminAuditSessionRow = { admin_id: string };
@@ -55,31 +65,10 @@ type SecurityLogRow = { id: string; level: string; event: string; actor_id: stri
 
 const inner = presentationWorker as WorkerModule;
 const json = (body: unknown, status = 200) => jsonResponse(body, { status });
-const DEFAULT_OPERATOR_POLICY: OperatorPolicy = {
-  canCreateInvites: true,
-  canUseStaffChat: true,
-  canUploadImages: true,
-};
 const ADMIN_PASSWORD_MIN_LENGTH = 12;
 const ADMIN_PASSWORD_MAX_LENGTH = 128;
 
-function isLocalDevHost(host: string) {
-  let normalized = String(host || '').toLowerCase();
-  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
-  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) normalized = normalized.slice(0, normalized.lastIndexOf(':'));
-  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1';
-}
-
-function sameOriginWrite(req: Request) {
-  const url = new URL(req.url);
-  const origin = req.headers.get('origin');
-  if (origin) return origin === url.origin;
-  const referer = req.headers.get('referer');
-  if (referer) {
-    try { return new URL(referer).origin === url.origin; } catch { return false; }
-  }
-  return isLocalDevHost(url.hostname) || isLocalDevHost(req.headers.get('host') || '');
-}
+const sameOriginWrite = isSameOriginWrite;
 
 function clientIp(req: Request) {
   return String(req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')?.split(',')[0] || '')
@@ -87,51 +76,13 @@ function clientIp(req: Request) {
     .slice(0, 64);
 }
 
-function operatorPolicyKey(adminId: string) {
-  return `operator_policy:${adminId}`;
-}
-
-function normalizeOperatorPolicy(value: unknown): OperatorPolicy {
-  const input = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  return {
-    canCreateInvites: typeof input.canCreateInvites === 'boolean' ? input.canCreateInvites : DEFAULT_OPERATOR_POLICY.canCreateInvites,
-    canUseStaffChat: typeof input.canUseStaffChat === 'boolean' ? input.canUseStaffChat : DEFAULT_OPERATOR_POLICY.canUseStaffChat,
-    canUploadImages: typeof input.canUploadImages === 'boolean' ? input.canUploadImages : DEFAULT_OPERATOR_POLICY.canUploadImages,
-  };
-}
-
-async function readOperatorPolicy(env: Env, adminId: string) {
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(operatorPolicyKey(adminId)).first<SettingsRow>();
-  if (!row?.value_json) return { ...DEFAULT_OPERATOR_POLICY };
-  try { return normalizeOperatorPolicy(JSON.parse(row.value_json)); } catch { return { ...DEFAULT_OPERATOR_POLICY }; }
-}
-
-async function writeOperatorPolicy(env: Env, adminId: string, policy: OperatorPolicy) {
-  await env.DB.prepare(
-    `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-  ).bind(operatorPolicyKey(adminId), JSON.stringify(policy), new Date().toISOString()).run();
-}
+const normalizeOperatorPolicy = normalizePolicy;
+async function readOperatorPolicy(env: Env, adminId: string) { return readPolicy(env.DB, adminId); }
+async function writeOperatorPolicy(env: Env, adminId: string, policy: OperatorPolicy) { return writePolicy(env.DB, adminId, policy); }
 
 async function currentAdminContext(env: Env, req: Request): Promise<AdminContext | null> {
-  const signed = readCookie(req, COOKIE_NAMES.admin);
-  const sessionId = await verifySignedValue(env.SESSION_SECRET, signed);
-  if (!sessionId) return null;
-  const tokenHash = await hashSessionToken(env.SESSION_SECRET, sessionId);
-  const row = await env.DB.prepare(
-    `SELECT a.id,a.username,a.role,s.id session_id
-       FROM admin_sessions s
-       JOIN admins a ON a.id=s.admin_id
-      WHERE s.id=? AND s.token_hash=? AND s.revoked_at IS NULL
-        AND datetime(s.expires_at)>datetime('now')
-        AND datetime(s.created_at)>datetime('now','-1 day')
-        AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
-        AND COALESCE(a.is_disabled,0)=0
-      LIMIT 1`,
-  ).bind(sessionId, tokenHash).first<{ id: string; username: string; role: 'SUPER_ADMIN' | 'OPERATOR'; session_id: string }>();
-  if (!row?.id) return null;
-  return { id: row.id, username: row.username, role: row.role, sessionId: row.session_id };
+  const active = await activeAdminSession(env, req);
+  return active ? { id: active.id, username: active.username, role: active.role, sessionId: active.sessionId } : null;
 }
 
 async function requireSuperContext(env: Env, req: Request) {
@@ -159,14 +110,7 @@ async function writeSecurityLog(
 }
 
 async function readPresentation(env: Env, adminId: string) {
-  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key=? LIMIT 1')
-    .bind(operatorPresentationKey(adminId)).first<SettingsRow>();
-  if (!row?.value_json) return normalizeOperatorPresentation(null);
-  try {
-    return normalizeOperatorPresentation(JSON.parse(row.value_json));
-  } catch {
-    return normalizeOperatorPresentation(null);
-  }
+  return readOperatorPresentation(env.DB, adminId);
 }
 
 function rewrittenJsonResponse(response: Response, payload: unknown) {
@@ -204,8 +148,7 @@ async function handleInvitePresentation(env: Env, token: string) {
     presentation: {
       operatorId: target.id,
       displayName: String(target.display_name || target.username || '在线客服'),
-      welcomeText: presentation.welcomeText,
-      avatarUrl: presentation.avatarKey
+        avatarUrl: presentation.avatarKey
         ? `/api/operator-avatar/${encodeURIComponent(target.id)}?v=${encodeURIComponent(avatarVersion)}`
         : '',
       qrBackgroundColor: presentation.qrBackgroundColor,
@@ -232,9 +175,14 @@ async function storeSessionClientMetadata(env: Env, req: Request, sessionId: str
   const stored: StoredSessionClientMetadata = { ...metadata, ipAddress: clientIp(req) };
   if (!stored.deviceLabel && !stored.approximateLocation && !stored.ipAddress) return;
   await env.DB.prepare(
-    `INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-  ).bind(sessionClientMetadataKey(sessionId), JSON.stringify(stored), capturedAt).run();
+    `INSERT INTO session_client_metadata(session_id,device_label,approximate_location,captured_at,ip_address)
+     VALUES(?,?,?,?,?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       device_label=excluded.device_label,
+       approximate_location=excluded.approximate_location,
+       captured_at=excluded.captured_at,
+       ip_address=excluded.ip_address`,
+  ).bind(sessionId, stored.deviceLabel, stored.approximateLocation, capturedAt, stored.ipAddress || '').run();
 }
 
 async function loadSessionMetadata(env: Env, sessionIds: string[]) {
@@ -243,25 +191,17 @@ async function loadSessionMetadata(env: Env, sessionIds: string[]) {
   for (let offset = 0; offset < unique.length; offset += 80) {
     const chunk = unique.slice(offset, offset + 80);
     if (!chunk.length) continue;
-    const keys = chunk.map(sessionClientMetadataKey);
     const rows = await env.DB.prepare(
-      `SELECT key,value_json FROM settings WHERE key IN (${keys.map(() => '?').join(',')})`,
-    ).bind(...keys).all<SettingsRow>();
+      `SELECT session_id,device_label,approximate_location,captured_at,ip_address
+         FROM session_client_metadata WHERE session_id IN (${chunk.map(() => '?').join(',')})`,
+    ).bind(...chunk).all<SessionMetadataRow>();
     for (const row of rows.results || []) {
-      const key = String(row.key || '');
-      const sessionId = key.startsWith('session_client_meta:') ? key.slice('session_client_meta:'.length) : '';
-      if (!sessionId) continue;
-      try {
-        const parsed = JSON.parse(row.value_json) as Partial<StoredSessionClientMetadata>;
-        result.set(sessionId, {
-          deviceLabel: typeof parsed.deviceLabel === 'string' ? parsed.deviceLabel : '',
-          approximateLocation: typeof parsed.approximateLocation === 'string' ? parsed.approximateLocation : '',
-          capturedAt: typeof parsed.capturedAt === 'string' ? parsed.capturedAt : '',
-          ipAddress: typeof parsed.ipAddress === 'string' ? parsed.ipAddress : '',
-        });
-      } catch {
-        // Ignore malformed legacy metadata rather than failing the session list.
-      }
+      result.set(row.session_id, {
+        deviceLabel: row.device_label || '',
+        approximateLocation: row.approximate_location || '',
+        capturedAt: row.captured_at || '',
+        ipAddress: row.ip_address || '',
+      });
     }
   }
   return result;
@@ -291,13 +231,12 @@ async function enrichSessionListResponse(response: Response, env: Env, req: Requ
 
 async function cleanupPurgedSessionMetadata(env: Env) {
   await env.DB.prepare(
-    `DELETE FROM settings
-      WHERE key LIKE 'session_client_meta:%'
-        AND EXISTS (
-          SELECT 1 FROM sessions s
-          WHERE s.id=substr(settings.key,21)
-            AND s.purged_at IS NOT NULL
-        )`,
+    `DELETE FROM session_client_metadata
+      WHERE EXISTS (
+        SELECT 1 FROM sessions s
+        WHERE s.id=session_client_metadata.session_id
+          AND s.purged_at IS NOT NULL
+      )`,
   ).run();
 }
 
@@ -349,7 +288,7 @@ async function enforceOperatorPolicy(req: Request, env: Env) {
 async function handleCapabilities(req: Request, env: Env) {
   const admin = await currentAdminContext(env, req);
   if (!admin) return json({ error: 'unauthenticated' }, 401);
-  const policy = admin.role === 'OPERATOR' ? await readOperatorPolicy(env, admin.id) : { ...DEFAULT_OPERATOR_POLICY };
+  const policy = admin.role === 'OPERATOR' ? await readOperatorPolicy(env, admin.id) : { ...LEGACY_ENABLED_OPERATOR_POLICY };
   return json({ capabilities: { ...policy, canViewRawInviteLink: admin.role === 'SUPER_ADMIN', canViewRiskCenter: admin.role === 'SUPER_ADMIN' } });
 }
 
@@ -452,20 +391,6 @@ async function handleRevokeOperatorSessions(req: Request, env: Env, operatorId: 
   return json({ ok: true, revoked: Number(result.meta?.changes || 0) });
 }
 
-function b64(bytes: Uint8Array) {
-  let value = '';
-  for (const byte of bytes) value += String.fromCharCode(byte);
-  return btoa(value);
-}
-
-async function hashAdminPassword(password: string) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const iterations = 210000;
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256);
-  return `pbkdf2:${iterations}:${b64(salt)}:${b64(new Uint8Array(bits))}`;
-}
-
 async function handleResetOperatorPassword(req: Request, env: Env, operatorId: string) {
   if (!sameOriginWrite(req)) return json({ error: 'forbidden' }, 403);
   const { error, admin } = await requireSuperContext(env, req);
@@ -477,16 +402,15 @@ async function handleResetOperatorPassword(req: Request, env: Env, operatorId: s
   if (!target?.id) return json({ error: 'operator_not_found' }, 404);
   const at = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare('UPDATE admins SET password_hash=?,must_change_password=1,updated_at=? WHERE id=?').bind(await hashAdminPassword(password), at, operatorId),
+    env.DB.prepare('UPDATE admins SET password_hash=?,must_change_password=1,updated_at=? WHERE id=?').bind(await hashPassword(password), at, operatorId),
     env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE admin_id=? AND revoked_at IS NULL').bind(at, operatorId),
   ]);
   await writeSecurityLog(env, 'WARN', 'security.operator_password.reset', admin.id, { operatorId, username: target.username });
   return json({ ok: true });
 }
 
-function publicInviteUrl(req: Request, env: Env, token: string) {
-  const root = String(env.VISITOR_ROOT_DOMAIN || '').trim().replace(/^\.+|\.+$/g, '');
-  return root ? `https://${token}.${root}/` : `${new URL(req.url).origin}/g/${encodeURIComponent(token)}`;
+function publicInviteUrl(env: Env, token: string) {
+  return buildVisitorInviteUrl(token, String(env.VISITOR_ROOT_DOMAIN || DEFAULT_VISITOR_ROOT_DOMAIN));
 }
 
 async function rewriteInviteResponse(req: Request, env: Env, response: Response) {
@@ -504,7 +428,7 @@ async function rewriteInviteResponse(req: Request, env: Env, response: Response)
     const token = typeof payload.invite.token === 'string' ? payload.invite.token : '';
     const expiresAt = payload.invite.expiresAt ?? payload.invite.expires_at ?? null;
     payload.invite = token
-      ? { qrMatrix: buildQrMatrix(publicInviteUrl(req, env, token)), expiresAt, rawLinkVisible: false }
+      ? { qrMatrix: buildQrMatrix(publicInviteUrl(env, token)), expiresAt, rawLinkVisible: false }
       : { expiresAt, rawLinkVisible: false };
   }
   if (Array.isArray(payload.invites)) {

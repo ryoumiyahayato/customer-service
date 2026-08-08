@@ -20,6 +20,7 @@ function createDatabase() {
     CREATE TABLE admins (
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL,
+      display_name TEXT,
       role TEXT NOT NULL,
       is_disabled INTEGER NOT NULL DEFAULT 0
     );
@@ -57,7 +58,7 @@ function createDatabase() {
 
 async function insertAdmin(database, id, role) {
   const sessionId = `session-${id}`;
-  database.prepare('INSERT INTO admins(id,username,role,is_disabled) VALUES(?,?,?,0)').run(id, id, role);
+  database.prepare('INSERT INTO admins(id,username,display_name,role,is_disabled) VALUES(?,?,?,?,0)').run(id, id, id, role);
   database.prepare('INSERT INTO admin_sessions(id,admin_id,token_hash,created_at,last_seen_at,expires_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)')
     .run(sessionId, id, await hashSessionToken(SECRET, sessionId), NOW, NOW, FUTURE);
   return await signValue(SECRET, sessionId);

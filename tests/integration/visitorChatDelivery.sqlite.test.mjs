@@ -49,6 +49,58 @@ function createDatabase() {
       value_json TEXT NOT NULL,
       updated_at TEXT
     );
+    CREATE TABLE operator_policies (
+      admin_id TEXT PRIMARY KEY,
+      can_create_invites INTEGER NOT NULL DEFAULT 0,
+      can_use_staff_chat INTEGER NOT NULL DEFAULT 0,
+      can_upload_images INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE operator_presentations (
+      admin_id TEXT PRIMARY KEY,
+      welcome_text TEXT NOT NULL DEFAULT '您好，请问有什么可以帮您？',
+      avatar_key TEXT NOT NULL DEFAULT '',
+      qr_background_color TEXT NOT NULL DEFAULT '#ffffff',
+      qr_accent_color TEXT NOT NULL DEFAULT '#18b868',
+      qr_top_text TEXT NOT NULL DEFAULT '扫码联系客服',
+      qr_bottom_text TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE session_client_metadata (
+      session_id TEXT PRIMARY KEY,
+      device_label TEXT NOT NULL DEFAULT '',
+      approximate_location TEXT NOT NULL DEFAULT '',
+      captured_at TEXT NOT NULL,
+      ip_address TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE admin_session_metadata (
+      session_id TEXT PRIMARY KEY,
+      device_label TEXT NOT NULL DEFAULT '',
+      approximate_location TEXT NOT NULL DEFAULT '',
+      captured_at TEXT NOT NULL
+    );
+    CREATE TABLE admin_active_sessions (
+      admin_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL UNIQUE,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE operator_preset_messages (
+      id TEXT PRIMARY KEY,
+      admin_id TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      message_type TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      image_object_key TEXT,
+      image_mime_type TEXT,
+      image_byte_size INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE operator_preset_applications (
+      session_id TEXT PRIMARY KEY,
+      owner_admin_id TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
     CREATE TABLE invite_links (
       id TEXT PRIMARY KEY,
       token_hash TEXT NOT NULL UNIQUE,

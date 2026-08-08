@@ -7,7 +7,6 @@ import { SqliteD1Adapter } from '../helpers/sqliteD1Adapter.mjs';
 registerTypeScriptHooks();
 const { default: worker } = await import('../../src/worker-entry.ts');
 const { hmacHex } = await import('../../src/security/signing.ts');
-const { operatorPresentationKey } = await import('../../src/operatorPresentation.ts');
 
 const SECRET = 'invite-presentation-fallback-test-secret';
 
@@ -20,9 +19,14 @@ function createDatabase() {
       display_name TEXT,
       is_disabled INTEGER NOT NULL DEFAULT 0
     );
-    CREATE TABLE settings (
-      key TEXT PRIMARY KEY,
-      value_json TEXT NOT NULL,
+    CREATE TABLE operator_presentations (
+      admin_id TEXT PRIMARY KEY,
+      welcome_text TEXT NOT NULL,
+      avatar_key TEXT NOT NULL,
+      qr_background_color TEXT NOT NULL,
+      qr_accent_color TEXT NOT NULL,
+      qr_top_text TEXT NOT NULL,
+      qr_bottom_text TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE invite_links (
@@ -51,22 +55,13 @@ async function insertInvite(database, { token, sourceOperatorId = null, createdB
   );
 }
 
-function insertAdmin(database, id, username, welcomeText) {
+function insertAdmin(database, id, username) {
   database.prepare('INSERT INTO admins(id,username,display_name,is_disabled) VALUES(?,?,?,0)')
     .run(id, username, username);
-  database.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)')
-    .run(
-      operatorPresentationKey(id),
-      JSON.stringify({
-        welcomeText,
-        avatarKey: '',
-        qrBackgroundColor: '#ffffff',
-        qrAccentColor: '#18b868',
-        qrTopText: '扫码联系客服',
-        qrBottomText: '',
-      }),
-      new Date().toISOString(),
-    );
+  database.prepare(`INSERT INTO operator_presentations(
+      admin_id,welcome_text,avatar_key,qr_background_color,qr_accent_color,qr_top_text,qr_bottom_text,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?)`)
+    .run(id, 'legacy-only', '', '#ffffff', '#18b868', '扫码联系客服', '', new Date().toISOString());
 }
 
 function env(database) {
@@ -76,11 +71,11 @@ function env(database) {
   };
 }
 
-test('unassigned invite uses the creator presentation without assigning the session', async () => {
+test('unassigned invite uses creator visual identity without exposing overlay welcome text', async () => {
   const database = createDatabase();
   try {
     const token = 'a'.repeat(40);
-    insertAdmin(database, 'super-admin', 'ryouma', '欢迎来到客服系统');
+    insertAdmin(database, 'super-admin', 'ryouma');
     await insertInvite(database, { token, createdByAdminId: 'super-admin' });
 
     const response = await worker.fetch(
@@ -92,7 +87,7 @@ test('unassigned invite uses the creator presentation without assigning the sess
     const body = await response.json();
     assert.equal(body.presentation.operatorId, 'super-admin');
     assert.equal(body.presentation.displayName, 'ryouma');
-    assert.equal(body.presentation.welcomeText, '欢迎来到客服系统');
+    assert.equal('welcomeText' in body.presentation, false);
     assert.equal(body.presentation.qrAccentColor, '#18b868');
     const invite = database.prepare('SELECT source_operator_id FROM invite_links WHERE token_hash IS NOT NULL LIMIT 1').get();
     assert.equal(invite.source_operator_id, null);
@@ -101,12 +96,12 @@ test('unassigned invite uses the creator presentation without assigning the sess
   }
 });
 
-test('assigned invite still prefers the selected operator presentation', async () => {
+test('assigned invite still prefers selected operator visual identity', async () => {
   const database = createDatabase();
   try {
     const token = 'b'.repeat(40);
-    insertAdmin(database, 'super-admin', 'ryouma', '超管欢迎词');
-    insertAdmin(database, 'operator-1', 'operator1', '客服欢迎词');
+    insertAdmin(database, 'super-admin', 'ryouma');
+    insertAdmin(database, 'operator-1', 'operator1');
     await insertInvite(database, {
       token,
       sourceOperatorId: 'operator-1',
@@ -121,7 +116,7 @@ test('assigned invite still prefers the selected operator presentation', async (
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.presentation.operatorId, 'operator-1');
-    assert.equal(body.presentation.welcomeText, '客服欢迎词');
+    assert.equal('welcomeText' in body.presentation, false);
   } finally {
     database.close();
   }

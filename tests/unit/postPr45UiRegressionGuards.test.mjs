@@ -4,18 +4,14 @@ import test from 'node:test';
 
 const read = path => readFile(new URL(`../../${path}`, import.meta.url), 'utf8');
 
-test('admin shells resync authenticated identity after login without coupling role to capabilities', async () => {
+test('admin shells consume the single dashboard workspace instead of polling identity or clicking legacy DOM', async () => {
   for (const path of ['src/admin/AdminMobileShell.tsx', 'src/admin/DesktopAdminPolish.tsx']) {
     const source = await read(path);
-    assert.doesNotMatch(source, /Promise\.all\(\s*\[\s*apiFetch<AuthResponse>[\s\S]*?apiFetch<CapabilityResponse>/);
-    assert.match(source, /const refreshIdentity = useCallback/);
-    assert.match(source, /apiFetch<AuthResponse>\('\/api\/auth\/me'/);
-    assert.match(source, /setRole\(nextRole\)/);
-    assert.match(source, /if \(nextRole === 'SUPER_ADMIN'\)/);
-    assert.match(source, /setCanCreateInvites\(true\)/);
-    assert.match(source, /setCanUseStaffChat\(true\)/);
-    assert.match(source, /if \(role\) return;[\s\S]*?setInterval\(\(\) => \{ void refreshIdentity\(\); \}, 1000\)/);
-    assert.match(source, /apiFetch<CapabilityResponse>\('\/api\/admin\/capabilities'/);
+    assert.match(source, /useAdminWorkspace/);
+    assert.doesNotMatch(source, /\/api\/auth\/me|\/api\/admin\/capabilities/);
+    assert.doesNotMatch(source, /buttonWithText|querySelector|MutationObserver|setInterval/);
+    assert.match(source, /openView\(/);
+    assert.match(source, /admin-unread-badge/);
   }
 });
 
@@ -34,7 +30,8 @@ test('super admin login username is a separate reauthenticated control', async (
 
 test('production boundary enforces one active backend session and exposes device-only active sessions', async () => {
   const source = await read('src/worker-production-boundary.ts');
-  assert.match(source, /ACTIVE_ADMIN_SESSION_PREFIX = 'admin_active_session:'/);
+  assert.match(source, /FROM admin_active_sessions WHERE admin_id=\?/);
+  assert.doesNotMatch(source, /admin_active_session:/);
   assert.match(source, /UPDATE admin_sessions SET revoked_at=COALESCE\(revoked_at,\?\) WHERE admin_id=\? AND id<>\?/);
   assert.match(source, /error: 'session_replaced'/);
   assert.match(source, /url\.pathname === '\/api\/admin\/security\/sessions'/);
@@ -44,19 +41,33 @@ test('production boundary enforces one active backend session and exposes device
   assert.doesNotMatch(metadataWriter, /clientIp|cf-connecting-ip|x-forwarded-for/);
 });
 
-test('super admin staff clear control follows the actual staff chat surface', async () => {
+test('super admin staff clear control is rendered directly without DOM observers', async () => {
   const source = await read('src/admin/SuperAdminStaffClearControl.tsx');
-  assert.match(source, /document\.querySelector\('\.staff-composer'\)/);
-  assert.match(source, /new MutationObserver\(syncFromDom\)/);
+  assert.match(source, /isSuper/);
   assert.match(source, /CLEAR_STAFF_CHAT/);
+  assert.doesNotMatch(source, /MutationObserver|querySelector|admin-staff-view/);
 });
 
-test('expired visitor surface structurally hides stale presentation and sending state', async () => {
+test('expired visitor surface hides identity and no overlay welcome component remains', async () => {
   const css = await read('src/visitor/visitorPresentation.css');
+  const landing = await read('src/visitor/VisitorInviteLanding.tsx');
   assert.match(css, /:has\(\.link-expired-page\) \.operator-identity-overlay/);
-  assert.match(css, /:has\(\.link-expired-page\) \.operator-welcome-overlay/);
+  assert.doesNotMatch(css, /operator-welcome-overlay|has-welcome/);
+  assert.doesNotMatch(landing, /welcomeText|operator-welcome-overlay/);
   assert.match(css, /\.message-status\.sending/);
   assert.match(css, /\.sending-msg/);
+});
+
+test('preset welcome content is edited as a one-sided chat and supports images', async () => {
+  const editor = await read('src/admin/PresetMessageEditor.tsx');
+  const desktop = await read('src/admin/DesktopAdminPolish.tsx');
+  const mobile = await read('src/admin/AdminMobileShell.tsx');
+  assert.match(editor, /预设消息可视化编辑器/);
+  assert.match(editor, /\/api\/admins\/preset-messages\/image/);
+  assert.match(editor, /accept="image\/jpeg,image\/png,image\/webp"/);
+  assert.match(editor, /\/api\/admins\/preset-messages\/order/);
+  assert.match(desktop, /<PresetMessageEditor \/>/);
+  assert.match(mobile, /<PresetMessageEditor \/>/);
 });
 
 test('mobile QR editor exposes both text fields inside the bounded card', async () => {
@@ -71,7 +82,7 @@ test('mobile QR editor exposes both text fields inside the bounded card', async 
 });
 
 test('desktop settings secondary pane and customer details use deterministic top-aligned geometry', async () => {
-  const css = await read('src/admin/adminRegressionFixes.css');
+  const css = await read('src/admin/adminWorkspace.css');
   assert.match(css, /\.desktop-settings-nav\{[^}]*left:72px;width:288px/);
   assert.match(css, /\.desktop-settings-content\{left:360px/);
   assert.match(css, /grid-template-columns:360px minmax\(0,1fr\)/);
@@ -98,17 +109,18 @@ test('profile name remains an inline click-to-edit control', async () => {
   assert.match(source, /JSON\.stringify\(\{ displayName \}\)/);
 });
 
-test('unread badge cannot recursively observe its own portal and counts only active conversations', async () => {
-  const badge = await read('src/admin/AdminUnreadBadge.tsx');
+test('unread state is derived by the dashboard and rendered directly in both navigation shells', async () => {
+  const dashboard = await read('src/admin/AdminDashboard.tsx');
+  const desktop = await read('src/admin/DesktopAdminPolish.tsx');
+  const mobile = await read('src/admin/AdminMobileShell.tsx');
+  const app = await read('src/apps/AdminApp.tsx');
   const polling = await read('src/chat/polling.ts');
-  assert.match(badge, /\/api\/sessions\?includeDeleted=1/);
-  assert.match(badge, /sessionGroupOf\(session\) === 'active'/);
-  assert.match(badge, /sameTargets/);
-  assert.match(badge, /2500/);
-  assert.match(badge, /admin-unread-badge/);
-  assert.doesNotMatch(badge, /MutationObserver/);
-  assert.match(badge, /authenticatedOnceRef/);
-  assert.match(badge, /window\.location\.reload\(\)/);
+  assert.match(dashboard, /const unreadCount = useMemo/);
+  assert.match(dashboard, /sessionGroupOf\(s\) === 'active'/);
+  assert.match(dashboard, /2500/);
+  assert.match(desktop, /unreadCount/);
+  assert.match(mobile, /unreadCount/);
+  assert.doesNotMatch(app, /AdminUnreadBadge/);
   assert.match(polling, /800/);
   assert.match(polling, /1600/);
   assert.match(polling, /2500/);

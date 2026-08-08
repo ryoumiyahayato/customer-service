@@ -2,7 +2,11 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ApiError, apiFetch } from '../api';
 import ChatMessageText from '../ChatMessageText';
 import { copyText, getErrorMessage } from '../compat';
-import InviteLinkPanel from './InviteLinkPanel';
+import DesktopAdminPolish from './DesktopAdminPolish';
+import AdminMobileShell from './AdminMobileShell';
+import SessionClientInfo from './SessionClientInfo';
+import SuperAdminStaffClearControl from './SuperAdminStaffClearControl';
+import { AdminWorkspaceProvider, type AdminCapabilities, type AdminCoreView, type AdminMobileView } from './AdminWorkspaceContext';
 import AdminLogin from './AdminLogin';
 import AdminMessageList from './AdminMessageList';
 import AdminSessionList from './AdminSessionList';
@@ -80,7 +84,7 @@ export default function AdminDashboard() {
   const [admin, setAdmin] = useState<Admin | null>(null);
   const [disabled, setDisabled] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<string>('sessions');
+  const [view, setView] = useState<AdminCoreView>('sessions');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [cur, setCur] = useState<Session | null>(null);
   const [selectedMsgs, setSelectedMsgs] = useState<Message[]>([]);
@@ -91,10 +95,9 @@ export default function AdminDashboard() {
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [recallLoading, setRecallLoading] = useState<string | null>(null);
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth <= 820);
-  const [mobileView, setMobileView] = useState<'dir' | 'chat' | 'panel'>('dir');
+  const [mobileView, setMobileView] = useState<AdminMobileView>('dir');
   const [operators, setOperators] = useState<OperatorSummary[]>([]);
   const [createOpLoading, setCreateOpLoading] = useState(false);
-  const [profileLoading, setProfileLoading] = useState(false);
   const [disableOpLoading, setDisableOpLoading] = useState<string | null>(null);
   const [staffText, setStaffText] = useState('');
   const [staffSending, setStaffSending] = useState(false);
@@ -102,8 +105,6 @@ export default function AdminDashboard() {
   const [contextMenu, setContextMenu] = useState<{ msg: Message; x: number; y: number } | null>(null);
   const [toast, setToast] = useState('');
   const [sessionGroup, setSessionGroup] = useState<SessionGroup>('active');
-  const [dirOpen, setDirOpen] = useState(false);
-  const [mobileInviteOpen, setMobileInviteOpen] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null);
@@ -112,6 +113,7 @@ export default function AdminDashboard() {
   const [convOnline, setConvOnline] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
   const [remarkSaving, setRemarkSaving] = useState(false);
+  const [capabilities, setCapabilities] = useState<AdminCapabilities>({ canCreateInvites: false, canUseStaffChat: false, canUploadImages: false });
   const isSuper = admin?.role === 'SUPER_ADMIN';
   const currentSessionEnded = sessionEnded(cur);
   const sessionGroupCounts = useMemo(() => ({
@@ -120,6 +122,7 @@ export default function AdminDashboard() {
     trash: sessions.filter(s => sessionGroupOf(s) === 'trash').length,
   }), [sessions]);
   const visibleSessions = useMemo(() => sessions.filter(s => sessionGroupOf(s) === sessionGroup), [sessionGroup, sessions]);
+  const unreadCount = useMemo(() => sessions.filter(s => sessionGroupOf(s) === 'active').reduce((sum, session) => sum + Math.max(0, Number(session.unreadCount || 0)), 0), [sessions]);
   const customerName = useCallback((session?: Session | null) => String(session?.customerRemarkName || '').trim() || fallbackCustomerName(session), []);
   const customerAvatar = useCallback((session?: Session | null) => {
     const remark = String(session?.customerRemarkName || '').trim();
@@ -127,12 +130,18 @@ export default function AdminDashboard() {
     return customerName(session).replace(/\D/g, '').slice(-1) || '客';
   }, [customerName]);
   const currentCustomerName = customerName(cur);
+  const openView = useCallback((nextView: AdminCoreView, nextMobileView?: AdminMobileView) => {
+    setView(nextView);
+    if (nextMobileView) setMobileView(nextMobileView);
+  }, []);
   const currentCustomerAvatar = customerAvatar(cur);
   const sendingRef = useRef(false);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedMsgsRef = useRef<Message[]>([]);
   const curRef = useRef<Session | null>(null);
   const convOnlineRef = useRef(false);
+  const adminFeedOnlineRef = useRef(false);
+  const lastCapabilityRefreshRef = useRef(0);
   const activeSessionIdRef = useRef('');
   const messageLoadRequestIdRef = useRef(0);
   const messageSyncRequestIdRef = useRef(0);
@@ -168,8 +177,7 @@ export default function AdminDashboard() {
     setStaffMsgs([]);
     setView('sessions');
     setMobileView('dir');
-    setDirOpen(false);
-    setMobileInviteOpen(false);
+    setCapabilities({ canCreateInvites: false, canUseStaffChat: false, canUploadImages: false });
   }, [clearActiveSessionState]);
 
   const showToast = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); }, []);
@@ -200,6 +208,56 @@ export default function AdminDashboard() {
     try { const res = await apiFetch<AuthMeResponse>('/api/auth/me'); if (res.disabled) { setDisabled(true); } setAdmin(res.admin); } catch (error) { if (isUnauthorized(error)) resetAdminState(); else showToast(getErrorMessage(error, '获取管理员信息失败')); } setLoading(false);
   }, [resetAdminState, showToast]);
   useEffect(() => { fetchAdmin(); }, [fetchAdmin]);
+
+  const refreshCapabilities = useCallback(async (force = false) => {
+    if (!admin) return;
+    if (admin.role === 'SUPER_ADMIN') {
+      setCapabilities({ canCreateInvites: true, canUseStaffChat: true, canUploadImages: true });
+      lastCapabilityRefreshRef.current = Date.now();
+      return;
+    }
+    if (!force && Date.now() - lastCapabilityRefreshRef.current < 10000) return;
+    try {
+      const result = await apiFetch<{ capabilities?: Partial<AdminCapabilities> }>('/api/admin/capabilities', { retryGet: false });
+      const value = result.capabilities || {};
+      setCapabilities({
+        canCreateInvites: value.canCreateInvites === true,
+        canUseStaffChat: value.canUseStaffChat === true,
+        canUploadImages: value.canUploadImages === true,
+      });
+      lastCapabilityRefreshRef.current = Date.now();
+    } catch (error) {
+      if (isUnauthorized(error)) handleAuthExpired();
+      else setCapabilities({ canCreateInvites: false, canUseStaffChat: false, canUploadImages: false });
+    }
+  }, [admin?.id, admin?.role, handleAuthExpired]);
+
+  useEffect(() => { void refreshCapabilities(true); }, [refreshCapabilities]);
+
+  useEffect(() => {
+    if (!admin) return;
+    let active = true;
+    const heartbeat = async (forceCapabilities = false) => {
+      try {
+        const auth = await apiFetch<AuthMeResponse>('/api/auth/me', { retryGet: false, timeoutMs: 5000 });
+        if (!active) return;
+        if (!auth.admin) { handleAuthExpired(); return; }
+        if (forceCapabilities || Date.now() - lastCapabilityRefreshRef.current >= 10000) await refreshCapabilities(true);
+        if (!adminFeedOnlineRef.current) {
+          const list = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1', { retryGet: false, timeoutMs: 5000 });
+          if (active) setSessions(Array.isArray(list.sessions) ? list.sessions : []);
+        }
+      } catch (error) {
+        if (isUnauthorized(error)) handleAuthExpired();
+      }
+    };
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void heartbeat(false); }, 2500);
+    const onVisible = () => { if (document.visibilityState === 'visible') void heartbeat(true); };
+    addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    void heartbeat(true);
+    return () => { active = false; clearInterval(timer); removeEventListener('focus', onVisible); document.removeEventListener('visibilitychange', onVisible); };
+  }, [admin?.id, handleAuthExpired, refreshCapabilities]);
 
   const fetchSessions = async () => {
     try { const res = await apiFetch<SessionListResponse>('/api/sessions?includeDeleted=1'); setSessions(res.sessions || []); } catch (error) { if (isUnauthorized(error)) handleAuthExpired(); }
@@ -257,12 +315,19 @@ export default function AdminDashboard() {
   };
 
   const wsAdmin = useCallback(() => {
+    if (!admin) return;
+    if (wsRefs.current.admin) wsRefs.current.admin.close();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/admin`);
-    ws.onmessage = (e) => { try { const d = parseChatRealtimeEvent(JSON.parse(e.data)); if (d?.type === 'sessions:changed') fetchSessions(); } catch {} };
-    ws.onclose = () => { reconnectTimers.current.admin = setTimeout(() => wsAdmin(), 5000); };
+    ws.onopen = () => { adminFeedOnlineRef.current = true; };
+    ws.onmessage = () => { fetchSessions(); };
+    ws.onerror = () => { adminFeedOnlineRef.current = false; ws.close(); };
+    ws.onclose = () => {
+      adminFeedOnlineRef.current = false;
+      if (admin) setTimeout(wsAdmin, 5000);
+    };
     wsRefs.current.admin = ws;
-  }, []);
+  }, [admin, fetchSessions]);
 
   const wsConv = useCallback((sid: string) => {
     if (!sid) return;
@@ -414,9 +479,11 @@ export default function AdminDashboard() {
     } catch (error) { if (isActiveAdminSession(sid)) setSelectedMsgs(prev => markMessageFailed(prev, tempId)); showToast(getErrorMessage(error, '发送失败')); }
   };
 
+  const sessionId = cur?.id || '';
   const upload = async (file: File) => {
-    if (sending === 'image' || !cur || currentSessionEnded) return;
-    const sid = cur.id;
+    if (!capabilities.canUploadImages) { showToast('当前客服账号未被授予图片上传权限'); return; }
+    if (!sessionId || !isActiveAdminSession(sessionId)) return;
+    const sid = sessionId;
     let tempId = '';
     sendingRef.current = true; setSending('image');
     try {
@@ -499,9 +566,6 @@ export default function AdminDashboard() {
     );
   };
 
-  const assignSession = async (s: Session) => {
-    try { await apiFetch(`/api/sessions/${s.id}/assign`, { method: 'POST' }); } catch {}
-  };
 
   const closeSession = async (s: Session) => {
     if (closingSessionId || sessionEnded(s)) return;
@@ -665,13 +729,6 @@ export default function AdminDashboard() {
     );
   };
 
-  const updateProfile = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault(); setProfileLoading(true);
-    const fd = new FormData(e.currentTarget);
-    try { await apiFetch('/api/admins/profile', { method: 'PATCH', body: JSON.stringify({ username: fd.get('username'), password: fd.get('password') }) }); showToast('更新成功'); }
-    catch (error) { showToast(getErrorMessage(error, '更新失败')); }
-    setProfileLoading(false);
-  };
 
   const doCreateOperator = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault(); setCreateOpLoading(true);
@@ -727,7 +784,11 @@ export default function AdminDashboard() {
   if (!admin && !loading) return <AdminLogin onLoginSuccess={() => { setLoading(true); return fetchAdmin(); }} />;
   if (disabled) return <div className="admin-loading-page"><div className="admin-loading-card">此账号已被禁用</div></div>;
 
+  const workspaceValue = { admin: admin!, sessions, currentSession: cur, currentCustomerName, operators, capabilities, unreadCount, view, mobileView, isNarrow, openView, setMobileView, refreshSessions: fetchSessions, logout, logoutLoading };
+
   return (
+    <AdminWorkspaceProvider value={workspaceValue}>
+      <>
     <div className={`admin${isNarrow ? ' is-narrow' : ''}`}>
       {toast && <div className="admin-global-toast">{toast}<button type="button" onClick={() => setToast('')}>×</button></div>}
       {clearHistoryPlan && <div className="modal-backdrop">
@@ -745,16 +806,6 @@ export default function AdminDashboard() {
         </div>
       </div>}
       <aside className="side desktop-side">
-        <div className="brand">
-          <div><h2>{'客服后台'}</h2><span>{admin?.username}</span></div>
-          <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '退出中...' : '退出'}</button>
-        </div>
-        <nav className="side-nav">
-          <button type="button" className={view === 'sessions' ? 'active' : ''} onClick={() => { setView('sessions'); if (isNarrow) setMobileView('dir'); }}>会话</button>
-          {isSuper && <button type="button" className={view === 'operators' ? 'active' : ''} onClick={() => { setView('operators'); if (isNarrow) setMobileView('panel'); }}>客服管理</button>}
-          <button type="button" className={view === 'staffChat' ? 'active' : ''} onClick={() => { setView('staffChat'); if (isNarrow) setMobileView('panel'); }}>内部消息</button>
-        </nav>
-        <InviteLinkPanel adminRole={admin?.role} operators={operators} />
         {view === 'sessions' && <div className="folder">
           <div className="folder-head">
             会话列表 <b>{visibleSessions.length}</b>
@@ -776,40 +827,6 @@ export default function AdminDashboard() {
         </div>}
       </aside>
 
-      {isNarrow && (
-        <div className="mobile-admin-topbar">
-          <button type="button" className="mobile-dir-btn" onClick={() => setDirOpen(true)}>☰ 目录</button>
-          <div className="mobile-topbar-title">{view === 'sessions' ? (cur ? currentCustomerName : '会话') : view === 'operators' ? '客服管理' : '内部消息'}</div>
-          <div className="mobile-topbar-actions">
-            <button type="button" onClick={() => setMobileInviteOpen(true)}>{'邀请'}</button>
-            {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="primary-action" onClick={() => assignSession(cur)}>接管</button>}
-              {cur && view === 'sessions' && !currentSessionEnded && <button type="button" className="danger close-session-btn" onClick={() => closeSession(cur)} disabled={closingSessionId === cur.id}>{closingSessionId === cur.id ? '结束中' : '结束会话'}</button>}
-            <button type="button" className="logout-btn" onClick={logout} disabled={logoutLoading}>{logoutLoading ? '退出中' : '退出'}</button>
-          </div>
-        </div>
-      )}
-
-      {isNarrow && mobileInviteOpen && (
-        <div className="mobile-dir-overlay" onClick={() => setMobileInviteOpen(false)}>
-          <div className="mobile-dir-panel invite-mobile-panel" onClick={e => e.stopPropagation()}>
-            <div className="mobile-dir-header"><h3>{'访客邀请链接'}</h3><button type="button" onClick={() => setMobileInviteOpen(false)}>{'关闭'}</button></div>
-            <InviteLinkPanel adminRole={admin?.role} operators={operators} />
-          </div>
-        </div>
-      )}
-
-      {isNarrow && dirOpen && (
-        <div className="mobile-dir-overlay" onClick={() => setDirOpen(false)}>
-          <div className="mobile-dir-panel" onClick={e => e.stopPropagation()}>
-            <div className="mobile-dir-header"><h3>目录</h3><button type="button" onClick={() => setDirOpen(false)}>✕</button></div>
-            <div className="mobile-dir-list">
-              <button type="button" className={`mobile-dir-item${view === 'sessions' ? ' active' : ''}`} onClick={() => { setView('sessions'); setMobileView('dir'); setDirOpen(false); }}>会话</button>
-              {isSuper && <button type="button" className={`mobile-dir-item${view === 'operators' ? ' active' : ''}`} onClick={() => { setView('operators'); setMobileView('panel'); setDirOpen(false); }}>客服管理</button>}
-              <button type="button" className={`mobile-dir-item${view === 'staffChat' ? ' active' : ''}`} onClick={() => { setView('staffChat'); setMobileView('panel'); setDirOpen(false); }}>内部消息</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <main className="main">
         {isNarrow ? (
@@ -839,6 +856,7 @@ export default function AdminDashboard() {
                     <div><b>{currentCustomerName}</b><span>{sessionGroupOf(cur) === 'archived' ? '已归档' : sessionGroupOf(cur) === 'trash' ? '回收站' : currentSessionEnded ? '已结束' : '进行中'}</span></div>
                     {renderCustomerRemarkEditor()}
                     {renderSessionLifecycleActions(cur)}
+                    <SessionClientInfo session={cur} />
                   </div>
                   {toast && <InlineNotice onDismiss={() => setToast('')}>{toast}</InlineNotice>}
                   <AdminMessageList
@@ -850,7 +868,7 @@ export default function AdminDashboard() {
                   />
                   {currentSessionEnded ? <div className="session-ended-state">{sessionGroupOf(cur) === 'trash' ? '会话在回收站中。' : '会话已归档，消息输入已关闭。'}</div> : <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                     {quote && <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.messageType === 'image' ? '[图片]' : (quote.content || '').slice(0, 40)}<button type="button" onClick={() => setQuote(null)}>取消</button></div>}
-                    <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+                    {capabilities.canUploadImages ? <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label> : null}
                     <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
                     <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                   </form>}
@@ -863,12 +881,6 @@ export default function AdminDashboard() {
             {view === 'operators' && isSuper && (
               <div className="mobile-panel-workspace">
                 <div className="admin-panel">
-                  <h3>修改超级管理员</h3>
-                  <form onSubmit={updateProfile} className="mini-form" autoComplete="off">
-                    <input name="username" placeholder="新用户名" autoComplete="off" />
-                    <input name="password" type="password" placeholder="新密码" autoComplete="new-password" />
-                    <button type="submit" disabled={profileLoading}>{profileLoading ? '保存中...' : '保存'}</button>
-                  </form>
                   <h3 className="panel-title">创建客服</h3>
                   <form onSubmit={doCreateOperator} className="mini-form" autoComplete="off">
                     <input name="username" placeholder="用户名" required autoComplete="off" />
@@ -890,6 +902,7 @@ export default function AdminDashboard() {
             {view === 'staffChat' && (
               <div className="mobile-panel-workspace">
                 <section className="chat-panel" style={{ height: '100%' }}>
+                  <SuperAdminStaffClearControl isSuper={isSuper} onCleared={fetchStaff} />
                   <div className="msgs">
                     {staffMsgs.length === 0 ? <StatusBlock>暂无内部消息，发送一条同步团队状态。</StatusBlock> : staffMsgs.map(m => (
                       <div key={m.id} className={'msg ' + (m.senderAdminId === admin?.id ? 'me' : '')}><b>{m.senderName}</b><div>{m.content}</div><div className="time">{formatTime(m.createdAt)}</div></div>
@@ -912,6 +925,7 @@ export default function AdminDashboard() {
                     <div><b>{currentCustomerName}</b><span>{sessionGroupOf(cur) === 'archived' ? '已归档' : sessionGroupOf(cur) === 'trash' ? '回收站' : currentSessionEnded ? '已结束' : '进行中'}</span></div>
                     {renderCustomerRemarkEditor()}
                     {renderSessionLifecycleActions(cur)}
+                    <SessionClientInfo session={cur} />
                   </div> : null}
                   {toast && <InlineNotice onDismiss={() => setToast('')}>{toast}</InlineNotice>}
                   <AdminMessageList
@@ -924,7 +938,7 @@ export default function AdminDashboard() {
                   {cur && !currentSessionEnded ? (
                     <form className="composer" autoComplete="off" onSubmit={e => { e.preventDefault(); send(); }}>
                       {quote ? <div className="quote-compose">{quote.status === 'recalled' ? '消息已撤回' : quote.messageType === 'image' ? '[图片]' : (quote.content || '').slice(0, 60)}<button type="button" onClick={() => setQuote(null)}>取消</button></div> : null}
-                      <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+                      {capabilities.canUploadImages ? <label className="file-btn">{uploadButtonLabel}<input type="file" name="image" accept="image/jpeg,image/png,image/webp" disabled={sending === 'image'} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label> : null}
                       <textarea ref={messageInputRef} name="message" autoComplete="off" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="输入消息" rows={1} />
                       <button type="submit" onMouseDown={e => e.preventDefault()} disabled={!text.trim() && !quote}>{sendButtonLabel}</button>
                     </form>
@@ -937,12 +951,6 @@ export default function AdminDashboard() {
             {view === 'operators' && isSuper ? (
               <div className="workspace">
                 <aside className="admin-panel wide">
-                  <h3>修改超级管理员</h3>
-                  <form onSubmit={updateProfile} className="mini-form" autoComplete="off">
-                    <input name="username" placeholder="新用户名" autoComplete="off" />
-                    <input name="password" type="password" placeholder="新密码" autoComplete="new-password" />
-                    <button type="submit" disabled={profileLoading}>{profileLoading ? '保存中...' : '保存'}</button>
-                  </form>
                   <h3 className="panel-title">创建客服</h3>
                   <form onSubmit={doCreateOperator} className="mini-form" autoComplete="off">
                     <input name="username" placeholder="用户名" required autoComplete="off" />
@@ -964,6 +972,7 @@ export default function AdminDashboard() {
             {view === 'staffChat' ? (
               <div className="workspace">
                 <section className="chat-panel">
+                  <SuperAdminStaffClearControl isSuper={isSuper} onCleared={fetchStaff} />
                   <div className="msgs">
                     {staffMsgs.length === 0 ? <StatusBlock>暂无内部消息，发送一条同步团队状态。</StatusBlock> : staffMsgs.map(m => (
                       <div key={m.id} className={'msg ' + (m.senderAdminId === admin?.id ? 'me' : '')}><b>{m.senderName}</b><div>{m.content}</div><div className="time">{formatTime(m.createdAt)}</div></div>
@@ -993,5 +1002,9 @@ export default function AdminDashboard() {
         </div>;
       })()}
     </div>
+        <DesktopAdminPolish />
+        <AdminMobileShell />
+      </>
+    </AdminWorkspaceProvider>
   );
 }

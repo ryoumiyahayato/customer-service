@@ -5,20 +5,24 @@ import test from 'node:test';
 const read = path => readFileSync(path, 'utf8');
 const workerEntry = read('src/worker-entry.ts');
 const workerFinal = read('src/worker-final.ts');
+const operatorPolicy = read('src/security/operatorPolicy.ts');
 const chatRoom = read('src/durable-objects/ChatRoom.ts');
 const mobileShell = read('src/admin/AdminMobileShell.tsx');
 const desktopShell = read('src/admin/DesktopAdminPolish.tsx');
 const invitePanel = read('src/admin/InviteLinkPanel.tsx');
 const riskCenter = read('src/admin/AdminRiskCenter.tsx');
 
-test('ordinary operator risk controls are enforced in Worker source boundaries', () => {
-  assert.match(workerEntry, /operator_policy:/);
-  assert.match(workerEntry, /canCreateInvites/);
-  assert.match(workerEntry, /canUseStaffChat/);
-  assert.match(workerEntry, /canUploadImages/);
+test('ordinary operator risk controls are enforced through the centralized fail-closed policy boundary', () => {
+  assert.match(operatorPolicy, /FROM operator_policies WHERE admin_id=\?/);
+  assert.doesNotMatch(operatorPolicy, /operator_policy:/);
+  assert.match(operatorPolicy, /DENY_OPERATOR_POLICY/);
+  assert.match(operatorPolicy, /canCreateInvites/);
+  assert.match(operatorPolicy, /canUseStaffChat/);
+  assert.match(operatorPolicy, /canUploadImages/);
   assert.match(workerEntry, /operator_permission_denied/);
+  assert.match(workerEntry, /readPolicy\(env\.DB/);
   assert.match(workerFinal, /\/api\/ws\/staff/);
-  assert.match(workerFinal, /canUseStaffChat/);
+  assert.match(workerFinal, /readOperatorPolicy/);
   assert.match(workerFinal, /withStaffRoomAccess/);
 });
 
@@ -35,7 +39,7 @@ test('established staff sockets are revalidated against current session and capa
   assert.match(chatRoom, /CHAT_ROOM_STAFF_BROADCAST_HEADER/);
   assert.match(chatRoom, /canReceiveStaff/);
   assert.match(chatRoom, /auth\.revoked_at IS NULL/);
-  assert.match(chatRoom, /canUseStaffChat/);
+  assert.match(chatRoom, /can_use_staff_chat/);
   assert.match(chatRoom, /Staff access revoked/);
 });
 
@@ -63,11 +67,14 @@ test('visitor IP is returned only to super-admin session list responses', () => 
   assert.match(workerEntry, /ipAddress: clientIp\(req\)/);
 });
 
-test('mobile and desktop root navigation do not use MutationObserver state inference', () => {
-  assert.equal(mobileShell.includes('MutationObserver'), false);
-  assert.equal(desktopShell.includes('MutationObserver'), false);
-  assert.match(mobileShell, /admin-staff-view/);
-  assert.match(desktopShell, /admin-staff-view/);
+test('mobile and desktop root navigation use workspace state and no DOM inference', () => {
+  for (const shell of [mobileShell, desktopShell]) {
+    assert.equal(shell.includes('MutationObserver'), false);
+    assert.equal(shell.includes('admin-staff-view'), false);
+    assert.equal(shell.includes('querySelector'), false);
+    assert.match(shell, /useAdminWorkspace/);
+    assert.match(shell, /openView\(/);
+  }
 });
 
 test('QR editor exposes four presets and edits text directly on the preview', () => {

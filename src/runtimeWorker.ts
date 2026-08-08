@@ -13,6 +13,8 @@ import { COOKIE_NAMES, clearSessionCookie, readCookie, serializeSessionCookie } 
 import { constantTimeEqual, hmacHex, signValue, verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { SECURITY_HEADERS, jsonResponse } from './security/responseHeaders';
+import { hashPassword, verifyPassword } from './security/passwords';
+import { DEFAULT_ADMIN_PUBLIC_HOST, DEFAULT_VISITOR_ROOT_DOMAIN, isAdminSurfaceHost, isLocalDevelopmentHost } from './domainIsolation';
 export interface Env {
   DB: D1Database;
   UPLOADS: R2Bucket;
@@ -23,6 +25,8 @@ export interface Env {
   SUPER_ADMIN_USERNAME?: string;
   SUPER_ADMIN_PASSWORD?: string;
   VISITOR_ROOT_DOMAIN?: string;
+  VISITOR_PUBLIC_HOSTS?: string;
+  ADMIN_PUBLIC_HOST?: string;
 }
 
 type Admin = { id: string; username: string; role: 'SUPER_ADMIN' | 'OPERATOR'; is_disabled?: number; must_change_password?: number; last_seen_at?: string };
@@ -132,21 +136,13 @@ const ERR_USERNAME_SHORT = '\u7528\u6237\u540d\u81f3\u5c11\u9700\u8981 3 \u4e2a\
 const ERR_PASSWORD_SHORT = '\u5bc6\u7801\u81f3\u5c11\u9700\u8981 8 \u4e2a\u5b57\u7b26';
 const ERR_ACCOUNT_EXISTS = '\u8d26\u53f7\u5df2\u5b58\u5728';
 const DUMMY_LOGIN_PASSWORD_HASH = 'pbkdf2:100000:Y3VzdG9tZXItc2VydmljZQ==:Rs+EDoWFk4BA0KTT6kRfBfbhjslsEZitfvzhobVP24g=';
-const enc = new TextEncoder();
 const now = () => new Date().toISOString();
 const rid = (prefix: string) => `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
 const json = jsonResponse;
 const getCookie = readCookie;
 const setCookie = serializeSessionCookie;
 const clearCookie = clearSessionCookie;
-async function readJson(req: Request): Promise<Record<string, unknown>> {
-  const body = await req.json().catch(() => null);
-  return body && typeof body === 'object' && !Array.isArray(body)
-    ? body as Record<string, unknown>
-    : {};
-}
-function b64(bytes: Uint8Array) { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); }
-function unb64(value: string) { const bin = atob(value); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+
 async function hmac(secret: string, value: string) { return hmacHex(secret, value); }
 async function makeToken(env: Env, value: string) { return signValue(env.SESSION_SECRET, value); }
 async function verifyToken(env: Env, token?: string) { return verifySignedValue(env.SESSION_SECRET, token); }
@@ -154,8 +150,12 @@ async function tokenHash(env: Env, value: string) { return hashSessionToken(env.
 function expiresAt(days = 1) { return new Date(Date.now() + days * 86400000).toISOString(); }
 async function createAdminSession(env: Env, adminId: string) { const id = rid('asess'); const t = now(); await env.DB.prepare('INSERT INTO admin_sessions(id,admin_id,token_hash,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?)').bind(id, adminId, await tokenHash(env, id), t, t, expiresAt()).run(); return await makeToken(env, id); }
 async function createVisitorSession(env: Env, accountId: string, visitorKey?: string) { const id = rid('vsess'); await env.DB.prepare('INSERT INTO visitor_sessions(id,visitor_account_id,visitor_key,token_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)').bind(id, accountId, visitorKey || null, await tokenHash(env, id), now(), expiresAt()).run(); return await makeToken(env, id); }
-async function hashPassword(password: string) { const salt = crypto.getRandomValues(new Uint8Array(16)); const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, key, 256); return `pbkdf2:100000:${b64(salt)}:${b64(new Uint8Array(bits))}`; }
-async function verifyPassword(password: string, stored: string) { if (!stored?.startsWith('pbkdf2:')) return false; const [, iterRaw, saltRaw, hashRaw] = stored.split(':'); const salt = unb64(saltRaw); const expected = unb64(hashRaw); const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: Number(iterRaw), hash: 'SHA-256' }, key, expected.length * 8); const actual = new Uint8Array(bits); let diff = actual.length ^ expected.length; for (let i = 0; i < Math.min(actual.length, expected.length); i++) diff |= actual[i] ^ expected[i]; return diff === 0; }
+async function readJson(req: Request): Promise<Record<string, unknown>> {
+  const body = await req.json().catch(() => null);
+  return body && typeof body === 'object' && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : {};
+}
 async function ensureBootstrap(env: Env) { const row = await env.DB.prepare("SELECT id FROM admins WHERE role='SUPER_ADMIN' LIMIT 1").first(); if (row) return; const username = env.SUPER_ADMIN_USERNAME?.trim(); const password = env.SUPER_ADMIN_PASSWORD; if (!username || !password) return; const t = now(); await env.DB.prepare('INSERT INTO admins(id,username,display_name,password_hash,role,must_change_password,is_disabled,created_at,updated_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind('admin_primary', username, username, await hashPassword(password), 'SUPER_ADMIN', 0, 0, t, t, t).run(); }
 function isAdminSessionExpired(session: AdminSessionRecord, at = Date.now()) {
   const createdAt = Date.parse(session?.created_at || '');
@@ -1171,17 +1171,12 @@ async function api(req: Request, env: Env) {
 }
 
 
-const BACKEND_HOST = 'denglu.kefuxitong.net';
+const BACKEND_HOST = DEFAULT_ADMIN_PUBLIC_HOST;
 const HEX_INVITE_TOKEN = /^[a-f0-9]{40}$/;
 const noStoreHeaders = { 'cache-control': 'no-store', 'strict-transport-security': SECURITY_HEADERS['Strict-Transport-Security'] };
 const empty = (status: number) => new Response(null, { status, headers: noStoreHeaders });
 
-function isLocalDevHost(host: string) {
-  let normalized = host.toLowerCase();
-  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
-  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) normalized = normalized.slice(0, normalized.lastIndexOf(':'));
-  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1';
-}
+const isLocalDevHost = isLocalDevelopmentHost;
 
 function withNoStore(response: Response) {
   if ((response as Response & { webSocket?: unknown }).webSocket) return response;
@@ -1235,10 +1230,10 @@ export default {
         return new Response(null, { status: 308, headers: { ...noStoreHeaders, Location: url.toString() } });
       }
       const pathname = url.pathname;
-      const visitorRoot = (env.VISITOR_ROOT_DOMAIN || 'vx9qn7zr.org').toLowerCase();
+      const visitorRoot = (env.VISITOR_ROOT_DOMAIN || DEFAULT_VISITOR_ROOT_DOMAIN).toLowerCase();
       const isLocalHost = isLocalDevHost(host) || isLocalDevHost(requestHost);
       const isSetupApiPath = pathname.startsWith('/api/setup/');
-      const isBackendHost = host === BACKEND_HOST;
+      const isBackendHost = isAdminSurfaceHost(host, env.ADMIN_PUBLIC_HOST || DEFAULT_ADMIN_PUBLIC_HOST);
 
       if (isSetupApiPath && !isBackendHost && !isLocalHost) return empty(404);
 

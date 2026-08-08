@@ -1,12 +1,13 @@
 export { ChatRoom } from './worker-final';
 import worker from './worker-final';
 import type { Env } from './worker';
-import { COOKIE_NAMES, readCookie } from './security/cookies';
-import { hmacHex, verifySignedValue } from './security/signing';
-import { hashSessionToken } from './security/sessionTokens';
+import { hmacHex } from './security/signing';
 import { consumeRateLimit } from './security/rateLimit';
 import { readJsonObjectWithinLimit, requestStreamExceeds } from './security/requestLimits';
 import { jsonResponse } from './security/responseHeaders';
+import { activeAdminSession } from './security/adminSession';
+import { hashPassword } from './security/passwords';
+import { isSameOriginWrite } from './security/requestOrigin';
 import {
   DEFAULT_ADMIN_PUBLIC_HOST,
   DEFAULT_VISITOR_ROOT_DOMAIN,
@@ -125,63 +126,13 @@ function adminLegacyVisitorApi(path: string) {
     || path.startsWith('/api/account/');
 }
 
-function sameOriginWrite(req: Request) {
-  const url = new URL(req.url);
-  const origin = req.headers.get('origin');
-  if (origin) {
-    try { return new URL(origin).origin === url.origin; } catch { return false; }
-  }
-  const referer = req.headers.get('referer');
-  if (referer) {
-    try { return new URL(referer).origin === url.origin; } catch { return false; }
-  }
-  return isLocalDevelopmentHost(url.hostname);
-}
+const sameOriginWrite = isSameOriginWrite;
 
 async function currentAdminContext(env: Env, req: Request): Promise<AdminContext | null> {
-  const sessionId = await verifySignedValue(env.SESSION_SECRET, readCookie(req, COOKIE_NAMES.admin));
-  if (!sessionId) return null;
-  const row = await env.DB.prepare(
-    `SELECT a.id,a.username,a.display_name,a.role,s.id session_id
-       FROM admin_sessions s
-       JOIN admins a ON a.id=s.admin_id
-      WHERE s.id=? AND s.token_hash=? AND s.revoked_at IS NULL
-        AND datetime(s.expires_at)>datetime('now')
-        AND datetime(s.created_at)>datetime('now','-1 day')
-        AND datetime(COALESCE(s.last_seen_at,s.created_at))>datetime('now','-30 minutes')
-        AND COALESCE(a.is_disabled,0)=0
-        AND a.role IN ('SUPER_ADMIN','OPERATOR')
-      LIMIT 1`,
-  ).bind(sessionId, await hashSessionToken(env.SESSION_SECRET, sessionId))
-    .first<{ id: string; username: string; display_name: string | null; role: 'SUPER_ADMIN' | 'OPERATOR'; session_id: string }>();
-  if (!row?.id) return null;
-  const seenAt = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL').bind(seenAt, sessionId),
-    env.DB.prepare('UPDATE admins SET last_seen_at=? WHERE id=? AND COALESCE(is_disabled,0)=0').bind(seenAt, row.id),
-  ]);
-  return {
-    id: row.id,
-    username: row.username,
-    displayName: String(row.display_name || row.username || ''),
-    role: row.role,
-    sessionId: row.session_id,
-  };
+  const active = await activeAdminSession(env, req, { touch: true });
+  return active ? { id: active.id, username: active.username, displayName: active.displayName, role: active.role, sessionId: active.sessionId } : null;
 }
 
-function b64(bytes: Uint8Array) {
-  let value = '';
-  for (const byte of bytes) value += String.fromCharCode(byte);
-  return btoa(value);
-}
-
-async function hashAdminPassword(password: string) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const iterations = 210000;
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256);
-  return `pbkdf2:${iterations}:${b64(salt)}:${b64(new Uint8Array(bits))}`;
-}
 
 async function adminMutationLimit(env: Env, req: Request, admin: AdminContext, bucket: string, limit: number, windowMs: number) {
   const ip = String(req.headers.get('cf-connecting-ip') || 'unknown').slice(0, 80);
@@ -216,7 +167,7 @@ async function handleOwnProfilePatch(req: Request, env: Env) {
       await env.DB.batch([
         env.DB.prepare(
           'UPDATE admins SET username=?,display_name=?,password_hash=?,must_change_password=0,updated_at=? WHERE id=? AND COALESCE(is_disabled,0)=0',
-        ).bind(username, displayName, await hashAdminPassword(password), at, admin.id),
+        ).bind(username, displayName, await hashPassword(password), at, admin.id),
         env.DB.prepare(
           'UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE admin_id=? AND id<>? AND revoked_at IS NULL',
         ).bind(at, admin.id, admin.sessionId),
@@ -484,7 +435,7 @@ export default {
     const visitor = visitorHostContext(host, env);
     if (!visitor) {
       if (!isAdminSurfaceHost(host, adminHost(env))) return hardenResponse(await inner.fetch(req, env, ctx), 'admin');
-      if (adminLegacyVisitorApi(url.pathname)) return notFound('admin');
+      if (url.pathname === '/g' || url.pathname.startsWith('/g/') || adminLegacyVisitorApi(url.pathname)) return notFound('admin');
 
       if (req.method.toUpperCase() === 'PATCH' && url.pathname === '/api/admins/profile') {
         return hardenResponse(await handleOwnProfilePatch(req, env), 'admin');

@@ -1,166 +1,73 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import process from 'node:process';
 
 const isWindows = process.platform === 'win32';
 const npmBin = isWindows ? 'npm.cmd' : 'npm';
-const npxBin = isWindows ? 'npx.cmd' : 'npx';
 const rawArgs = process.argv.slice(2);
-const args = new Set(rawArgs);
-const shouldDeploy = args.has('--deploy');
-const unknownArgs = rawArgs.filter((arg) => arg !== '--deploy');
+const deployRequested = rawArgs.includes('--deploy');
+const applyMigrations = rawArgs.includes('--apply-migrations');
+const showHelp = rawArgs.includes('--help') || rawArgs.includes('-h');
+const unknown = rawArgs.filter(arg => !['--deploy', '--apply-migrations', '--help', '-h'].includes(arg));
 
-const preflightSteps = [
-  {
-    name: 'local security doctor',
-    command: npmBin,
-    args: ['run', 'doctor'],
-    display: 'npm run doctor',
-    suggestion: 'Resolve local doctor failures before deployment.',
-  },
-  {
-    name: 'cloudflare bootstrap preflight',
-    command: npmBin,
-    args: ['run', 'bootstrap:cloudflare'],
-    display: 'npm run bootstrap:cloudflare',
-    suggestion: 'Resolve Cloudflare preflight failures before deployment.',
-  },
-  {
-    name: 'typecheck',
-    command: npmBin,
-    args: ['run', 'typecheck'],
-    display: 'npm run typecheck',
-    suggestion: 'Fix TypeScript errors before deployment.',
-  },
-  {
-    name: 'build dry-run',
-    command: npmBin,
-    args: ['run', 'build'],
-    display: 'npm run build',
-    suggestion: 'Fix build or Wrangler dry-run errors before deployment.',
-  },
-];
-
-const deploySteps = [
-  {
-    name: 'wrangler deploy',
-    command: npxBin,
-    args: ['wrangler', 'deploy'],
-    display: 'npx wrangler deploy',
-    suggestion: 'Inspect Wrangler deployment output, then rerun after fixing the deployment issue.',
-  },
-  {
-    name: 'online smoke doctor',
-    command: npmBin,
-    args: ['run', 'doctor:online'],
-    display: 'npm run doctor:online',
-    suggestion: 'Fix public smoke-test failures before considering the deployment complete.',
-  },
-];
-
-function printStage(step, status, suggestion = step.suggestion) {
-  console.log(`STEP: ${step.name}`);
-  console.log(`command: ${step.display}`);
-  console.log(`status: ${status}`);
-  console.log(`suggestion: ${suggestion}`);
-  console.log('');
+function fail(message) {
+  console.error(`ERROR: ${message}`);
+  process.exit(1);
 }
 
-function runStep(step) {
-  console.log(`STEP: ${step.name}`);
-  console.log(`command: ${step.display}`);
-
-  const command = isWindows ? (process.env.ComSpec || 'cmd.exe') : step.command;
-  const commandArgs = isWindows ? ['/d', '/c', step.display] : step.args;
-  const result = spawnSync(command, commandArgs, {
+function run(command, args) {
+  const result = spawnSync(command, args, {
     cwd: process.cwd(),
     env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false,
+    stdio: 'inherit',
+    shell: isWindows,
   });
-
-  if (result.error) {
-    console.log('status: fail');
-    console.log(`suggestion: ${step.suggestion}`);
-    console.log('');
-    return false;
-  }
-
-  if (result.status !== 0) {
-    console.log('status: fail');
-    console.log(`suggestion: ${step.suggestion}`);
-    console.log('');
-    return false;
-  }
-
-  console.log('status: pass');
-  console.log('suggestion: No action required.');
-  console.log('');
-  return true;
-}
-
-function printPlan() {
-  console.log('Cloudflare deploy wrapper');
-  console.log(`mode: ${shouldDeploy ? 'deploy' : 'dry-run'}`);
-  console.log('');
-  console.log('Planned steps:');
-  for (const step of preflightSteps) {
-    console.log(`- ${step.display}`);
-  }
-  if (shouldDeploy) {
-    for (const step of deploySteps) {
-      console.log(`- ${step.display}`);
-    }
-  } else {
-    console.log('- deployment steps are skipped in default mode');
-  }
-  console.log('');
-}
-
-function main() {
-  if (unknownArgs.length) {
-    console.log('STEP: argument validation');
-    console.log('command: node scripts/deploy-cloudflare.mjs [unsupported args omitted]');
-    console.log('status: fail');
-    console.log('suggestion: Only --deploy is supported. Omit it for dry-run mode.');
-    console.log('');
-    process.exitCode = 1;
-    return;
-  }
-
-  printPlan();
-
-  for (const step of preflightSteps) {
-    if (!runStep(step)) {
-      process.exitCode = 1;
-      return;
-    }
-  }
-
-  if (!shouldDeploy) {
-    for (const step of deploySteps) {
-      printStage(
-        step,
-        'skipped',
-        'Default mode completed preflight only. To deploy, run: npm run deploy:cloudflare -- --deploy',
-      );
-    }
-    return;
-  }
-
-  console.log('Deploy mode selected with --deploy. The wrapper will now execute:');
-  for (const step of deploySteps) {
-    console.log(`- ${step.display}`);
-  }
-  console.log('');
-
-  for (const step of deploySteps) {
-    if (!runStep(step)) {
-      process.exitCode = 1;
-      return;
-    }
+  if (result.error || result.status !== 0) {
+    fail(`Command failed: ${command} ${args.join(' ')}`);
   }
 }
 
-main();
+function usage() {
+  console.log('Cloudflare deployment wrapper');
+  console.log('');
+  console.log('Preflight only (never deploys):');
+  console.log('  npm run deploy:cloudflare');
+  console.log('');
+  console.log('Explicit guarded production deploy:');
+  console.log('  npm run deploy:cloudflare -- --deploy');
+  console.log('  npm run deploy:cloudflare -- --deploy --apply-migrations');
+}
+
+if (showHelp) {
+  usage();
+  process.exit(0);
+}
+if (unknown.length) fail(`Unsupported arguments: ${unknown.join(' ')}`);
+if (applyMigrations && !deployRequested) {
+  fail('--apply-migrations is valid only together with --deploy.');
+}
+
+// A real deploy delegates immediately, before any local build can modify tracked dist/.
+// The guarded deploy is the single production authority and owns validation, migration
+// checks, build, deploy, cleanup, and the post-deploy online smoke check.
+if (deployRequested) {
+  const safeScript = path.join(process.cwd(), 'scripts', 'deploy-cloudflare-safe.mjs');
+  const forwarded = applyMigrations ? ['--apply-migrations'] : [];
+  run(process.execPath, [safeScript, ...forwarded]);
+  process.exit(0);
+}
+
+// Preserve the documented no-argument preflight contract. These checks can generate
+// local build output, but this path never invokes a production deployment.
+for (const args of [
+  ['run', 'doctor'],
+  ['run', 'bootstrap:cloudflare'],
+  ['run', 'typecheck'],
+  ['run', 'build'],
+]) {
+  run(npmBin, args);
+}
+
+console.log('Cloudflare preflight completed. No production deployment was started.');

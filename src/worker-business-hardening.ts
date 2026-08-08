@@ -5,6 +5,8 @@ import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { verifySignedValue } from './security/signing';
 import { hashSessionToken } from './security/sessionTokens';
 import { jsonResponse } from './security/responseHeaders';
+import { activeAdminSession } from './security/adminSession';
+import { isSameOriginWrite } from './security/requestOrigin';
 import { jsonObject, readJsonObjectWithinLimit } from './security/requestLimits';
 import { consumeRateLimit } from './security/rateLimit';
 
@@ -18,13 +20,6 @@ type AdminIdentity = {
   username: string;
   role: 'SUPER_ADMIN' | 'OPERATOR';
   is_disabled?: number;
-};
-
-type AdminSessionRow = {
-  admin_id: string;
-  created_at: string;
-  last_seen_at: string | null;
-  expires_at: string;
 };
 
 type MessageSender = {
@@ -57,12 +52,9 @@ type AttachmentClaimResult =
   | { ok: false; response: Response };
 
 const inner = secureWorker as WorkerModule;
-const ADMIN_COOKIE = COOKIE_NAMES.admin;
 const GUEST_COOKIE = COOKIE_NAMES.guest;
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 const JSON_REQUEST_MAX_BYTES = 64 * 1024;
-const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const ADMIN_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 function json(body: unknown, status = 200) { return jsonResponse(body, { status }); }
 
@@ -70,68 +62,15 @@ const getCookie = readCookie;
 async function verifySignedId(env: Env, token?: string) { return verifySignedValue(env.SESSION_SECRET, token); }
 async function tokenHash(env: Env, value: string) { return hashSessionToken(env.SESSION_SECRET, value); }
 
-function sameOriginWrite(req: Request) {
-  const requestUrl = new URL(req.url);
-  const expected = requestUrl.origin;
-  const origin = req.headers.get('origin');
-  if (origin) return origin === expected;
-  const referer = req.headers.get('referer');
-  if (!referer) return isLocalDevHost(requestUrl.hostname) || isLocalDevHost(req.headers.get('host') || '');
-  try {
-    return new URL(referer).origin === expected;
-  } catch {
-    return false;
-  }
-}
-
-function isLocalDevHost(host: string) {
-  let normalized = String(host || '').toLowerCase();
-  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
-  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) {
-    normalized = normalized.slice(0, normalized.lastIndexOf(':'));
-  }
-  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '::1';
-}
+const sameOriginWrite = isSameOriginWrite;
 
 async function readJsonWithinLimit(req: Request) {
   return readJsonObjectWithinLimit(req, JSON_REQUEST_MAX_BYTES);
 }
 
-function adminSessionExpired(session: AdminSessionRow, at = Date.now()) {
-  const createdAt = Date.parse(session.created_at || '');
-  const lastSeenAt = Date.parse(session.last_seen_at || session.created_at || '');
-  const expiresAt = Date.parse(session.expires_at || '');
-  return !Number.isFinite(createdAt)
-    || !Number.isFinite(lastSeenAt)
-    || !Number.isFinite(expiresAt)
-    || expiresAt <= at
-    || at - createdAt > ADMIN_SESSION_MAX_AGE_MS
-    || at - lastSeenAt > ADMIN_SESSION_IDLE_TIMEOUT_MS;
-}
-
 async function currentAdmin(env: Env, req: Request): Promise<AdminIdentity | null> {
-  const sessionId = await verifySignedId(env, getCookie(req, ADMIN_COOKIE));
-  if (!sessionId) return null;
-  const session = await env.DB.prepare(
-    `SELECT admin_id,created_at,last_seen_at,expires_at FROM admin_sessions
-      WHERE id=? AND token_hash=? AND revoked_at IS NULL
-      LIMIT 1`,
-  ).bind(sessionId, await tokenHash(env, sessionId)).first<AdminSessionRow>();
-  if (!session?.admin_id) return null;
-  if (adminSessionExpired(session)) {
-    await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=?').bind(new Date().toISOString(), sessionId).run();
-    return null;
-  }
-  const admin = await env.DB.prepare(
-    `SELECT id,username,role,is_disabled FROM admins WHERE id=? AND is_disabled=0 LIMIT 1`,
-  ).bind(session.admin_id).first<AdminIdentity>();
-  if (!admin) return null;
-  const timestamp = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare('UPDATE admin_sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL').bind(timestamp, sessionId),
-    env.DB.prepare('UPDATE admins SET last_seen_at=? WHERE id=? AND is_disabled=0').bind(timestamp, admin.id),
-  ]);
-  return admin;
+  const active = await activeAdminSession(env, req, { touch: true });
+  return active ? { id: active.id, username: active.username, role: active.role, is_disabled: 0 } : null;
 }
 
 async function requireSuperAdmin(env: Env, req: Request): Promise<AdminIdentity | Response> {

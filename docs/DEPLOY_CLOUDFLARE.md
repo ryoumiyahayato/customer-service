@@ -1,66 +1,111 @@
-# Cloudflare Deployment MVP
+# Cloudflare deployment
 
-This is the current deployment flow for the Cloudflare package path. The
-recommended wrapper runs the safety checks and build dry-run by default, and it
-only performs a real deployment when `--deploy` is explicitly provided.
-Cloudflare is currently the only implemented deployment target; Docker/VPS and
-multi-cloud deployment are still planning-stage targets and should not be
-presented as usable deployment options yet.
+This document describes the supported Cloudflare production deployment path.
+Production deployment is fail-closed: the Worker must not be promoted unless the
+source revision, remote D1 migration state, build, and post-deploy smoke checks
+are all known-good.
 
-## Flow
+## Local preflight
 
-1. Install dependencies:
+Install dependencies and authenticate Wrangler:
 
-   ```powershell
-   npm install
-   ```
+```powershell
+npm install
+npx wrangler login
+```
 
-2. Authenticate Wrangler locally with OAuth:
+Run the documented non-deploying preflight:
 
-   ```powershell
-   npx wrangler login
-   ```
+```powershell
+npm run deploy:cloudflare
+```
 
-3. Run the local preflight and build dry-run:
+This command runs local checks (`doctor`, Cloudflare bootstrap checks,
+TypeScript, and build) and exits without invoking a production deployment.
 
-   ```powershell
-   npm run deploy:cloudflare
-   ```
+## Production deployment
 
-   Default mode does not deploy. It runs:
+The authoritative production command is:
 
-   - `npm run doctor`
-   - `npm run bootstrap:cloudflare`
-   - `npm run typecheck`
-   - `npm run build`
+```powershell
+npm run deploy:safe
+```
 
-4. Deploy only after reviewing the preflight result:
+The compatibility form below delegates to that same guarded implementation
+before any local build can dirty tracked `dist/` output:
 
-   ```powershell
-   npm run deploy:cloudflare -- --deploy
-   ```
+```powershell
+npm run deploy:cloudflare -- --deploy
+```
 
-   Deploy mode runs the same preflight, then:
+The guarded implementation requires:
 
-   - `npx wrangler deploy`
-   - `npm run doctor:online`
+1. current branch is `main`;
+2. working tree is clean;
+3. local `main` exactly matches freshly fetched `origin/main`;
+4. remote D1 migration state can be queried successfully;
+5. no D1 migration is pending, unless migration application was explicitly requested;
+6. repository safety/type/lifecycle checks pass;
+7. build succeeds;
+8. Wrangler deployment succeeds;
+9. generated `dist` changes are restored/cleaned and the repository is clean again;
+10. `npm run doctor:online` passes against the deployed service.
+
+A failure in any required check prevents the command from reporting a successful
+deployment.
+
+## Pending migrations
+
+Pending D1 migrations block production by default. Review the migration files,
+then explicitly request the guarded migration-first deployment:
+
+```powershell
+npm run deploy:safe -- --apply-migrations
+```
+
+Migration application requires an interactive confirmation. After applying,
+the command queries D1 again. The Worker build/deploy does not proceed while a
+migration is still pending or while remote migration state cannot be verified.
+
+For the PR #52 architecture transition, production must apply migrations `0012`,
+`0013`, and `0014` in repository order if they are still pending. `0013` moves
+dynamic operator/session runtime state out of overloaded `settings:*` JSON keys
+into structured tables. `0014` creates the operator preset-message/application
+tables and migrates any existing configured welcome text into a real first
+preset chat message. The Worker that depends on these tables must not be promoted
+to production before the migrations are verified as applied.
+
+## Pull requests and non-production Worker versions
+
+A PR/non-`main` branch must not become the production Worker, but it is allowed
+to compile and upload a non-production Worker version. In Workers Builds, keep
+`main` as the production branch and enable non-production branch builds. The
+non-production branch deploy command should be the version-upload path
+(`npx wrangler versions upload`, which is also the Cloudflare default), not
+`wrangler deploy`.
+
+The repository build guard therefore behaves differently by branch:
+
+- `main`: remote D1 migration state is mandatory and can block production build/deploy;
+- non-`main`: build/version upload is allowed, but no production promotion is authorized by the repository gate.
+
+A version upload does not change active production traffic. This project uses a
+Durable Object, so Cloudflare's ordinary version Preview URL feature is currently
+not available for this Worker. If interactive PR testing is later required,
+create an isolated staging design rather than pointing PR traffic at production
+D1/R2 merely to obtain a preview URL.
 
 ## Secrets
 
-- Do not put Cloudflare tokens in `.bat` files.
-- Do not commit `.dev.vars`.
-- Do not commit `.env.production`.
-- Store Worker secrets with `npx wrangler secret put`.
-- Prefer `npx wrangler login` OAuth for local deployment.
-- CI/CD should inject Cloudflare credentials from its secret manager.
-- Do not design CI/CD around checked-in scripts that contain tokens; CI/CD
-  should be designed separately after the local deployment path is stable.
-- `templates/deploy.config.example.json` is only a placeholder template. Do not
-  put real tokens, cookies, passwords, or secret values in it.
+- Do not put Cloudflare tokens in `.bat` files or repository scripts.
+- Do not commit `.dev.vars`, `.env.production`, cookies, passwords, or API tokens.
+- Store Worker secrets with `npx wrangler secret put` or an appropriate secret manager.
+- Prefer Wrangler OAuth for controlled local deployment.
+- `templates/deploy.config.example.json` is a placeholder only; never put real credentials in it.
 
-## Current Scope
+## Resource creation
 
-`npm run bootstrap:cloudflare` is read-only. `npm run deploy:cloudflare` wraps
-the deployment flow, but it does not create D1 databases, R2 buckets, routes, or
-secrets, and it does not run migrations. Automatic resource creation belongs to
-a later setup phase.
+`npm run bootstrap:cloudflare` is read-only. It checks the expected local
+configuration/bindings but does not create D1 databases, R2 buckets, routes, or
+secrets. Resource provisioning is a separate operational action from the
+guarded application deployment path.

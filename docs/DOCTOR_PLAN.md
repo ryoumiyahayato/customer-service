@@ -1,123 +1,129 @@
-# Doctor MVP Plan
+# Doctor plan
 
-`doctor` is a read-only preflight command for packaging and deployment. It must
-not print secret values, cookies, administrator passwords, Cloudflare tokens, or
-chat message bodies.
+`doctor` is a read-only repository/deployment diagnostic. It must not print
+secret values, cookies, administrator passwords, Cloudflare tokens, invite bearer
+tokens, or chat-message bodies.
 
-## MVP Implementation Status
+## Implemented commands
 
-The current MVP implements local repository checks in `scripts/doctor.mjs`.
-`npm run doctor` runs only local checks by default.
+`npm run doctor`
 
-`npm run doctor:online` runs the local checks plus public online smoke tests.
-The online checks do not require login, do not use a valid invite, do not read
-real chat messages, and do not store or print cookies.
+- local repository/configuration checks only;
+- does not deploy;
+- does not require a valid production invite.
 
-Implemented online checks cover HTTP-to-HTTPS redirects, HSTS, visitor root
-fail-closed behavior, invalid invite host 404/410 behavior, unauthenticated
-`/api/auth/me`, and unauthenticated `/api/ws/admin` rejection.
+`npm run doctor:online`
 
-Still deferred: valid invite smoke tests, authenticated WebSocket 101 checks,
-and D1/R2 write-path checks.
+- runs the local checks plus public online smoke tests;
+- does not authenticate as a real administrator;
+- does not consume a valid invite;
+- does not read real messages or print cookies.
 
-`npm run bootstrap:cloudflare` runs a read-only Cloudflare deployment preflight.
-It checks local tool availability, package scripts, required documentation, and
-the expected Cloudflare bindings/routes in `wrangler.toml`. It does not create
-D1 databases, R2 buckets, routes, or secrets, and it does not deploy.
+Current online checks cover HTTPS/HSTS, visitor-root fail-closed behavior,
+invalid visitor-token host rejection, unauthenticated `/api/auth/me`, and
+unauthenticated admin-WebSocket rejection. Authenticated WebSocket and D1/R2
+write-path smoke tests remain separate integration concerns.
 
-`npm run deploy:cloudflare` wraps the Cloudflare deployment flow. Its default
-mode is a dry-run preflight that runs `doctor`, `bootstrap:cloudflare`,
-`typecheck`, and `build`; it does not run `wrangler deploy`. A real deployment
-requires `npm run deploy:cloudflare -- --deploy`, which reruns the preflight,
-executes `npx wrangler deploy`, and then runs `doctor:online`.
+`npm run bootstrap:cloudflare`
 
-Future setup phases may add guided resource creation for D1, R2, routes, and
-secrets, migration readiness checks, and CI/CD workflows after the read-only
-preflight and local deploy wrapper are stable.
+- read-only Cloudflare configuration/bootstrap preflight;
+- checks tools, scripts, documentation, and expected bindings/routes;
+- does not create D1/R2 resources, routes, or secrets;
+- does not deploy.
 
-## A. Local Repository Checks
+## Relationship to deployment
+
+`npm run deploy:cloudflare` without arguments remains preflight-only. It runs
+local diagnostics/type/build checks and exits without production deployment.
+
+A real deployment is explicit:
+
+```bash
+npm run deploy:cloudflare -- --deploy
+```
+
+That compatibility wrapper delegates immediately to the authoritative guarded
+implementation before running a local build, so tracked `dist/` output cannot
+make the clean-tree guard fail accidentally.
+
+The direct authoritative command is:
+
+```bash
+npm run deploy:safe
+```
+
+The guarded deploy validates clean/current `main`, remote D1 migration state,
+repository checks, build/deploy success, restores generated `dist` changes, and
+then runs `npm run doctor:online`. A deployment is not reported successful when
+the post-deploy online smoke check fails.
+
+If migrations are pending, normal deployment stops. After reviewing them, use:
+
+```bash
+npm run deploy:safe -- --apply-migrations
+```
+
+Migration application is interactive and is re-verified before build/deploy.
+Failure to query remote migration state is also blocking rather than a warning.
+
+A non-`main` PR is intentionally not a production deployment target. A red
+Cloudflare production-build status for a PR can therefore represent the
+production branch guard doing its job; GitHub Productization validation is the
+PR build/test signal. A live preview must use separately isolated staging state.
+
+## Local repository checks
 
 1. `git.status.clean`
-   - Check whether the working tree is clean, or whether only approved local
-     files are dirty for the current operation.
+   - working tree is clean for operations that require it.
 2. `git.env.tracked`
-   - Check whether `.dev.vars`, `.env`, or `.env.production` are tracked by Git.
+   - `.dev.vars`, `.env`, and `.env.production` are not tracked.
 3. `dist.secret_scan`
-   - Scan built assets for secret-like keywords and high-risk token patterns.
+   - built assets contain no known secret/token patterns.
 4. `local_scripts.tracked`
-   - Check whether `deploy.bat`, `deploy.local.bat`, or `*.local.bat` are
-     tracked.
+   - high-risk local credential/deploy helper files are not tracked.
 5. `wrangler.secret_scan`
-   - Check `wrangler.toml` for real secret-like values. Public bindings,
-     database names, bucket names, and route names are allowed.
+   - `wrangler.toml` does not contain real secret values.
 6. `package.scripts.safe`
-   - Check that package scripts do not set plaintext deployment credentials.
+   - package scripts do not embed plaintext deployment credentials or bypass the guarded production authority.
 7. `dist.sourcemaps`
-   - Check whether public source maps are present in `dist`.
+   - public deployment output does not unintentionally publish source maps.
 
-## B. Online Transport Checks
+## Online transport checks
 
-These checks run only when a target base URL is provided.
+1. HTTP redirects to HTTPS as expected.
+2. HTTPS includes HSTS.
+3. Admin HTTPS entry returns only the expected login/application surface.
+4. Visitor root returns 404.
+5. Invalid token subdomains return 404/410.
+6. Unauthenticated `/api/auth/me` returns a safe unauthenticated response.
+7. Unauthenticated `/api/ws/admin` is rejected.
+8. Authorized conversation WebSocket behavior is covered separately by integration tests.
 
-1. `http.redirect_https`
-   - HTTP should return 308 to the matching HTTPS URL.
-2. `https.hsts`
-   - HTTPS responses should include HSTS.
-3. `admin.https.ok`
-   - The backend/admin HTTPS entry should return the expected public shell or
-     login-safe response.
-4. `visitor.root.not_found`
-   - The visitor root domain should return 404.
-5. `invite.invalid.not_found`
-   - Invalid token subdomains should return 404 or 410.
-6. `auth.me.unauthenticated`
-   - `/api/auth/me` without a valid session should return a safe unauthenticated
-     response.
-7. `ws.admin.unauthenticated`
-   - `/api/ws/admin` without a valid session should reject the request.
-8. `ws.session.upgrade`
-   - A valid authorized conversation WebSocket should return 101.
+## Resource checks
 
-## C. Resource Checks
+- D1 `DB` binding exists.
+- R2 `UPLOADS` binding exists.
+- Durable Object `CHAT_ROOM` binding exists.
+- `VISITOR_ROOT_DOMAIN` and admin-host configuration are present.
+- `SESSION_SECRET` exists without its value being printed.
 
-1. `binding.d1.exists`
-   - Check that the `DB` D1 binding exists.
-2. `binding.r2.exists`
-   - Check that the `UPLOADS` R2 binding exists.
-3. `binding.do.exists`
-   - Check that the `CHAT_ROOM` Durable Object binding exists.
-4. `config.visitor_root_domain.exists`
-   - Check that `VISITOR_ROOT_DOMAIN` is configured.
-5. `secret.session_secret.exists`
-   - Check that `SESSION_SECRET` exists, without printing the value.
+## Output contract
 
-## D. Output Format
-
-Each check returns one structured result:
+Each doctor check should return a structured result such as:
 
 ```json
 {
   "code": "dist.secret_scan",
   "status": "pass",
   "severity": "high",
-  "message": "No secret-like keywords were found in dist.",
-  "suggestion": "Run this check before every deployment artifact is published."
+  "message": "No secret-like patterns were found in dist.",
+  "suggestion": "Run this check before publishing deployment artifacts."
 }
 ```
 
-Allowed statuses:
+Allowed statuses: `pass`, `warn`, `fail`.
 
-- `pass`
-- `warn`
-- `fail`
+Severity levels: `info`, `low`, `medium`, `high`, `critical`.
 
-Severity levels:
-
-- `info`
-- `low`
-- `medium`
-- `high`
-- `critical`
-
-`doctor` should exit non-zero for `fail` results at `high` or `critical`
-severity. Lower severities may be configurable once the MVP is stable.
+`doctor` exits non-zero for high/critical failures. Lower severities may remain
+warnings where explicitly designed that way.

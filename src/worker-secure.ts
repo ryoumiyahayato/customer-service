@@ -7,6 +7,7 @@ import { hashSessionToken } from './security/sessionTokens';
 import { jsonResponse, withSecurityHeaders } from './security/responseHeaders';
 import { contentLengthExceeds, requestStreamExceeds } from './security/requestLimits';
 import { consumeRateLimit } from './security/rateLimit';
+import { isSameOriginWrite as sharedSameOriginWrite, isSameOriginWebSocket as sharedSameOriginWebSocket } from './security/requestOrigin';
 
 type WorkerModule = {
   fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response>;
@@ -42,32 +43,7 @@ const VISITOR_COOKIE = COOKIE_NAMES.visitor;
 const GUEST_COOKIE = COOKIE_NAMES.guest;
 const json = jsonResponse;
 
-function isLocalDevHost(host: string) {
-  let normalized = String(host || '').toLowerCase();
-  if (normalized.startsWith('[')) normalized = normalized.slice(1).split(']')[0];
-  else if (normalized.indexOf(':') === normalized.lastIndexOf(':') && normalized.includes(':')) normalized = normalized.slice(0, normalized.lastIndexOf(':'));
-  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1';
-}
-
-function sameOriginUrl(value: string, expectedOrigin: string) {
-  try {
-    return new URL(value).origin === expectedOrigin;
-  } catch {
-    return false;
-  }
-}
-
-function isSameOriginWrite(req: Request) {
-  const url = new URL(req.url);
-  const origin = req.headers.get('origin');
-  if (origin) return sameOriginUrl(origin, url.origin);
-
-  const referer = req.headers.get('referer');
-  if (referer) return sameOriginUrl(referer, url.origin);
-
-  const requestHost = req.headers.get('host') || url.host;
-  return isLocalDevHost(url.hostname) || isLocalDevHost(requestHost);
-}
+const isSameOriginWrite = sharedSameOriginWrite;
 
 function shouldProtectAgainstCsrf(req: Request) {
   const path = new URL(req.url).pathname;
@@ -85,13 +61,7 @@ async function readJsonClone(req: Request) {
   return jsonObject(await req.clone().json().catch(() => null));
 }
 
-function isSameOriginWebSocket(req: Request) {
-  const url = new URL(req.url);
-  const origin = req.headers.get('origin');
-  if (origin) return sameOriginUrl(origin, url.origin);
-  const requestHost = req.headers.get('host') || url.host;
-  return isLocalDevHost(url.hostname) || isLocalDevHost(requestHost);
-}
+const isSameOriginWebSocket = sharedSameOriginWebSocket;
 
 const getCookie = readCookie;
 const clearCookie = clearSessionCookie;
