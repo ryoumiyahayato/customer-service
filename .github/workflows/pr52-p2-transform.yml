@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   transform:
+    # One-shot branch-only transformer. It removes itself after validated completion.
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
