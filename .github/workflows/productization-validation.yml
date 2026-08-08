@@ -2,46 +2,330 @@ name: Productization validation
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
+      - v0.4-v0.8-productization
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  finalize-pr52-preset:
-    if: github.event.pull_request.number == 52 && github.actor != 'github-actions[bot]'
+  validate:
+    name: Linux CI validation
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          ref: fix/p0-security-boundaries-20260809
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
+          show-progress: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      - name: Apply preset worker integration
-        run: node scripts/apply-pr52-preset-integration.mjs
+
+      - name: Security boundary checks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          private_key_patterns=(
+            "BEGIN OPENSSH PRIVATE KEY"
+            "BEGIN RSA PRIVATE KEY"
+            "BEGIN PRIVATE KEY"
+          )
+
+          for pattern in "${private_key_patterns[@]}"; do
+            if git grep -n -I -- "$pattern" -- ':!.github/workflows/productization-validation.yml'; then
+              echo "Found a private key block marker in the repository."
+              exit 1
+            fi
+          done
+
+          if test -e deploy/linux/.env; then
+            echo "deploy/linux/.env must not be committed."
+            exit 1
+          fi
+
+      - name: Install root dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          npm config get registry
+          npm cache verify
+          log_file="$RUNNER_TEMP/root-dependency-install.log"
+          install_cmd=(npm ci --no-audit --no-fund --loglevel verbose)
+          echo "Running: ${install_cmd[*]}"
+          if ! "${install_cmd[@]}" >"$log_file" 2>&1; then
+            echo "root dependency install failed"
+            echo "first npm error lines:"
+            grep -n -m 20 -E 'npm ERR!|ERR!|error|Error' "$log_file" || true
+            echo "last 120 install log lines:"
+            tail -n 120 "$log_file"
+            exit 1
+          fi
+          tail -n 40 "$log_file"
+
+      - name: Root production dependency audit
+        run: npm audit --omit=dev --audit-level=high --no-fund
+
+      - name: Root development dependency audit
+        run: npm audit --audit-level=high --no-fund
+
+      - name: Root admin message race guard
+        run: npm run check:admin-race
+
+      - name: Static Contract Checks
+        run: npm run check:static-contracts
+
+      - name: Root high-risk business closure check
+        run: npm run check:business-closures
+
+      - name: Deployment security regression checks
+        run: npm run check:linux-deploy-security && npm run check:android-shell-security
+
+      - name: Root obvious code issues
+        run: npm run check:obvious
+
       - name: Type Checks
         run: npm run typecheck
+
       - name: Unit Tests
         run: npm run test:unit
+
       - name: SQLite Integration Tests
         run: npm run test:integration
-      - name: Build
+
+      - name: Root doctor
+        run: npm run doctor
+
+      - name: Root lifecycle CI-safe check
+        run: |
+          # CI does not use Cloudflare secrets, so this does not run the real Wrangler D1 dry-run.
+          npm run lifecycle:ci-check
+
+      - name: Build and Cloudflare Dry Run
         run: npm run build
-      - name: Restore normal workflow and remove transformer
+
+      - name: Linux shell syntax checks
+        shell: bash
         run: |
           set -euo pipefail
-          git fetch -q origin main
-          git checkout origin/main -- .github/workflows/productization-validation.yml
-          rm -f scripts/apply-pr52-preset-integration.mjs
-      - name: Commit only after validation passes
+          bash -n deploy/linux/install.sh
+          bash -n deploy/linux/healthcheck.sh
+          bash -n deploy/linux/backup.sh
+          bash -n deploy/linux/restore.sh
+          bash -n deploy/linux/upgrade.sh
+          bash -n deploy/linux/preflight.sh
+
+      - name: Docker compose static config
+        shell: bash
         run: |
           set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --check
-          git commit -m "feat: deliver preset content as real chat messages"
-          git push origin HEAD:fix/p0-security-boundaries-20260809
+          cat > deploy/linux/.env <<'EOF'
+          NODE_ENV=production
+          STATIC_DIR=/app/dist
+          APP_PORT=3000
+          APP_DOMAIN=admin.example.com
+          VISITOR_ROOT_DOMAIN=visitor.example.com
+          POSTGRES_DB=customer_chat
+          POSTGRES_USER=customer_chat
+          POSTGRES_PASSWORD=ci-placeholder-postgres-password
+          DATABASE_URL=postgres://customer_chat:ci-placeholder-postgres-password@postgres:5432/customer_chat
+          SESSION_SECRET=ci-placeholder-session-secret
+          SETUP_TOKEN=ci-placeholder-setup-token
+          STORAGE_DRIVER=local
+          STORAGE_PATH=/app/storage
+          BACKUP_DIR=./backup
+          BACKUP_SIGNING_KEY=ci-placeholder-backup-signing-key-32chars
+          MAX_UPLOAD_SIZE=10485760
+          ENCRYPTION_ENABLED=0
+          ENCRYPTION_KEY=
+          ENCRYPTION_KEY_VERSION=v1
+          LIFECYCLE_CRON=0 * * * *
+          LOG_LEVEL=info
+          EOF
+          docker compose -f deploy/linux/docker-compose.yml config --quiet
+
+      - name: Install server-generic dependencies
+        working-directory: server-generic
+        run: npm ci --no-audit --no-fund
+
+      - name: server-generic typecheck
+        working-directory: server-generic
+        run: npm run typecheck
+
+      - name: server-generic build
+        working-directory: server-generic
+        run: npm run build
+
+      - name: server-generic smoke
+        working-directory: server-generic
+        run: npm run smoke
+
+      - name: Install windows-wizard dependencies
+        working-directory: deploy/windows-wizard
+        run: npm ci --no-audit --no-fund
+
+      - name: windows-wizard smoke
+        working-directory: deploy/windows-wizard
+        run: npm run smoke
+
+      - name: windows-wizard plan
+        working-directory: deploy/windows-wizard
+        run: npm run plan -- --plan examples/deploy-plan.example.json
+
+      - name: windows-wizard deploy dry-run
+        working-directory: deploy/windows-wizard
+        run: npm run deploy -- --plan examples/deploy-plan.example.json --dry-run
+
+      - name: Install desktop-client dependencies
+        working-directory: deploy/desktop-client
+        run: npm ci --no-audit --no-fund
+
+      - name: desktop-client smoke
+        working-directory: deploy/desktop-client
+        run: npm run smoke
+
+      - name: desktop-client plan
+        working-directory: deploy/desktop-client
+        run: npm run plan
+
+      - name: desktop-client package check
+        working-directory: deploy/desktop-client
+        run: npm run package:check
+
+      - name: Android static checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f deploy/android-shell/settings.gradle
+          test -f deploy/android-shell/build.gradle
+          test -f deploy/android-shell/app/build.gradle
+          test -f deploy/android-shell/app/src/main/AndroidManifest.xml
+
+  local-self-host-docker-smoke:
+    name: Local self-host Docker smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout local smoke ref
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=1 origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
+
+      - name: Install root dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          npm config get registry
+          npm cache verify
+          log_file="$RUNNER_TEMP/root-dependency-install.log"
+          install_cmd=(npm ci --no-audit --no-fund --loglevel verbose)
+          echo "Running: ${install_cmd[*]}"
+          if ! "${install_cmd[@]}" >"$log_file" 2>&1; then
+            echo "root dependency install failed"
+            echo "first npm error lines:"
+            grep -n -m 20 -E 'npm ERR!|ERR!|error|Error' "$log_file" || true
+            echo "last 120 install log lines:"
+            tail -n 120 "$log_file"
+            exit 1
+          fi
+          tail -n 40 "$log_file"
+
+      - name: Root production dependency audit
+        run: npm audit --omit=dev --audit-level=high --no-fund
+
+      - name: Root development dependency audit
+        run: npm audit --audit-level=high --no-fund
+
+      - name: Unit Tests
+        run: npm run test:unit
+
+      - name: SQLite Integration Tests
+        run: npm run test:integration
+
+      - name: Root build
+        shell: bash
+        run: npm run build --silent >/tmp/local-self-host-root-build.log 2>&1 || { cat /tmp/local-self-host-root-build.log; exit 1; }
+
+      - name: Write local self-host env
+        working-directory: deploy/linux
+        shell: bash
+        env:
+          LOCAL_SELF_HOST_ENV: |
+            NODE_ENV=production
+            STATIC_DIR=/app/dist
+            APP_PORT=3000
+            LOCAL_APP_PORT=8788
+            APP_DOMAIN=127.0.0.1
+            VISITOR_ROOT_DOMAIN=127.0.0.1
+            POSTGRES_DB=customer_chat
+            POSTGRES_USER=customer_chat
+            POSTGRES_PASSWORD=local-postgres-password
+            DATABASE_URL=postgres://customer_chat:local-postgres-password@postgres:5432/customer_chat
+            SESSION_SECRET=local-session-secret-change-me-for-ci-only
+            SETUP_TOKEN=local-setup-token
+            ADMIN_SESSION_TTL=86400
+            STORAGE_DRIVER=local
+            STORAGE_PATH=/app/data/uploads
+            BACKUP_DIR=./backup
+            BACKUP_SIGNING_KEY=ci-local-backup-signing-key-32chars
+            MAX_UPLOAD_SIZE=10485760
+            ENCRYPTION_ENABLED=0
+            ENCRYPTION_KEY=
+            ENCRYPTION_KEY_VERSION=v1
+            LIFECYCLE_CRON=0 * * * *
+            LOG_LEVEL=info
+        run: printf '%s\n' "$LOCAL_SELF_HOST_ENV" > .env
+
+      - name: Build local self-host app image
+        working-directory: deploy/linux
+        shell: bash
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml build --quiet app >/tmp/local-self-host-build-app.log 2>&1 || { cat /tmp/local-self-host-build-app.log; exit 1; }
+
+      - name: Start local self-host postgres
+        working-directory: deploy/linux
+        shell: bash
+        run: docker pull -q postgres:16-alpine >/tmp/local-self-host-postgres-pull.log 2>&1 && docker compose -f docker-compose.yml -f docker-compose.local.yml up --no-build -d postgres >/tmp/local-self-host-postgres-up.log 2>&1 || { cat /tmp/local-self-host-postgres-pull.log /tmp/local-self-host-postgres-up.log 2>/dev/null || true; exit 1; }
+
+      - name: Run local self-host migrations
+        working-directory: deploy/linux
+        shell: bash
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app npm run migrate >/tmp/local-self-host-migrate.log 2>&1 || { cat /tmp/local-self-host-migrate.log; exit 1; }
+
+      - name: Start local self-host app
+        working-directory: deploy/linux
+        shell: bash
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app >/tmp/local-self-host-app-up.log 2>&1 || { cat /tmp/local-self-host-app-up.log; exit 1; }
+
+      - name: Wait for local self-host app
+        shell: bash
+        run: for i in {1..60}; do if curl -fsS http://127.0.0.1:8788/healthz >/dev/null; then echo "local self-host app is ready"; exit 0; fi; sleep 2; done; echo "local self-host app did not become ready"; docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres; exit 1
+
+      - name: Run local self-host e2e smoke
+        shell: bash
+        run: SELF_HOST_BASE_URL=http://127.0.0.1:8788 SETUP_TOKEN=local-setup-token ADMIN_USERNAME=local-smoke-admin ADMIN_PASSWORD=local-smoke-admin-password npm --prefix server-generic run e2e:local-smoke
+
+      - name: Local self-host failure diagnostics
+        if: failure()
+        shell: bash
+        run: if [ -f deploy/linux/docker-compose.yml ]; then docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml ps || true; docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres || true; fi
+
+      - name: Cleanup local self-host compose
+        if: always()
+        shell: bash
+        run: if [ -f deploy/linux/docker-compose.yml ]; then docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml down -v || true; fi

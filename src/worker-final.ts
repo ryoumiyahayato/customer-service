@@ -1,5 +1,5 @@
-export { ChatRoom } from './worker-entry';
-import worker from './worker-entry';
+export { ChatRoom } from './worker-preset';
+import worker from './worker-preset';
 import type { Env } from './worker';
 import { COOKIE_NAMES, readCookie } from './security/cookies';
 import { hmacHex, verifySignedValue } from './security/signing';
@@ -205,7 +205,6 @@ async function publicPresentationForInvite(env: Env, token: string) {
   const presentation = await readPresentation(env, owner.id);
   return {
     displayName: String(owner.display_name || owner.username || '在线客服'),
-    welcomeText: presentation.welcomeText,
     avatarUrl: presentation.avatarKey ? '/api/guest-avatar' : '',
   };
 }

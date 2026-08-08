@@ -201,7 +201,7 @@ test('preset text and image content is persisted and returned as ordinary operat
     assert.match(messages[1].imagePath || messages[1].image_path || '', /^\/api\/attachments\/[0-9a-f]{32}\.png$/i);
 
     const stored = database.prepare(`SELECT sender_type,sender_id,message_type,content,image_path,is_read,client_message_id
-      FROM messages WHERE session_id=? ORDER BY datetime(created_at),id`).all(sessionId);
+      FROM messages WHERE session_id=? ORDER BY created_at,id`).all(sessionId);
     assert.equal(stored.length, 3);
     assert.equal(stored.every(row => row.sender_type === 'OPERATOR' && row.sender_id === 'admin-owner'), true);
     assert.equal(stored.every(row => Number(row.is_read) === 1), true);

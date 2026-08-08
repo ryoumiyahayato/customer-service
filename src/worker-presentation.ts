@@ -76,7 +76,6 @@ function publicPresentation(target: OperatorRow, presentation: OperatorPresentat
   return {
     operatorId: target.id,
     displayName: String(target.display_name || target.username || '在线客服'),
-    welcomeText: presentation.welcomeText,
     avatarUrl: presentation.avatarKey ? `/api/operator-avatar/${encodeURIComponent(target.id)}?v=${encodeURIComponent(avatarVersion)}` : '',
     qrBackgroundColor: presentation.qrBackgroundColor,
     qrTopText: presentation.qrTopText,

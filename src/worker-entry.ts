@@ -148,8 +148,7 @@ async function handleInvitePresentation(env: Env, token: string) {
     presentation: {
       operatorId: target.id,
       displayName: String(target.display_name || target.username || '在线客服'),
-      welcomeText: presentation.welcomeText,
-      avatarUrl: presentation.avatarKey
+        avatarUrl: presentation.avatarKey
         ? `/api/operator-avatar/${encodeURIComponent(target.id)}?v=${encodeURIComponent(avatarVersion)}`
         : '',
       qrBackgroundColor: presentation.qrBackgroundColor,

@@ -84,6 +84,23 @@ function createDatabase() {
       session_id TEXT NOT NULL UNIQUE,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE operator_preset_messages (
+      id TEXT PRIMARY KEY,
+      admin_id TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      message_type TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      image_object_key TEXT,
+      image_mime_type TEXT,
+      image_byte_size INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE operator_preset_applications (
+      session_id TEXT PRIMARY KEY,
+      owner_admin_id TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
     CREATE TABLE invite_links (
       id TEXT PRIMARY KEY,
       token_hash TEXT NOT NULL UNIQUE,
