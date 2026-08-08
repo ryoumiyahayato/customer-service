@@ -3,13 +3,14 @@ import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
 
 const visitorApiPath = decodeURIComponent(new URL('./src/visitor/visitorApi.ts', import.meta.url).pathname);
+const visitorStylesPath = decodeURIComponent(new URL('./src/visitor/visitorChat.css', import.meta.url).pathname);
 
 export default defineConfig(({ mode }) => {
   const visitorBuild = mode === 'visitor';
   return {
     base: visitorBuild ? '/visitor/' : '/',
     resolve: visitorBuild
-      ? { alias: { '../api': visitorApiPath } }
+      ? { alias: { '../api': visitorApiPath, '../styles.css': visitorStylesPath } }
       : undefined,
     plugins: [
       react(),
