@@ -50,10 +50,13 @@ test('bare visitor root and invalid visitor subdomains fail closed', async () =>
   assert.equal(nested.status, 404);
 });
 
-test('frontend invite generation cannot fall back to the current admin origin', () => {
+test('frontend invite generation accepts only token-subdomain root URLs and never falls back to admin origin', () => {
   const panel = readFileSync(new URL('../../src/admin/InviteLinkPanel.tsx', import.meta.url), 'utf8');
   assert.match(panel, /buildVisitorInviteUrl\(token, visitorRootDomain\(\)\)/);
+  assert.match(panel, /extractVisitorSubdomainToken\(url\.hostname, root\)/);
+  assert.match(panel, /url\.pathname !== '\/'/);
   assert.doesNotMatch(panel, /window\.location\.origin/);
+  assert.doesNotMatch(panel, /\^\\\/g\\\//);
 
   const wrangler = readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8');
   assert.match(wrangler, /VISITOR_ROOT_DOMAIN = "vx9qn7zr\.org"/);
