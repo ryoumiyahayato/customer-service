@@ -8,8 +8,9 @@ FROM admins
 WHERE role='OPERATOR'
 ON CONFLICT(key) DO NOTHING;
 
--- Corrupt or partial policy rows must never become an implicit allow. Repair them to
--- an explicit deny-all state before the validation triggers below take ownership.
+-- Corrupt, partial, non-object, or duplicate-key policy rows must never become an
+-- implicit allow. Repair them to an explicit deny-all state before the validation
+-- triggers below take ownership.
 UPDATE settings
 SET value_json='{"canCreateInvites":false,"canUseStaffChat":false,"canUploadImages":false}',
     updated_at=datetime('now')
@@ -21,11 +22,26 @@ WHERE key LIKE 'operator_policy:%'
   )
   AND CASE
     WHEN json_valid(value_json)=0 THEN 1
+    WHEN COALESCE(json_type(value_json,'$'),'')<>'object' THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(value_json) THEN value_json ELSE '{}' END) WHERE key='canCreateInvites')<>1 THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(value_json) THEN value_json ELSE '{}' END) WHERE key='canUseStaffChat')<>1 THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(value_json) THEN value_json ELSE '{}' END) WHERE key='canUploadImages')<>1 THEN 1
     WHEN COALESCE(json_type(value_json,'$.canCreateInvites'),'') NOT IN ('true','false') THEN 1
     WHEN COALESCE(json_type(value_json,'$.canUseStaffChat'),'') NOT IN ('true','false') THEN 1
     WHEN COALESCE(json_type(value_json,'$.canUploadImages'),'') NOT IN ('true','false') THEN 1
     ELSE 0
   END = 1;
+
+-- Operator IDs are stable security principals. Renaming one would orphan its mandatory
+-- operator_policy:<id> row and can also invalidate historical ownership references, so
+-- D1 rejects that state transition rather than attempting a cascading identity rewrite.
+CREATE TRIGGER IF NOT EXISTS trg_operator_id_immutable
+BEFORE UPDATE OF id ON admins
+FOR EACH ROW
+WHEN NEW.id<>OLD.id AND (OLD.role='OPERATOR' OR NEW.role='OPERATOR')
+BEGIN
+  SELECT RAISE(ABORT, 'operator_id_immutable');
+END;
 
 -- New operator creation must always create an explicit policy row in the same DB
 -- transaction as the INSERT statement that creates the account.
@@ -55,14 +71,20 @@ BEGIN
   );
 END;
 
--- Only complete boolean policy documents are accepted. This converts the existing
--- application-level permissive fallback into an unreachable state under the D1 schema.
+-- Only complete boolean policy documents with exactly one occurrence of each required
+-- capability key are accepted. Duplicate JSON keys are explicitly rejected because
+-- SQLite path lookup and JavaScript JSON.parse can otherwise disagree about which
+-- duplicate value is authoritative.
 CREATE TRIGGER IF NOT EXISTS trg_operator_policy_validate_insert
 BEFORE INSERT ON settings
 FOR EACH ROW
 WHEN NEW.key LIKE 'operator_policy:%'
   AND CASE
     WHEN json_valid(NEW.value_json)=0 THEN 1
+    WHEN COALESCE(json_type(NEW.value_json,'$'),'')<>'object' THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(NEW.value_json) THEN NEW.value_json ELSE '{}' END) WHERE key='canCreateInvites')<>1 THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(NEW.value_json) THEN NEW.value_json ELSE '{}' END) WHERE key='canUseStaffChat')<>1 THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(NEW.value_json) THEN NEW.value_json ELSE '{}' END) WHERE key='canUploadImages')<>1 THEN 1
     WHEN COALESCE(json_type(NEW.value_json,'$.canCreateInvites'),'') NOT IN ('true','false') THEN 1
     WHEN COALESCE(json_type(NEW.value_json,'$.canUseStaffChat'),'') NOT IN ('true','false') THEN 1
     WHEN COALESCE(json_type(NEW.value_json,'$.canUploadImages'),'') NOT IN ('true','false') THEN 1
@@ -78,6 +100,10 @@ FOR EACH ROW
 WHEN NEW.key LIKE 'operator_policy:%'
   AND CASE
     WHEN json_valid(NEW.value_json)=0 THEN 1
+    WHEN COALESCE(json_type(NEW.value_json,'$'),'')<>'object' THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(NEW.value_json) THEN NEW.value_json ELSE '{}' END) WHERE key='canCreateInvites')<>1 THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(NEW.value_json) THEN NEW.value_json ELSE '{}' END) WHERE key='canUseStaffChat')<>1 THEN 1
+    WHEN (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(NEW.value_json) THEN NEW.value_json ELSE '{}' END) WHERE key='canUploadImages')<>1 THEN 1
     WHEN COALESCE(json_type(NEW.value_json,'$.canCreateInvites'),'') NOT IN ('true','false') THEN 1
     WHEN COALESCE(json_type(NEW.value_json,'$.canUseStaffChat'),'') NOT IN ('true','false') THEN 1
     WHEN COALESCE(json_type(NEW.value_json,'$.canUploadImages'),'') NOT IN ('true','false') THEN 1
