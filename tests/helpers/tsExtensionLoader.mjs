@@ -1,9 +1,21 @@
 import { readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 
 export function registerTypeScriptHooks() {
   registerHooks({
     resolve(specifier, context, nextResolve) {
+      if (specifier.endsWith('.js') && context.parentURL) {
+        const sourceSpecifier = `${specifier.slice(0, -3)}.ts`;
+        try {
+          const sourceUrl = new URL(sourceSpecifier, context.parentURL);
+          if (sourceUrl.protocol === 'file:' && existsSync(sourceUrl)) {
+            return nextResolve(sourceUrl.href, context);
+          }
+        } catch {
+          // Fall through to the normal resolver for package or malformed imports.
+        }
+      }
       try {
         return nextResolve(specifier, context);
       } catch (error) {

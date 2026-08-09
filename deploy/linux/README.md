@@ -23,6 +23,7 @@
 - `app.env.example`：容器内应用变量示例。
 - `Caddyfile`：使用 `APP_DOMAIN` / `VISITOR_ROOT_DOMAIN` 的 HTTPS 自动证书和反向代理配置。
 - `preflight.sh`：真实 VPS 部署前只读预检查，不安装、不改配置、不启动服务、不跑迁移、不打印 secret。
+- `prepare-directories.sh`：在容器启动前创建并收紧 `storage`、`logs`、`BACKUP_DIR`，并对齐显式配置的 `APP_UID` / `APP_GID`。
 - `VPS_ACCEPTANCE.md`：真实 Ubuntu VPS 自托管部署验收 runbook。
 - `install.sh`：部署入口，执行 preflight、compose 配置检查、构建、启动和健康检查。
 - `healthcheck.sh`：只读部署后健康检查。
@@ -46,7 +47,7 @@ Productization validation 已覆盖 local Docker self-host smoke：CI 会在 Git
 
 `preflight.sh` 只检查环境和配置，不安装依赖，不修改系统配置，不启动服务，不执行 migration，不访问 Cloudflare/D1/R2，也不会打印 `.env` 中的 secret 值。不要提交 `.env`。
 
-`storage`、`logs` 和 `BACKUP_DIR` 必须由部署账户拥有并保持 `0700`；备份目录中的 dump、清单和临时文件保持 `0600`。
+`storage`、`logs` 和 `BACKUP_DIR` 必须由 Compose 中实际运行 app 的 `APP_UID:APP_GID` 拥有并保持 `0700`；备份目录中的 dump、清单和临时文件保持 `0600`。`APP_UID` 必须是显式配置的非 root 数字 UID，不能依赖 Compose 的 `1000:1000` 默认值。
 
 ## 最小执行路径
 
@@ -54,12 +55,13 @@ Productization validation 已覆盖 local Docker self-host smoke：CI 会在 Git
 2. 安装 Docker 和 Docker Compose 插件。
 3. 准备后台域名和访客根域 DNS，解析到服务器。
 4. 复制本目录到服务器部署目录。
-5. 复制 `.env.example` 为 `.env`，只在服务器本地填写真实部署变量，并立即执行 `chmod 600 .env`；部署账户必须是 `.env` 的 owner。
-6. 先执行 `./preflight.sh` 做只读 VPS 部署前检查。
-7. 可再执行 `./install.sh --self-check` 做非破坏性配置检查。
-8. 首次空库需要初始化 schema 时，执行 `./install.sh --migrate`。
-9. 已完成 schema 初始化时，执行 `./install.sh`。
-10. 健康检查通过后打开 `https://你的后台域名/setup`。
+5. 复制 `.env.example` 为 `.env`，只在服务器本地填写真实部署变量，包括部署用户对应的 `APP_UID` / `APP_GID`，并立即执行 `chmod 600 .env`；部署账户必须是 `.env` 的 owner。
+6. 先执行 `./prepare-directories.sh`，让宿主机目录在容器启动前完成 owner/mode 准备。
+7. 再执行 `./preflight.sh` 做只读 VPS 部署前检查。
+8. 可再执行 `./install.sh --self-check` 做配置检查。
+9. 首次空库需要初始化 schema 时，执行 `./install.sh --migrate`。
+10. 已完成 schema 初始化时，执行 `./install.sh`。
+11. 健康检查通过后打开 `https://你的后台域名/setup`。
 
 当前通用服务器适配层已经具备 setup、admin auth、admin session、访客会话、文本消息、附件上传、基础 WebSocket 广播、基础 read receipt、lifecycle 骨架、服务端加密存储和 PostgreSQL migration 基础闭环。消息分页、delivery acknowledgement、自动 runner 调度接线和生产数据迁移工具仍会在后续包继续推进。
 
@@ -79,8 +81,10 @@ npm run build
 ```bash
 cd deploy/linux
 cp .env.example .env
-chmod 600 .env
+# Set APP_UID=$(id -u) and APP_GID=$(id -g) in .env for this host.
 # Edit .env locally. Do not commit it.
+chmod 600 .env
+./prepare-directories.sh
 ```
 
 启动本地 Postgres 和 app，不启动 Caddy：

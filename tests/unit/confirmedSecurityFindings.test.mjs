@@ -23,11 +23,23 @@ test('F02 Linux deployment keeps secrets, storage and the app process private', 
     read('deploy/linux/preflight.sh'),
     read('deploy/linux/backup.sh'),
     read('deploy/linux/restore.sh'),
+    read('deploy/linux/prepare-directories.sh'),
   ].join('\n');
   assert.match(scripts, /umask 077/);
   assert.match(scripts, /chmod 600/);
   assert.match(scripts, /check_private_path/);
+  assert.match(scripts, /APP_UID/);
+  assert.match(scripts, /APP_GID/);
+  assert.match(scripts, /chmod 700/);
   assert.match(read('deploy/linux/Dockerfile'), /USER customerchat/);
+  const storage = read('server-generic/src/storage/localStorage.ts');
+  assert.match(storage, /Storage root permissions are unsafe/);
+  assert.match(storage, /Expected owner-only access/);
+  assert.doesNotMatch(storage, /chmod\(root/);
+  assert.match(storage, /writeFile\(target, content, \{ mode: 0o600 \}\)/);
+  const compose = read('deploy/linux/docker-compose.yml');
+  assert.match(compose, /APP_UID:\s+"\$\{APP_UID:\?/);
+  assert.match(compose, /APP_GID:\s+"\$\{APP_GID:\?/);
   assert.match(read('deploy/linux/docker-compose.local.yml'), /127\.0\.0\.1:\$\{LOCAL_APP_PORT/);
 });
 

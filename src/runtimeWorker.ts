@@ -388,7 +388,7 @@ async function consumeInvite(req: Request, env: Env, token: string) {
     return json({ error: ERR_INVITE_CREATE_FAILED }, { status: 500 });
   }
 }
-function apiRateLimitBucket(req: Request) {
+export function apiRateLimitBucket(req: Request) {
   const path = new URL(req.url).pathname;
   if (path.startsWith('/api/ws')) return 'websocket-upgrade';
   if (path === '/api/upload') return 'attachment-upload';

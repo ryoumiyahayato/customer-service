@@ -5,4 +5,4 @@ services:
     environment:
       APP_DOMAIN: ${APP_DOMAIN:-127.0.0.1}
       VISITOR_ROOT_DOMAIN: ${VISITOR_ROOT_DOMAIN:-127.0.0.1}
-      APP_BIND_HOST: ${APP_BIND_HOST:-0.0.0.0}
+      APP_BIND_HOST: 0.0.0.0

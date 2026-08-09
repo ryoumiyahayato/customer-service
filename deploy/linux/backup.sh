@@ -17,8 +17,12 @@ set +a
 
 [[ -n "${POSTGRES_USER:-}" ]] || fail "POSTGRES_USER is required."
 [[ -n "${POSTGRES_DB:-}" ]] || fail "POSTGRES_DB is required."
+[[ "${APP_UID:-}" =~ ^[1-9][0-9]*$ ]] || fail "APP_UID must be an explicitly configured non-root numeric UID."
+[[ "${APP_GID:-}" =~ ^[1-9][0-9]*$ ]] || fail "APP_GID must be an explicitly configured non-root numeric GID."
 BACKUP_SIGNING_KEY="${BACKUP_SIGNING_KEY:-}"
 [[ "${#BACKUP_SIGNING_KEY}" -ge 32 ]] || fail "BACKUP_SIGNING_KEY must be at least 32 characters."
+
+"$ROOT_DIR/prepare-directories.sh"
 
 sign_manifest() {
   docker compose run --rm --no-deps -T app node --input-type=module -e '
@@ -36,7 +40,8 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${BACKUP_TARGET}/${STAMP}"
 
 mkdir -p -m 700 "$OUT_DIR"
-chmod 700 "$BACKUP_TARGET" "$OUT_DIR"
+chown "${APP_UID}:${APP_GID}" -- "$OUT_DIR" || fail "Cannot set backup output ownership to ${APP_UID}:${APP_GID}."
+chmod 700 -- "$OUT_DIR"
 
 echo "Backing up PostgreSQL dump."
 docker compose exec -T postgres pg_dump -Fc --no-owner --no-privileges -U "${POSTGRES_USER}" "${POSTGRES_DB}" > "${OUT_DIR}/postgres.dump"

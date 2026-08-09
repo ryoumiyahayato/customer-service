@@ -122,6 +122,7 @@ jobs:
           bash -n deploy/linux/restore.sh
           bash -n deploy/linux/upgrade.sh
           bash -n deploy/linux/preflight.sh
+          bash -n deploy/linux/prepare-directories.sh
 
       - name: Docker compose static config
         shell: bash
@@ -131,6 +132,8 @@ jobs:
           NODE_ENV=production
           STATIC_DIR=/app/dist
           APP_PORT=3000
+          APP_UID=1000
+          APP_GID=1000
           APP_DOMAIN=admin.example.com
           VISITOR_ROOT_DOMAIN=visitor.example.com
           POSTGRES_DB=customer_chat
@@ -271,6 +274,7 @@ jobs:
             STATIC_DIR=/app/dist
             APP_PORT=3000
             LOCAL_APP_PORT=8788
+            APP_BIND_HOST=0.0.0.0
             APP_DOMAIN=127.0.0.1
             VISITOR_ROOT_DOMAIN=127.0.0.1
             POSTGRES_DB=customer_chat
@@ -288,9 +292,29 @@ jobs:
             ENCRYPTION_ENABLED=0
             ENCRYPTION_KEY=
             ENCRYPTION_KEY_VERSION=v1
-            LIFECYCLE_CRON=0 * * * *
+            LIFECYCLE_CRON='0 * * * *'
             LOG_LEVEL=info
         run: printf '%s\n' "$LOCAL_SELF_HOST_ENV" > .env
+
+      - name: Prepare local self-host private directories
+        working-directory: deploy/linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_UID="$(id -u)"
+          APP_GID="$(id -g)"
+          printf 'APP_UID=%s\nAPP_GID=%s\n' "$APP_UID" "$APP_GID" >> .env
+          chmod 600 .env
+          install -d -m 700 storage logs backup
+          for path in storage logs backup; do
+            owner="$(stat -c '%u' "$path")"
+            group="$(stat -c '%g' "$path")"
+            mode="$(stat -c '%a' "$path")"
+            test "$owner" = "$APP_UID"
+            test "$group" = "$APP_GID"
+            test "$mode" = 700
+          done
+          test "$(stat -c '%a' .env)" = 600
 
       - name: Build local self-host app image
         working-directory: deploy/linux
@@ -316,9 +340,28 @@ jobs:
         shell: bash
         run: for i in {1..60}; do if curl -fsS http://127.0.0.1:8788/healthz >/dev/null; then echo "local self-host app is ready"; exit 0; fi; sleep 2; done; echo "local self-host app did not become ready"; docker compose -f deploy/linux/docker-compose.yml -f deploy/linux/docker-compose.local.yml logs --tail=120 app postgres; exit 1
 
+      - name: Validate local self-host security boundary
+        working-directory: deploy/linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_UID="$(id -u)"
+          APP_GID="$(id -g)"
+          actual_uid="$(docker compose -f docker-compose.yml -f docker-compose.local.yml exec -T app id -u | tr -d '\r\n')"
+          actual_gid="$(docker compose -f docker-compose.yml -f docker-compose.local.yml exec -T app id -g | tr -d '\r\n')"
+          test "$actual_uid" = "$APP_UID"
+          test "$actual_uid" != 0
+          test "$actual_gid" = "$APP_GID"
+          for path in storage logs backup; do
+            test "$(stat -c '%u' "$path")" = "$APP_UID"
+            test "$(stat -c '%g' "$path")" = "$APP_GID"
+            test "$(stat -c '%a' "$path")" = 700
+          done
+          test "$(stat -c '%a' .env)" = 600
+
       - name: Run local self-host e2e smoke
         shell: bash
-        run: SELF_HOST_BASE_URL=http://127.0.0.1:8788 SETUP_TOKEN=local-setup-token ADMIN_USERNAME=local-smoke-admin ADMIN_PASSWORD=local-smoke-admin-password npm --prefix server-generic run e2e:local-smoke
+        run: SELF_HOST_BASE_URL=http://127.0.0.1:8788 SETUP_TOKEN=local-setup-token ADMIN_USERNAME=local-smoke-admin ADMIN_PASSWORD=local-smoke-admin-password SELF_HOST_STORAGE_ROOT=deploy/linux/storage SELF_HOST_APP_UID="$(id -u)" SELF_HOST_APP_GID="$(id -g)" npm --prefix server-generic run e2e:local-smoke
 
       - name: Local self-host failure diagnostics
         if: failure()

@@ -367,6 +367,50 @@ test('pre-0010 database still delivers visitor and administrator images into the
     assert.equal(imagePayload?.message?.clientMessageId, 'visitor-image-1');
 
     const adminCookie = await seedAdminCookie(database);
+    const visitorTextRow = database.prepare(
+      'SELECT id,is_read FROM messages WHERE session_id=? AND client_message_id=?',
+    ).get(sessionId, 'visitor-text-1');
+    assert.equal(Number(visitorTextRow.is_read), 0);
+
+    const messagesBeforeGet = Number(database.prepare(
+      'SELECT is_read FROM messages WHERE id=?',
+    ).get(visitorTextRow.id).is_read);
+    const readOnlyGet = await worker.fetch(adminRequest(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: 'GET',
+      headers: { Cookie: adminCookie },
+    }), env, ctx);
+    assert.equal(readOnlyGet.status, 200);
+    assert.equal(Number(database.prepare(
+      'SELECT is_read FROM messages WHERE id=?',
+    ).get(visitorTextRow.id).is_read), messagesBeforeGet);
+
+    const crossSiteRead = await worker.fetch(new Request(
+      `https://${ADMIN_HOST}/api/sessions/${encodeURIComponent(sessionId)}/read`,
+      {
+        method: 'POST',
+        headers: {
+          Cookie: adminCookie,
+          Origin: 'https://evil.example',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ messageIds: [visitorTextRow.id] }),
+      },
+    ), env, ctx);
+    assert.equal(crossSiteRead.status, 403);
+    assert.equal(Number(database.prepare(
+      'SELECT is_read FROM messages WHERE id=?',
+    ).get(visitorTextRow.id).is_read), 0);
+
+    const sameOriginRead = await worker.fetch(adminRequest(`/api/sessions/${encodeURIComponent(sessionId)}/read`, {
+      method: 'POST',
+      headers: { Cookie: adminCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageIds: [visitorTextRow.id] }),
+    }), env, ctx);
+    assert.equal(sameOriginRead.status, 200);
+    assert.equal(Number(database.prepare(
+      'SELECT is_read FROM messages WHERE id=?',
+    ).get(visitorTextRow.id).is_read), 1);
+
     const adminUpload = await worker.fetch(adminRequest(`/api/upload?sessionId=${encodeURIComponent(sessionId)}`, {
       method: 'POST',
       headers: { Cookie: adminCookie },

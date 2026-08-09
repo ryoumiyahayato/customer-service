@@ -59,14 +59,15 @@ require_file ".env"
 require_file "docker-compose.yml"
 require_file "Caddyfile"
 require_file "healthcheck.sh"
+require_file "prepare-directories.sh"
 check_private_env
 
 set -a
 source .env
 set +a
 
-APP_UID="${APP_UID:-$(id -u)}"
-APP_GID="${APP_GID:-$(id -g)}"
+APP_UID="${APP_UID:-}"
+APP_GID="${APP_GID:-}"
 export APP_UID APP_GID
 
 for name in \
@@ -80,10 +81,14 @@ for name in \
   SETUP_TOKEN \
   STORAGE_PATH \
   BACKUP_DIR \
-  BACKUP_SIGNING_KEY; do
+  BACKUP_SIGNING_KEY \
+  APP_UID \
+  APP_GID; do
   require_env "$name"
 done
 
+[[ "$APP_UID" =~ ^[1-9][0-9]*$ ]] || fail "APP_UID must be an explicitly configured non-root numeric UID."
+[[ "$APP_GID" =~ ^[1-9][0-9]*$ ]] || fail "APP_GID must be an explicitly configured non-root numeric GID."
 [[ "${#BACKUP_SIGNING_KEY}" -ge 32 ]] || fail "BACKUP_SIGNING_KEY must be at least 32 characters."
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -94,8 +99,8 @@ if ! docker compose version >/dev/null 2>&1; then
   fail "Docker Compose plugin is required."
 fi
 
-mkdir -p -m 700 storage logs "${BACKUP_DIR:-./backup}"
-chmod 700 storage logs "${BACKUP_DIR:-./backup}"
+echo "Preparing private deployment directories for ${APP_UID}:${APP_GID}..."
+"$ROOT_DIR/prepare-directories.sh"
 
 echo "Linux deployment preflight passed."
 echo "Validating Docker Compose configuration..."
