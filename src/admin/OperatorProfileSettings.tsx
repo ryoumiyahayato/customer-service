@@ -23,12 +23,14 @@ export default function OperatorProfileSettings({ username, role }: { username: 
   const [loading, setLoading] = useState(true);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordEditing, setPasswordEditing] = useState(false);
   const [nameEditing, setNameEditing] = useState(false);
   const [nameSaving, setNameSaving] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [loginUsernameDraft, setLoginUsernameDraft] = useState(username);
   const [loginPassword, setLoginPassword] = useState('');
   const [loginUsernameSaving, setLoginUsernameSaving] = useState(false);
+  const [loginUsernameEditing, setLoginUsernameEditing] = useState(false);
   const [password, setPassword] = useState('');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -88,6 +90,21 @@ export default function OperatorProfileSettings({ username, role }: { username: 
     }
   };
 
+  const beginLoginUsernameEdit = () => {
+    setLoginUsernameDraft(username);
+    setLoginPassword('');
+    setLoginUsernameEditing(true);
+    setPasswordEditing(false);
+    setError('');
+  };
+
+  const cancelLoginUsernameEdit = () => {
+    setLoginUsernameDraft(username);
+    setLoginPassword('');
+    setLoginUsernameEditing(false);
+    setError('');
+  };
+
   const saveAdminLoginUsername = async (event: React.FormEvent) => {
     event.preventDefault();
     if (role !== 'SUPER_ADMIN' || loginUsernameSaving) return;
@@ -117,6 +134,7 @@ export default function OperatorProfileSettings({ username, role }: { username: 
       });
       setLoginUsernameDraft(response.profile?.username || nextUsername);
       setLoginPassword('');
+      setLoginUsernameEditing(false);
       flash('管理员登录账号已更新');
       setTimeout(() => window.location.reload(), 350);
     } catch (err) {
@@ -161,6 +179,20 @@ export default function OperatorProfileSettings({ username, role }: { username: 
     }
   };
 
+  const beginPasswordEdit = () => {
+    setPassword('');
+    setPasswordEditing(true);
+    setLoginUsernameEditing(false);
+    setLoginPassword('');
+    setError('');
+  };
+
+  const cancelPasswordEdit = () => {
+    setPassword('');
+    setPasswordEditing(false);
+    setError('');
+  };
+
   const changePassword = async (event: React.FormEvent) => {
     event.preventDefault();
     if (passwordSaving || password.length < 12) return;
@@ -172,6 +204,7 @@ export default function OperatorProfileSettings({ username, role }: { username: 
         body: JSON.stringify({ password }),
       });
       setPassword('');
+      setPasswordEditing(false);
       flash('密码已更新，其他登录会话已撤销');
     } catch (err) {
       setError(getErrorMessage(err, '修改密码失败'));
@@ -232,19 +265,43 @@ export default function OperatorProfileSettings({ username, role }: { username: 
         <small>JPG / PNG / WebP，最大 2MB。</small>
       </div>
 
-      {role === 'SUPER_ADMIN' ? (
-        <form className="account-setting-block account-login-name-form" onSubmit={saveAdminLoginUsername} autoComplete="off">
-          <div className="account-setting-title"><b>管理员登录账号</b><span>只影响后台登录，不改变对外显示名称</span></div>
-          <label><span>新的登录账号</span><input type="text" minLength={3} maxLength={64} autoComplete="off" value={loginUsernameDraft} onChange={event => setLoginUsernameDraft(event.target.value)} /></label>
-          <label><span>当前密码</span><input type="password" maxLength={128} autoComplete="current-password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="确认当前管理员密码" /></label>
-          <button type="submit" disabled={loginUsernameSaving || !loginPassword || !LOGIN_USERNAME_RE.test(loginUsernameDraft.trim())}>{loginUsernameSaving ? '修改中…' : '修改登录账号'}</button>
-        </form>
-      ) : null}
+      <div className="account-setting-block account-login-security-block">
+        <div className="account-setting-title"><b>后台登录</b><span>登录账号与登录密码在这里分别管理，不影响对外显示名称。</span></div>
 
-      <form className="account-setting-block account-password-form" onSubmit={changePassword} autoComplete="off">
-        <label><span><b>登录密码</b><small>修改后撤销本账号的其他后台会话</small></span><input type="password" minLength={12} maxLength={128} autoComplete="new-password" value={password} onChange={event => setPassword(event.target.value)} placeholder="新密码（至少 12 位）" /></label>
-        <button type="submit" disabled={passwordSaving || password.length < 12}>{passwordSaving ? '修改中…' : '修改密码'}</button>
-      </form>
+        {role === 'SUPER_ADMIN' ? (
+          <>
+            <div className="account-login-summary-row">
+              <div><span>管理员登录账号</span><b>{username}</b></div>
+              {!loginUsernameEditing ? <button type="button" className="secondary" onClick={beginLoginUsernameEdit}>修改账号</button> : null}
+            </div>
+            {loginUsernameEditing ? (
+              <form className="account-login-edit-form" onSubmit={saveAdminLoginUsername} autoComplete="off">
+                <label><span>新的登录账号</span><input type="text" minLength={3} maxLength={64} autoComplete="off" value={loginUsernameDraft} onChange={event => setLoginUsernameDraft(event.target.value)} /></label>
+                <label><span>当前密码</span><input type="password" maxLength={128} autoComplete="current-password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="仅用于确认本次账号修改" /></label>
+                <div className="account-login-edit-actions">
+                  <button type="button" className="secondary" onClick={cancelLoginUsernameEdit} disabled={loginUsernameSaving}>取消</button>
+                  <button type="submit" disabled={loginUsernameSaving || !loginPassword || !LOGIN_USERNAME_RE.test(loginUsernameDraft.trim())}>{loginUsernameSaving ? '修改中…' : '确认修改账号'}</button>
+                </div>
+              </form>
+            ) : null}
+            <div className="account-login-divider" />
+          </>
+        ) : null}
+
+        <div className="account-login-summary-row">
+          <div><span>登录密码</span><b className="account-password-mask">••••••••••••</b><small>修改后撤销本账号的其他后台会话</small></div>
+          {!passwordEditing ? <button type="button" className="secondary" onClick={beginPasswordEdit}>修改密码</button> : null}
+        </div>
+        {passwordEditing ? (
+          <form className="account-password-edit-form" onSubmit={changePassword} autoComplete="off">
+            <label><span>新密码</span><input autoFocus type="password" minLength={12} maxLength={128} autoComplete="new-password" value={password} onChange={event => setPassword(event.target.value)} placeholder="至少 12 位" /></label>
+            <div className="account-login-edit-actions">
+              <button type="button" className="secondary" onClick={cancelPasswordEdit} disabled={passwordSaving}>取消</button>
+              <button type="submit" disabled={passwordSaving || password.length < 12}>{passwordSaving ? '修改中…' : '确认修改密码'}</button>
+            </div>
+          </form>
+        ) : null}
+      </div>
 
       {notice ? <p className="account-setting-notice">{notice}</p> : null}
       {error ? <p className="form-error">{error}</p> : null}
