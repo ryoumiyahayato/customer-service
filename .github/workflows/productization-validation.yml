@@ -331,6 +331,11 @@ jobs:
         shell: bash
         run: docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app npm run migrate >/tmp/local-self-host-migrate.log 2>&1 || { cat /tmp/local-self-host-migrate.log; exit 1; }
 
+      - name: PostgreSQL visitor JOIN regression
+        working-directory: deploy/linux
+        shell: bash
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm app npm run check:postgres-visitor-joins >/tmp/local-self-host-postgres-join.log 2>&1 || { cat /tmp/local-self-host-postgres-join.log; exit 1; }
+
       - name: Start local self-host app
         working-directory: deploy/linux
         shell: bash

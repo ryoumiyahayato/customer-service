@@ -34,6 +34,9 @@ type ChatSessionRow = {
 const CHAT_SESSION_COLUMNS = `id, status, customer_name, created_at, updated_at, closed_at,
   archived_at, deleted_at, history_cleared_at, purged_at, assigned_operator_id`;
 
+export const CHAT_SESSION_COLUMNS_FROM_C = `c.id, c.status, c.customer_name, c.created_at, c.updated_at, c.closed_at,
+  c.archived_at, c.deleted_at, c.history_cleared_at, c.purged_at, c.assigned_operator_id`;
+
 function toIso(value: Date | null): string | null {
   return value ? value.toISOString() : null;
 }
@@ -91,7 +94,7 @@ export async function requireVisitorSession(
 ) {
   if (!visitorToken) throw new HttpError(401, 'visitor_token_required');
   const rows = await db.query<ChatSessionRow>(
-    `SELECT ${CHAT_SESSION_COLUMNS}
+    `SELECT ${CHAT_SESSION_COLUMNS_FROM_C}
        FROM chat_sessions c
        JOIN visitor_sessions v ON v.chat_session_id=c.id
       WHERE c.id = $1

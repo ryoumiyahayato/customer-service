@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { generateVisitorToken, hashSessionToken, hashVisitorToken } from './crypto.js';
-import { mapChatSession, type ChatSessionSummary } from './chat.js';
+import { CHAT_SESSION_COLUMNS_FROM_C, mapChatSession, type ChatSessionSummary } from './chat.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError } from './http.js';
 import { isSuperAdmin, type AdminIdentity } from './sessions.js';
@@ -199,16 +199,15 @@ export async function consumeInvite(
     if (invite.consumed_at) {
       if (!invite.session_id || !existingVisitorToken) throw new HttpError(410, 'invite_already_consumed');
       const resumed = await client.query<ChatSessionRow>(
-        `SELECT id, status, customer_name, created_at, updated_at, closed_at,
-                archived_at, deleted_at, history_cleared_at, purged_at, assigned_operator_id
+        `SELECT ${CHAT_SESSION_COLUMNS_FROM_C}
            FROM chat_sessions c
            JOIN visitor_sessions v ON v.chat_session_id=c.id
           WHERE c.id = $1
             AND v.token_hash = $2
             AND v.revoked_at IS NULL
             AND v.expires_at > now()
-            AND deleted_at IS NULL
-            AND history_cleared_at IS NULL
+            AND c.deleted_at IS NULL
+            AND c.history_cleared_at IS NULL
           LIMIT 1`,
         [invite.session_id, hashVisitorToken(existingVisitorToken)],
       );
