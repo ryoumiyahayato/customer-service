@@ -3,6 +3,7 @@ import InviteLinkPanel from './InviteLinkPanel';
 import OperatorProfileSettings from './OperatorProfileSettings';
 import PresetMessageEditor from './PresetMessageEditor';
 import AdminRiskCenter from './AdminRiskCenter';
+import DesktopOperatorManagement from './DesktopOperatorManagement';
 import { useAdminWorkspace } from './AdminWorkspaceContext';
 import './desktopAdminPolish.css';
 import './qrComposer.css';
@@ -44,7 +45,7 @@ export default function DesktopAdminPolish() {
   useEffect(() => {
     document.body.classList.toggle('desktop-admin-qr-mode', desktop && mode === 'qr');
     document.body.classList.toggle('desktop-admin-settings-mode', desktop && mode === 'settings');
-    document.body.classList.toggle('desktop-admin-settings-legacy', desktop && mode === 'settings' && (settingsPage === 'staff' || settingsPage === 'operators'));
+    document.body.classList.toggle('desktop-admin-settings-legacy', desktop && mode === 'settings' && settingsPage === 'staff');
     document.body.classList.toggle('desktop-admin-details-open', desktop && mode === 'messages' && detailsOpen);
     return () => document.body.classList.remove('desktop-admin-qr-mode', 'desktop-admin-settings-mode', 'desktop-admin-settings-legacy', 'desktop-admin-details-open');
   }, [desktop, mode, settingsPage, detailsOpen]);
@@ -99,15 +100,11 @@ export default function DesktopAdminPolish() {
       openView('staffChat');
       return;
     }
-    if (page === 'operators') {
-      openView('operators');
-      return;
-    }
     openView('sessions');
   };
 
   if (!desktop) return null;
-  const ownSettingsOverlay = mode === 'settings' && (settingsPage === 'profile' || settingsPage === 'preset' || settingsPage === 'security');
+  const ownSettingsOverlay = mode === 'settings' && (settingsPage === 'profile' || settingsPage === 'preset' || settingsPage === 'operators' || settingsPage === 'security');
 
   return (
     <>
@@ -151,6 +148,7 @@ export default function DesktopAdminPolish() {
         <main className="desktop-settings-content">
           {settingsPage === 'profile' ? <OperatorProfileSettings username={admin.username} role={admin.role} /> : null}
           {settingsPage === 'preset' ? <PresetMessageEditor /> : null}
+          {settingsPage === 'operators' && isSuper ? <DesktopOperatorManagement initialOperators={operators} /> : null}
           {settingsPage === 'security' && isSuper ? <AdminRiskCenter /> : null}
         </main>
       ) : null}
