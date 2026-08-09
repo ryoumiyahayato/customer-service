@@ -366,7 +366,7 @@ jobs:
 
       - name: Run local self-host e2e smoke
         shell: bash
-        run: SELF_HOST_BASE_URL=http://127.0.0.1:8788 SETUP_TOKEN=local-setup-token ADMIN_USERNAME=local-smoke-admin ADMIN_PASSWORD=local-smoke-admin-password SELF_HOST_STORAGE_ROOT=deploy/linux/storage SELF_HOST_APP_UID="$(id -u)" SELF_HOST_APP_GID="$(id -g)" npm --prefix server-generic run e2e:local-smoke
+        run: SELF_HOST_BASE_URL=http://127.0.0.1:8788 SETUP_TOKEN=local-setup-token ADMIN_USERNAME=local-smoke-admin ADMIN_PASSWORD=local-smoke-admin-password SELF_HOST_STORAGE_ROOT="$GITHUB_WORKSPACE/deploy/linux/storage" SELF_HOST_APP_UID="$(id -u)" SELF_HOST_APP_GID="$(id -g)" npm --prefix server-generic run e2e:local-smoke
 
       - name: Local self-host failure diagnostics
         if: failure()
