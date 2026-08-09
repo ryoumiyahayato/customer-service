@@ -1,4 +1,4 @@
-import type { DeploymentConfig } from './config.js';
+import { DEPLOYMENT_SSH_PASSWORD_ENV, type DeploymentConfig } from './config.js';
 import { readFile } from 'node:fs/promises';
 import { Client } from 'ssh2';
 import { redactText } from './redact.js';
@@ -48,9 +48,8 @@ function connectionConfig(config: DeploymentConfig) {
     return readFile(config.privateKeyPath, 'utf8').then((privateKey) => ({ ...base, privateKey }));
   }
 
-  if (!config.passwordEnv) throw new Error('passwordEnv is required for password auth.');
-  const password = process.env[config.passwordEnv];
-  if (!password) throw new Error(`Password environment variable ${config.passwordEnv} is not set.`);
+  const password = process.env[DEPLOYMENT_SSH_PASSWORD_ENV];
+  if (!password) throw new Error(`${DEPLOYMENT_SSH_PASSWORD_ENV} is not set.`);
   return Promise.resolve({ ...base, password });
 }
 

@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+
 export const CLOUDFLARE_PRODUCTION_BRANCH = 'main';
 export const D1_DATABASE_NAME = 'customer_chat_db';
 
@@ -17,8 +20,21 @@ export function workersBuildBranchDecision(env = process.env) {
 }
 
 export function wranglerInvocation(wranglerBin, npxBin, args) {
-  if (wranglerBin) return { command: wranglerBin, args: [...args] };
-  return { command: npxBin, args: ['wrangler', ...args] };
+  if (wranglerBin) {
+    const candidate = wranglerBin.endsWith('.cmd')
+      ? path.resolve(path.dirname(wranglerBin), '..', 'wrangler', 'bin', 'wrangler.js')
+      : wranglerBin;
+    if (existsSync(candidate)) return { command: process.execPath, args: [candidate, ...args] };
+  }
+  return nodeNpmInvocation(['exec', '--', 'wrangler', ...args]);
+}
+
+export function nodeNpmInvocation(args) {
+  const configured = String(process.env.npm_execpath || '');
+  const bundled = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const npmCli = configured.endsWith('.js') && existsSync(configured) ? configured : bundled;
+  if (!existsSync(npmCli)) throw new Error(`npm CLI entrypoint not found: ${npmCli}`);
+  return { command: process.execPath, args: [npmCli, ...args] };
 }
 
 export function migrationListArgs() {

@@ -140,10 +140,11 @@ async function protectLogin(req: Request, env: Env) {
   if (contentLengthExceeds(req, JSON_REQUEST_MAX_BYTES)) return invalidInput('请求体过大', 413);
   const body = await readJsonClone(req);
   const username = String(body.username || '').trim().toLowerCase().slice(0, 80);
-  const ipLimited = await consumeLimit(env, rateLimitKey(`login:ip:${clientIp(req)}:${path}`), LOGIN_IP_LIMIT, LOGIN_WINDOW_MS);
+  const loginBucket = path === '/api/account/login' ? 'visitor-login' : 'admin-login';
+  const ipLimited = await consumeLimit(env, rateLimitKey(`login:ip:${loginBucket}:${clientIp(req)}`), LOGIN_IP_LIMIT, LOGIN_WINDOW_MS);
   if (ipLimited) return ipLimited;
   if (username) {
-    const accountLimited = await consumeLimit(env, rateLimitKey(`login:account:${path}:${username}`), LOGIN_ACCOUNT_LIMIT, LOGIN_WINDOW_MS);
+    const accountLimited = await consumeLimit(env, rateLimitKey(`login:account:${loginBucket}:${username}`), LOGIN_ACCOUNT_LIMIT, LOGIN_WINDOW_MS);
     if (accountLimited) return accountLimited;
   }
   return null;

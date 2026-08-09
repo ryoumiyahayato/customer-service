@@ -76,7 +76,7 @@ try {
   check('attachment expiry normalizes expires_at with datetime()', lifecycle.includes("datetime(expires_at) <= datetime('now')"));
 
   const claimIndex = lifecycle.indexOf('SET purged_at=?,updated_at=?');
-  const r2DeleteIndex = lifecycle.indexOf('env.UPLOADS!.delete(key)');
+  const r2DeleteIndex = lifecycle.indexOf('env.UPLOADS.delete(key)');
   check('purge claims the session before destructive cleanup', claimIndex >= 0 && r2DeleteIndex >= 0 && claimIndex < r2DeleteIndex);
   check('purge retries claimed sessions with uncleared history', lifecycle.includes('purged_at IS NOT NULL') && lifecycle.includes('history_cleared_at IS NULL'));
   check('purge deletes attachment rows', lifecycle.includes('DELETE FROM attachments'));
@@ -129,7 +129,7 @@ try {
 
   check(
     'Messages API checks purged_at',
-    /session\.purged_at\)\s*(?:\{\s*)?return json\(\{ messages: \[\] \}/.test(worker),
+    /session\.purged_at\)\s*return json\(\{ messages: \[\](?:, nextCursor: null)? \}/.test(worker),
   );
   check(
     'Customer-read API checks purged_at',

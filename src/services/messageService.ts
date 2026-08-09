@@ -1,4 +1,5 @@
 import { MessageRepository, type MessageRecord } from '../repositories/messageRepository';
+import { DomainError } from '../http/errors';
 
 export type CreateMessageInput = {
   sessionId: string;
@@ -47,8 +48,9 @@ export class MessageService {
       client_message_id: input.clientMessageId,
     };
 
+    let inserted = false;
     try {
-      await this.messages.insert(message);
+      inserted = await this.messages.insertWithQuota(message);
     } catch (error) {
       const duplicate = await this.messages.findDuplicate(
         input.sessionId,
@@ -59,6 +61,7 @@ export class MessageService {
       if (duplicate) return { message: duplicate, deduped: true };
       throw error;
     }
+    if (!inserted) throw new DomainError('MESSAGE_QUOTA_EXCEEDED', 429);
 
     const attachmentKey = message.message_type === 'image'
       ? this.attachmentKeyFromPath(message.image_path)

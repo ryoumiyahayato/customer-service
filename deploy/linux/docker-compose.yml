@@ -11,6 +11,10 @@ services:
       STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
       STORAGE_PATH: ${STORAGE_PATH:-/app/storage}
       APP_PORT: ${APP_PORT:-3000}
+      APP_BIND_HOST: ${APP_BIND_HOST:-0.0.0.0}
+      APP_UID: ${APP_UID:-1000}
+      APP_GID: ${APP_GID:-1000}
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     depends_on:
       postgres:
         condition: service_healthy

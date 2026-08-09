@@ -5,7 +5,7 @@ import { createVisitorSession, requireVisitorSession } from './chat.js';
 import { hashVisitorToken } from './crypto.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError, optionalString } from './http.js';
-import { createSessionMessage, listSessionMessages, normalizeMessageBody } from './messages.js';
+import { createSessionMessage, listSessionMessagePage, markSessionMessagesRead, normalizeMessageBody } from './messages.js';
 import { readJsonBody, sendJson } from './response.js';
 import { isSafeId } from './routes.js';
 import { getVisitorToken } from './security.js';
@@ -29,7 +29,7 @@ export async function handleCreateVisitorAttachment(
   sessionId: string,
 ) {
   if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
-  await requireVisitorSession(db, sessionId, getVisitorToken(request.headers));
+  await requireVisitorSession(db, sessionId, getVisitorToken(request.headers), 'upload');
   const attachment = await createVisitorAttachment(config, db, storage, request, url, sessionId);
   hub.broadcastToSession(sessionId, {
     type: 'message_created',
@@ -60,7 +60,7 @@ export async function handleVisitorAttachmentDownload(
   attachmentId: string,
 ) {
   if (!isSafeId(sessionId) || !isSafeId(attachmentId)) throw new HttpError(404, 'attachment_not_found');
-  await requireVisitorSession(db, sessionId, getVisitorToken(request.headers));
+  await requireVisitorSession(db, sessionId, getVisitorToken(request.headers), 'read');
   await sendVisitorAttachment(response, db, storage, config.encryption, sessionId, attachmentId);
 }
 
@@ -74,11 +74,19 @@ export async function handleVisitorMessages(
 ) {
   if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
   const visitorToken = getVisitorToken(request.headers);
-  await requireVisitorSession(db, sessionId, visitorToken);
+  await requireVisitorSession(db, sessionId, visitorToken, request.method === 'POST' ? 'write' : 'read');
 
   if (request.method === 'GET') {
-    const messages = await listSessionMessages(db, sessionId, config.encryption);
-    sendJson(response, 200, { ok: true, messages });
+    const requestUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    const page = await listSessionMessagePage(
+      db,
+      sessionId,
+      config.encryption,
+      Number(requestUrl.searchParams.get('limit') || 100),
+      requestUrl.searchParams.get('after'),
+      requestUrl.searchParams.get('before'),
+    );
+    sendJson(response, 200, { ok: true, ...page });
     return;
   }
 
@@ -99,4 +107,23 @@ export async function handleVisitorMessages(
   }
 
   throw new HttpError(405, 'method_not_allowed');
+}
+
+export async function handleVisitorRead(
+  request: IncomingMessage,
+  response: ServerResponse,
+  db: PostgresAdapter,
+  hub: WebSocketHub,
+  sessionId: string,
+) {
+  if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
+  const visitorToken = getVisitorToken(request.headers);
+  await requireVisitorSession(db, sessionId, visitorToken, 'read');
+  const body = await readJsonBody<Record<string, unknown>>(request);
+  const requested = Array.isArray(body.messageIds)
+    ? body.messageIds.filter((id): id is string => typeof id === 'string')
+    : undefined;
+  const receipt = await markSessionMessagesRead(db, sessionId, 'visitor', requested);
+  if (receipt.messageIds.length) hub.broadcastToSession(sessionId, { type: 'messages:read', sessionId, ...receipt });
+  sendJson(response, 200, { ok: true, ...receipt });
 }

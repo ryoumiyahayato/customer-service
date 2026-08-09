@@ -29,6 +29,7 @@ export type GenericServerConfig = {
   maxUploadSize: number;
   logLevel: string;
   appPort: number;
+  bindHost: string;
   staticDir: string;
   encryption: EncryptionConfig;
   abuse: AbuseLimitConfig;
@@ -120,6 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GenericServerC
     maxUploadSize: readNumber(env, 'MAX_UPLOAD_SIZE', 10485760),
     logLevel: readEnv(env, 'LOG_LEVEL', 'info'),
     appPort: readNumber(env, 'APP_PORT', 3000),
+    bindHost: readEnv(env, 'APP_BIND_HOST', '127.0.0.1'),
     staticDir: readEnv(env, 'STATIC_DIR', '/app/dist'),
     encryption: loadEncryptionConfig(env),
     abuse: loadAbuseConfig(env),

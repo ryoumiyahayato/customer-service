@@ -10,6 +10,7 @@
 # - no secret value printing
 
 set -u
+umask 077
 
 FAIL_COUNT=0
 WARN_COUNT=0
@@ -92,6 +93,25 @@ env_value_matches() {
   local value
   value="$(env_value "$key")"
   printf '%s' "$value" | grep -Eiq "$pattern"
+}
+
+check_private_path() {
+  local path="$1"
+  local expected_mode="$2"
+  if [ ! -e "$path" ]; then
+    pass "${path} will be created with mode ${expected_mode}"
+    return
+  fi
+  local owner mode
+  owner="$(stat -c '%u' "$path" 2>/dev/null || true)"
+  mode="$(stat -c '%a' "$path" 2>/dev/null || true)"
+  if [ "$owner" != "$(id -u)" ]; then
+    fail "${path} must be owned by the current deployment account"
+  elif [ "$mode" != "$expected_mode" ]; then
+    fail "${path} must have mode ${expected_mode}; refusing to continue"
+  else
+    pass "${path} owner and mode are secure"
+  fi
 }
 
 check_required_env() {
@@ -213,6 +233,7 @@ check_port "443"
 
 if [ -f ".env" ]; then
   pass ".env exists"
+  check_private_path ".env" "600"
 else
   fail ".env is missing; copy .env.example to .env and fill it only on the VPS"
 fi
@@ -245,6 +266,10 @@ if [ -f ".env" ]; then
       fail ".env key appears to contain a placeholder or localhost value: ${key}"
     fi
   done
+
+  check_private_path "storage" "700"
+  check_private_path "logs" "700"
+  check_private_path "$(env_value BACKUP_DIR)" "700"
 
   fail "server-generic public deployment is disabled until it implements the same separate admin bundle, visitor bundle, token-subdomain host capability, and visitor API boundary as the Cloudflare production entry; use the Cloudflare production deployment for public traffic"
 

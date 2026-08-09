@@ -24,10 +24,7 @@ const GENERIC_SECRET_PATTERNS: RegExp[] = [
 ];
 
 export function secretValues(config?: Partial<DeploymentConfig>): string[] {
-  const values = [config?.privateKeyPath].filter((value): value is string => Boolean(value));
-  const passwordEnv = config?.passwordEnv;
-  if (passwordEnv && process.env[passwordEnv]) values.push(process.env[passwordEnv] || '');
-  return values;
+  return [config?.privateKeyPath].filter((value): value is string => Boolean(value));
 }
 
 export function redactPrivateKeyPath(value: string | undefined): string | undefined {

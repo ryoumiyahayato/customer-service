@@ -18,7 +18,7 @@
 - `node dist/index.js --plan <config.json>`：读取配置并输出脱敏部署计划。
 - `npm run plan -- --plan examples/deploy-plan.example.json`：输出脱敏部署计划。
 - `npm run deploy -- --plan examples/deploy-plan.example.json --dry-run`：只列出上传文件和远程命令，不连接真实服务器。
-- `npm run deploy -- --plan path\to\deploy-plan.json --real`：仅当配置中 `mode=real` 且 `dryRun=false` 时才允许真实 SSH。
+- `npm run deploy -- --plan path\to\deploy-plan.json --real --confirm-target`：仅当配置中 `mode=real` 且 `dryRun=false` 时才允许真实 SSH；命令会先显示并要求明确确认目标。
 - 真实 SSH adapter 已接入 `ssh2`，支持 private key / password 环境变量认证。
 - 上传流程会扫描并上传 `deploy/linux`，排除 `.env`、logs、storage、backup、node_modules、`.git` 和 dist 临时产物。
 - 远程执行流程为 `chmod +x`、`./install.sh --self-check`，然后按计划执行 `./install.sh --dry-run`、`./install.sh` 或 `./install.sh --migrate`。
@@ -38,7 +38,7 @@
 - 不输出 `setupToken`、`sessionSecret`、cookie、token 或数据库连接明文。
 - 部署计划和日志只输出脱敏内容。
 - 本包不执行 Cloudflare deploy、D1 写入、R2 删除或生产 migration。
-- 默认不真实 SSH；必须显式 `--real` 且计划文件 `mode=real`、`dryRun=false`。
+- 默认不真实 SSH；必须显式 `--real --confirm-target` 且计划文件 `mode=real`、`dryRun=false`。
 - 第一包不自动写远程 `.env`，只上传 `.env.example` 并提示用户在服务器侧填写 secret。
 
 ## 示例配置字段
@@ -52,7 +52,7 @@
 - `port`
 - `username`
 - `authMethod`
-- `passwordEnv` 或 `privateKeyPath`
+- 固定密码凭据来源 `CUSTOMER_SERVICE_DEPLOY_SSH_PASSWORD` 或 `privateKeyPath`
 - `appDomain`
 - `visitorRootDomain`
 - `remoteBaseDir`

@@ -1,4 +1,4 @@
-import { normalizeDeploymentConfig, redactConfig, type DeploymentConfig } from './config.js';
+import { DEPLOYMENT_SSH_PASSWORD_ENV, normalizeDeploymentConfig, redactConfig, type DeploymentConfig } from './config.js';
 import { plannedRemoteCommands, generateRedactedRemoteEnv } from './remoteCommands.js';
 import { redactText } from './redact.js';
 import { assertValidDeploymentConfig } from './validation.js';
@@ -18,6 +18,7 @@ export type DeploymentPlan = {
     appUrl: string;
     setupUrl: string;
     remoteLinuxDir: string;
+    credentialSource: string;
   };
   config: ReturnType<typeof redactConfig>;
   steps: DeploymentPlanStep[];
@@ -49,6 +50,9 @@ export function generateDeploymentPlan(config: DeploymentConfig): DeploymentPlan
       appUrl,
       setupUrl,
       remoteLinuxDir: normalized.remoteLinuxDir,
+      credentialSource: normalized.authMethod === 'password'
+        ? `fixed-environment:${DEPLOYMENT_SSH_PASSWORD_ENV}`
+        : 'private-key-file',
     },
     config: redactConfig(normalized),
     steps: steps.map((step) => ({

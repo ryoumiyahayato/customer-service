@@ -46,13 +46,15 @@ Productization validation 已覆盖 local Docker self-host smoke：CI 会在 Git
 
 `preflight.sh` 只检查环境和配置，不安装依赖，不修改系统配置，不启动服务，不执行 migration，不访问 Cloudflare/D1/R2，也不会打印 `.env` 中的 secret 值。不要提交 `.env`。
 
+`storage`、`logs` 和 `BACKUP_DIR` 必须由部署账户拥有并保持 `0700`；备份目录中的 dump、清单和临时文件保持 `0600`。
+
 ## 最小执行路径
 
 1. 准备 Linux VPS / 云服务器，开放 80 / 443 端口。
 2. 安装 Docker 和 Docker Compose 插件。
 3. 准备后台域名和访客根域 DNS，解析到服务器。
 4. 复制本目录到服务器部署目录。
-5. 复制 `.env.example` 为 `.env`，只在服务器本地填写真实部署变量。
+5. 复制 `.env.example` 为 `.env`，只在服务器本地填写真实部署变量，并立即执行 `chmod 600 .env`；部署账户必须是 `.env` 的 owner。
 6. 先执行 `./preflight.sh` 做只读 VPS 部署前检查。
 7. 可再执行 `./install.sh --self-check` 做非破坏性配置检查。
 8. 首次空库需要初始化 schema 时，执行 `./install.sh --migrate`。
@@ -77,6 +79,7 @@ npm run build
 ```bash
 cd deploy/linux
 cp .env.example .env
+chmod 600 .env
 # Edit .env locally. Do not commit it.
 ```
 

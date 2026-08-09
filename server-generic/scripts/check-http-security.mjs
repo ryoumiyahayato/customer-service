@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { isSameOriginWebSocket, isSameOriginWrite } from '../dist/security.js';
 
 const request = (method, headers) => ({ method, headers });
-assert.equal(isSameOriginWrite(request('GET', { host: 'admin.example.com' })), true);
+assert.equal(isSameOriginWrite(request('GET', { host: 'admin.example.com' })), false);
 assert.equal(isSameOriginWrite(request('GET', {
   host: 'admin.example.com',
   cookie: 'support_admin=session',
@@ -42,7 +42,7 @@ assert.equal(isSameOriginWrite(request('POST', {
   host: '127.0.0.1:8788',
   cookie: 'support_admin=session',
 })), true);
-assert.equal(isSameOriginWrite(request('POST', { host: 'admin.example.com' })), true);
+assert.equal(isSameOriginWrite(request('POST', { host: 'admin.example.com' })), false);
 assert.equal(isSameOriginWebSocket(request('GET', {
   host: 'admin.example.com',
   'x-forwarded-proto': 'https',

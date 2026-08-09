@@ -260,8 +260,16 @@ async function notifyAdmins(env: Env) {
 }
 
 async function cleanupUnboundClone(env: Env, objectKey: string) {
-  await env.DB.prepare('DELETE FROM attachments WHERE object_key=? AND message_id IS NULL').bind(objectKey).run().catch(() => {});
-  await env.UPLOADS.delete(objectKey).catch(() => {});
+  try {
+    await env.DB.prepare('DELETE FROM attachments WHERE object_key=? AND message_id IS NULL').bind(objectKey).run();
+  } catch {
+    // Best effort cleanup for legacy D1 fixtures.
+  }
+  try {
+    await env.UPLOADS.delete(objectKey);
+  } catch {
+    // Best effort cleanup for the copied preset object.
+  }
 }
 
 async function deliverPresetMessages(env: Env, response: Response, token: string) {

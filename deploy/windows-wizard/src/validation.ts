@@ -13,8 +13,23 @@ function isAbsoluteLinuxPath(value: string): boolean {
   return value.startsWith('/') && !value.includes('\0') && !value.includes('..');
 }
 
+function hasControlCharacters(value: unknown): boolean {
+  return typeof value === 'string' && /[\u0000-\u001f\u007f]/.test(value);
+}
+
 export function validateDeploymentConfig(config: DeploymentConfig): ValidationResult {
   const errors: string[] = [];
+
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return { ok: false, errors: ['deployment plan must be an object'] };
+  }
+  const allowedKeys = new Set([
+    'mode', 'dryRun', 'runMigrations', 'host', 'port', 'username', 'authMethod',
+    'privateKeyPath', 'hostKeySha256', 'appDomain', 'visitorRootDomain', 'remoteBaseDir',
+  ]);
+  for (const key of Object.keys(config as unknown as Record<string, unknown>)) {
+    if (!allowedKeys.has(key)) errors.push(`unsupported deployment field: ${key}`);
+  }
 
   if (config.mode && config.mode !== 'mock' && config.mode !== 'real') {
     errors.push('mode must be mock or real');
@@ -38,14 +53,11 @@ export function validateDeploymentConfig(config: DeploymentConfig): ValidationRe
   if (!isNonEmpty(config.remoteBaseDir) || !isAbsoluteLinuxPath(config.remoteBaseDir)) {
     errors.push('remoteBaseDir must be an absolute Linux path');
   }
-  if (config.authMethod === 'password' && !isNonEmpty(config.passwordEnv)) {
-    errors.push('password auth requires passwordEnv');
-  }
   if (config.authMethod === 'privateKey' && !isNonEmpty(config.privateKeyPath)) {
     errors.push('privateKey auth requires privateKeyPath');
   }
-  if (isNonEmpty(config.passwordEnv) && isNonEmpty(config.privateKeyPath)) {
-    errors.push('passwordEnv and privateKeyPath are mutually exclusive');
+  for (const value of [config.host, config.username, config.appDomain, config.visitorRootDomain, config.remoteBaseDir, config.privateKeyPath, config.hostKeySha256]) {
+    if (hasControlCharacters(value)) errors.push('deployment fields may not contain control characters');
   }
   if (config.hostKeySha256 !== undefined && !/^SHA256:[A-Za-z0-9+/]{43}$/.test(config.hostKeySha256.trim())) {
     errors.push('hostKeySha256 must be an OpenSSH SHA256 fingerprint');

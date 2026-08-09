@@ -4,12 +4,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { nodeNpmInvocation, wranglerInvocation } from './deployment-safety-lib.mjs';
 
 const root = process.cwd();
 const results = [];
-const isWindows = process.platform === 'win32';
-const npmBin = isWindows ? 'npm.cmd' : 'npm';
-const npxBin = isWindows ? 'npx.cmd' : 'npx';
+const localWrangler = path.join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+const npm = (args) => nodeNpmInvocation(args);
+const wrangler = (args) => wranglerInvocation(existsSync(localWrangler) ? localWrangler : '', '', args);
 
 function result(code, status, severity, message, suggestion) {
   results.push({ code, status, severity, message, suggestion });
@@ -17,13 +18,9 @@ function result(code, status, severity, message, suggestion) {
 
 function run(command, args) {
   try {
-    const execCommand = isWindows ? (process.env.ComSpec || 'cmd.exe') : command;
-    const execArgs = isWindows
-      ? ['/d', '/c', [command, ...args].join(' ')]
-      : args;
     return {
       ok: true,
-      output: execFileSync(execCommand, execArgs, {
+      output: execFileSync(command, args, {
         cwd: root,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -59,7 +56,8 @@ function checkNode() {
 }
 
 function checkNpm() {
-  const res = run(npmBin, ['--version']);
+  const invocation = npm(['--version']);
+  const res = run(invocation.command, invocation.args);
   if (res.ok) {
     result('runtime.npm.available', 'pass', 'info', 'npm is available.', 'No action required.');
     return;
@@ -68,7 +66,8 @@ function checkNpm() {
 }
 
 function checkWranglerAvailable() {
-  const res = run(npxBin, ['wrangler', '--version']);
+  const invocation = wrangler(['--version']);
+  const res = run(invocation.command, invocation.args);
   if (res.ok) {
     result('cloudflare.wrangler.available', 'pass', 'info', 'Wrangler is available and can run a basic version command.', 'No action required.');
     return true;
@@ -78,7 +77,8 @@ function checkWranglerAvailable() {
 }
 
 function checkWranglerAuth() {
-  const res = run(npxBin, ['wrangler', 'whoami']);
+  const invocation = wrangler(['whoami']);
+  const res = run(invocation.command, invocation.args);
   if (res.ok) {
     result('cloudflare.wrangler.authenticated', 'pass', 'info', 'Wrangler authentication is available.', 'No action required.');
     return;

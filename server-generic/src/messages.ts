@@ -5,6 +5,7 @@ import { HttpError, requireString } from './http.js';
 import { listAttachmentsForMessages, type AttachmentMetadata } from './attachments.js';
 import { canAdminAccessSession } from './chat.js';
 import type { AdminIdentity } from './sessions.js';
+import { RESOURCE_LIMITS } from './resourceLimits.js';
 
 export type ChatMessage = {
   id: string;
@@ -18,6 +19,11 @@ export type ChatMessage = {
   clientMessageId: string | null;
   deduped?: boolean;
   attachments: AttachmentMetadata[];
+};
+
+export type MessagePage = {
+  messages: ChatMessage[];
+  nextCursor: string | null;
 };
 
 type MessageRow = {
@@ -35,10 +41,12 @@ type MessageRow = {
   read_at: Date | null;
   created_at: Date;
   client_message_id: string | null;
+  deleted_at: Date | null;
+  recalled_at: Date | null;
 };
 
 const MESSAGE_COLUMNS = `id, session_id, sender_type, sender_id, body, body_ciphertext, body_iv, body_tag,
-  body_algorithm, body_key_version, message_type, read_at, created_at, client_message_id`;
+  body_algorithm, body_key_version, message_type, read_at, created_at, client_message_id, deleted_at, recalled_at`;
 
 export function normalizeMessageBody(value: unknown): string {
   const body = requireString(value, 'body').trim();
@@ -88,12 +96,13 @@ export function prepareMessageBodyForStorage(body: string, encryption: Encryptio
 }
 
 export function mapMessage(row: MessageRow, encryption: EncryptionConfig): ChatMessage {
+  const redacted = Boolean(row.deleted_at || row.recalled_at);
   return {
     id: row.id,
     sessionId: row.session_id,
     senderType: row.sender_type,
     senderId: row.sender_id,
-    body: maybeDecryptText(encryptedBodyFromRow(row), row.body, encryption),
+    body: redacted ? null : maybeDecryptText(encryptedBodyFromRow(row), row.body, encryption),
     messageType: row.message_type,
     readAt: toIso(row.read_at),
     createdAt: row.created_at.toISOString(),
@@ -102,28 +111,88 @@ export function mapMessage(row: MessageRow, encryption: EncryptionConfig): ChatM
   };
 }
 
-export async function listSessionMessages(
+function encodeMessageCursor(row: Pick<MessageRow, 'created_at' | 'id'>) {
+  return Buffer.from(JSON.stringify({ createdAt: row.created_at.toISOString(), id: row.id }), 'utf8').toString('base64url');
+}
+
+function decodeMessageCursor(value: string | null | undefined) {
+  if (!value || value.length > 512) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as { createdAt?: unknown; id?: unknown };
+    return typeof parsed.createdAt === 'string' && typeof parsed.id === 'string'
+      ? { createdAt: parsed.createdAt, id: parsed.id }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function listSessionMessagePage(
   db: PostgresAdapter,
   sessionId: string,
   encryption: EncryptionConfig,
-): Promise<ChatMessage[]> {
+  limit: number = RESOURCE_LIMITS.messagePageSize,
+  after?: string | null,
+  before?: string | null,
+): Promise<MessagePage> {
+  const requestedLimit = Number(limit);
+  const safeLimit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(RESOURCE_LIMITS.messagePageSize, Math.floor(requestedLimit)))
+    : RESOURCE_LIMITS.messagePageSize;
+  const afterCursor = decodeMessageCursor(after);
+  const beforeCursor = decodeMessageCursor(before);
+  const where: string[] = ['session_id = $1'];
+  const params: unknown[] = [sessionId];
+  let descending = !afterCursor && !after;
+  if (afterCursor) {
+    where.push('(created_at > $2 OR (created_at = $2 AND id > $3))');
+    params.push(afterCursor.createdAt, afterCursor.id);
+  } else if (beforeCursor) {
+    where.push('(created_at < $2 OR (created_at = $2 AND id < $3))');
+    params.push(beforeCursor.createdAt, beforeCursor.id);
+    descending = true;
+  } else if (after) {
+    where.push('created_at > $2');
+    params.push(after);
+    descending = false;
+  }
+  const order = descending ? 'DESC' : 'ASC';
   const rows = await db.query<MessageRow>(
     `SELECT ${MESSAGE_COLUMNS}
        FROM messages
-      WHERE session_id = $1
-      ORDER BY created_at ASC, id ASC`,
-    [sessionId],
+      WHERE ${where.join(' AND ')}
+       ORDER BY created_at ${order}, id ${order}
+       LIMIT $${params.length + 1}`,
+    [...params, safeLimit + 1],
   );
-  const messages = rows.map((row) => mapMessage(row, encryption));
+  const hasMore = rows.length > safeLimit;
+  const selected = hasMore ? rows.slice(0, safeLimit) : rows;
+  const messages = selected.map((row) => mapMessage(row, encryption));
   const attachments = await listAttachmentsForMessages(
     db,
     messages.map((message) => message.id),
     encryption,
   );
-  return messages.map((message) => ({
+  const ordered = messages.map((message) => ({
     ...message,
     attachments: attachments.get(message.id) || [],
   }));
+  if (descending) ordered.reverse();
+  return {
+    messages: ordered,
+    nextCursor: hasMore && ordered.length
+      ? encodeMessageCursor(descending ? selected[0] : selected[selected.length - 1])
+      : null,
+  };
+}
+
+export async function listSessionMessages(
+  db: PostgresAdapter,
+  sessionId: string,
+  encryption: EncryptionConfig,
+  limit: number = RESOURCE_LIMITS.messagePageSize,
+): Promise<ChatMessage[]> {
+  return (await listSessionMessagePage(db, sessionId, encryption, limit)).messages;
 }
 
 async function findExistingMessage(
@@ -203,6 +272,28 @@ export async function createSessionMessage(
       }
     }
 
+    const messageBytes = Buffer.byteLength(normalizedBody, 'utf8');
+    let usage: { message_count: string | number; message_bytes: string | number } | undefined;
+    try {
+      const usageResult = await client.query<{ message_count: string | number; message_bytes: string | number }>(
+        'SELECT message_count,message_bytes FROM chat_sessions WHERE id=$1 FOR UPDATE',
+        [sessionId],
+      );
+      usage = usageResult.rows[0];
+    } catch (error) {
+      if (!/column|does not exist/i.test(String(error))) throw error;
+      const fallback = await client.query<{ count: string; bytes: string }>(
+        `SELECT COUNT(*)::text AS count,COALESCE(SUM(octet_length(COALESCE(body,''))),0)::text AS bytes
+           FROM messages WHERE session_id=$1`,
+        [sessionId],
+      );
+      usage = { message_count: fallback.rows[0]?.count || '0', message_bytes: fallback.rows[0]?.bytes || '0' };
+    }
+    if (Number(usage?.message_count || 0) >= RESOURCE_LIMITS.messageSessionMaxCount
+      || Number(usage?.message_bytes || 0) + messageBytes > RESOURCE_LIMITS.messageSessionMaxBytes) {
+      throw new HttpError(429, 'message_quota_exceeded');
+    }
+
     const storedBody = prepareMessageBodyForStorage(normalizedBody, encryption);
     const result = await client.query<MessageRow>(
       `INSERT INTO messages (
@@ -235,7 +326,17 @@ export async function createSessionMessage(
     }
     if (!result.rows[0]) throw new HttpError(409, 'message_create_conflict');
 
-    await client.query('UPDATE chat_sessions SET updated_at = now() WHERE id = $1', [sessionId]);
+    await client.query(
+      `UPDATE chat_sessions
+          SET message_count=COALESCE(message_count,0)+1,
+              message_bytes=COALESCE(message_bytes,0)+$2,
+              updated_at=now()
+        WHERE id=$1`,
+      [sessionId, messageBytes],
+    ).catch(async (error) => {
+      if (!/column|does not exist/i.test(String(error))) throw error;
+      await client.query('UPDATE chat_sessions SET updated_at=now() WHERE id=$1', [sessionId]);
+    });
     return { ...mapMessage(result.rows[0], encryption), deduped: false };
   });
 }

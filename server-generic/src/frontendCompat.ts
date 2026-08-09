@@ -18,7 +18,7 @@ import { hashVisitorToken } from './crypto.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError, optionalString, requireString } from './http.js';
 import { consumeInvite, createInvite, listInvites, revokeInvite, type PublicInvite } from './invites.js';
-import { createSessionMessage, listSessionMessages, markSessionMessagesRead, type ChatMessage } from './messages.js';
+import { createSessionMessage, listSessionMessagePage, markSessionMessagesRead, type ChatMessage } from './messages.js';
 import { readJsonBody, sendJson, sendNoContent } from './response.js';
 import { isSafeId } from './routes.js';
 import { getAdminSessionToken, parseCookies, serializeAdminSessionCookie, serializeClearAdminSessionCookie } from './security.js';
@@ -34,6 +34,7 @@ export const FRONTEND_COMPAT_ROUTES = [
   'GET /api/auth/me',
   'GET /api/sessions',
   'GET /api/sessions/:id/messages',
+  'POST /api/sessions/:id/read',
   'POST /api/sessions/:id/customer-read',
   'POST /api/messages',
   'POST /api/guest/:token',
@@ -196,6 +197,11 @@ function matchCustomerRead(pathname: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function matchSessionRead(pathname: string): string | null {
+  const match = /^\/api\/sessions\/([^/]+)\/read$/.exec(pathname);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function matchGuestBootstrap(pathname: string): string | null {
   const match = /^\/api\/guest\/([^/]+)$/.exec(pathname);
   return match ? decodeURIComponent(match[1]) : null;
@@ -304,18 +310,40 @@ async function handleFrontendSessionMessages(
 ) {
   if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
   const admin = await currentAdminOrNull(context.db, request);
-  const readerType = admin ? 'admin' : 'visitor';
   if (!admin) await requireVisitorIdentity(context.db, sessionId, request);
   else await requireAdminSessionAccess(context.db, admin, sessionId);
 
-  const receipt = await markSessionMessagesRead(context.db, sessionId, readerType);
-  broadcastReadReceipt(context, sessionId, receipt.messageIds, receipt.readAt);
-  const messages = await listSessionMessages(context.db, sessionId, context.config.encryption);
+  const requestUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+  const page = await listSessionMessagePage(
+    context.db,
+    sessionId,
+    context.config.encryption,
+    Number(requestUrl.searchParams.get('limit') || 100),
+    requestUrl.searchParams.get('after'),
+    requestUrl.searchParams.get('before'),
+  );
   sendJson(response, 200, {
     ok: true,
-    messages: messages.map((message) => admin ? mapFrontendMessage(message) : mapFrontendMessageForVisitor(message)),
-    read: receipt,
+    messages: page.messages.map((message) => admin ? mapFrontendMessage(message) : mapFrontendMessageForVisitor(message)),
+    nextCursor: page.nextCursor,
   });
+}
+
+async function handleFrontendSessionRead(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: FrontendCompatContext,
+  sessionId: string,
+) {
+  if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
+  const body = await readJsonBody<Record<string, unknown>>(request);
+  const admin = await currentAdminOrNull(context.db, request);
+  if (admin) await requireAdminSessionAccess(context.db, admin, sessionId);
+  else await requireVisitorIdentity(context.db, sessionId, request, body);
+  const requestedMessageIds = normalizeRequestedMessageIds(body.messageIds ?? body.message_ids);
+  const receipt = await markSessionMessagesRead(context.db, sessionId, admin ? 'admin' : 'visitor', requestedMessageIds);
+  broadcastReadReceipt(context, sessionId, receipt.messageIds, receipt.readAt);
+  sendJson(response, 200, { ok: true, ...receipt });
 }
 
 async function handleFrontendCustomerRead(
@@ -407,7 +435,7 @@ async function handleFrontendGuestBootstrap(
   const existingVisitorToken = visitorTokenFromRequest(request, body);
   const customerName = optionalString(body.customerName)?.trim() || '访客';
   const consumed = await consumeInvite(context.db, token, existingVisitorToken, customerName);
-  const messages = await listSessionMessages(context.db, consumed.session.id, context.config.encryption);
+  const page = await listSessionMessagePage(context.db, consumed.session.id, context.config.encryption);
   sendJson(
     response,
     200,
@@ -417,7 +445,8 @@ async function handleFrontendGuestBootstrap(
       resumed: consumed.resumed,
       visitorId: consumed.session.id,
       session: mapFrontendSessionForVisitor(consumed.session),
-      messages: messages.map((message) => mapFrontendMessageForVisitor(message)),
+      messages: page.messages.map((message) => mapFrontendMessageForVisitor(message)),
+      nextCursor: page.nextCursor,
     },
     { 'set-cookie': serializeVisitorCookie(consumed.visitorToken) },
   );
@@ -498,6 +527,12 @@ export async function handleFrontendCompatRequest(
   const messagesSessionId = matchCompatSessionMessages(url.pathname);
   if (request.method === 'GET' && messagesSessionId) {
     await handleFrontendSessionMessages(request, response, context, messagesSessionId);
+    return true;
+  }
+
+  const sessionReadId = matchSessionRead(url.pathname);
+  if (request.method === 'POST' && sessionReadId) {
+    await handleFrontendSessionRead(request, response, context, sessionReadId);
     return true;
   }
 

@@ -9,13 +9,12 @@ import {
   extractPendingMigrationNames,
   migrationApplyArgs,
   migrationListArgs,
+  nodeNpmInvocation,
   wranglerInvocation,
 } from './deployment-safety-lib.mjs';
 
 const root = process.cwd();
-const isWindows = process.platform === 'win32';
-const npmBin = isWindows ? 'npm.cmd' : 'npm';
-const npxBin = isWindows ? 'npx.cmd' : 'npx';
+const npmDisplay = 'npm';
 const rawArgs = process.argv.slice(2);
 const applyMigrations = rawArgs.includes('--apply-migrations');
 const showHelp = rawArgs.includes('--help') || rawArgs.includes('-h');
@@ -36,7 +35,7 @@ function commandResult(command, args, { capture = false, ignoreError = false } =
     env: process.env,
     stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: capture ? 'utf8' : undefined,
-    shell: isWindows,
+    shell: false,
     timeout: 120000,
   });
   if (result.error && !ignoreError) fail(`${command} failed: ${result.error.message}`);
@@ -76,8 +75,12 @@ function ask(query) {
 }
 
 function wrangler(args) {
-  const local = path.join(root, 'node_modules', '.bin', `wrangler${isWindows ? '.cmd' : ''}`);
-  return wranglerInvocation(existsSync(local) ? local : '', npxBin, args);
+  const local = path.join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+  return wranglerInvocation(existsSync(local) ? local : '', '', args);
+}
+
+function npm(args) {
+  return nodeNpmInvocation(args);
 }
 
 function remoteMigrationState() {
@@ -100,7 +103,7 @@ async function ensureMigrations() {
   print('Pending remote D1 migrations:');
   for (const migration of pending) print(`  - ${migration}`);
   if (!applyMigrations) {
-    fail(`Pending D1 migrations block deployment. Re-run with: ${npmBin} run deploy:safe -- --apply-migrations`);
+    fail(`Pending D1 migrations block deployment. Re-run with: ${npmDisplay} run deploy:safe -- --apply-migrations`);
   }
   if (!process.stdin.isTTY) {
     fail('Migration application requires an interactive terminal; refusing non-interactive production mutation.');
@@ -123,8 +126,8 @@ function showUsage() {
   print('Guarded Cloudflare production deploy');
   print('');
   print('Usage:');
-  print(`  ${npmBin} run deploy:safe`);
-  print(`  ${npmBin} run deploy:safe -- --apply-migrations`);
+  print(`  ${npmDisplay} run deploy:safe`);
+  print(`  ${npmDisplay} run deploy:safe -- --apply-migrations`);
   print('');
   print('The deploy is allowed only from a clean main branch exactly matching origin/main.');
   print('Remote D1 migration state must be readable. Pending migrations block deploy unless');
@@ -160,20 +163,21 @@ async function main() {
 
   for (const script of ['check:obvious', 'typecheck', 'doctor', 'doctor:online', 'lifecycle:ci-check', 'build']) requireScript(script);
 
-  run(npmBin, ['run', 'check:obvious']);
+  { const invocation = npm(['run', 'check:obvious']); run(invocation.command, invocation.args); }
   if (existsSync(path.join(root, 'scripts', 'check-chat-message-text.mjs'))) {
     run('node', ['scripts/check-chat-message-text.mjs']);
   }
   if (existsSync(path.join(root, 'scripts', 'check-session-lifecycle.mjs'))) {
     run('node', ['scripts/check-session-lifecycle.mjs']);
   }
-  run(npmBin, ['run', 'typecheck']);
-  run(npmBin, ['run', 'doctor']);
-  run(npmBin, ['run', 'lifecycle:ci-check']);
+  for (const script of ['typecheck', 'doctor', 'lifecycle:ci-check']) {
+    const invocation = npm(['run', script]);
+    run(invocation.command, invocation.args);
+  }
 
   await ensureMigrations();
 
-  run(npmBin, ['run', 'build']);
+  { const invocation = npm(['run', 'build']); run(invocation.command, invocation.args); }
 
   const deployInvocation = wrangler(['deploy']);
   const deploy = commandResult(deployInvocation.command, deployInvocation.args, { capture: true });
@@ -192,7 +196,7 @@ async function main() {
     fail('Deployment completed but the working tree is not clean; inspect generated files before continuing.');
   }
 
-  run(npmBin, ['run', 'doctor:online']);
+  { const invocation = npm(['run', 'doctor:online']); run(invocation.command, invocation.args); }
   print('Deployment completed successfully and online smoke check passed.');
 }
 

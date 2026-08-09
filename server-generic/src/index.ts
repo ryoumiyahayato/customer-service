@@ -12,6 +12,7 @@ import {
 import {
   handleAdminAttachmentDownload,
   handleAdminMessages,
+  handleAdminRead,
   handleAdminSessionLifecycleAction,
   handleCloseAdminSession,
   handleListAdminSessions,
@@ -27,6 +28,7 @@ import {
   matchAdminSessionAction,
   matchAdminSessionClose,
   matchSessionMessages,
+  matchSessionRead,
   matchVisitorAttachmentDownload,
   matchVisitorSessionAttachments,
 } from './routes.js';
@@ -38,6 +40,7 @@ import {
   handleCreateVisitorSession,
   handleVisitorAttachmentDownload,
   handleVisitorMessages,
+  handleVisitorRead,
 } from './visitorApi.js';
 import { createWebSocketHub } from './websocket.js';
 
@@ -203,6 +206,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     await handleVisitorMessages(request, response, config, db, websocketHub, visitorMessagesSessionId);
     return;
   }
+  const visitorReadSessionId = matchSessionRead(url.pathname, '/api/visitor');
+  if (request.method === 'POST' && visitorReadSessionId) {
+    if (enforceMessageAbuseLimits(request, response, visitorReadSessionId)) return;
+    await handleVisitorRead(request, response, db, websocketHub, visitorReadSessionId);
+    return;
+  }
 
   if (request.method === 'GET' && url.pathname === '/api/admin/sessions') {
     await handleListAdminSessions(request, response, db);
@@ -219,6 +228,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (adminMessagesSessionId) {
     if (request.method === 'POST' && enforceMessageAbuseLimits(request, response, adminMessagesSessionId)) return;
     await handleAdminMessages(request, response, config, db, websocketHub, adminMessagesSessionId);
+    return;
+  }
+  const adminReadSessionId = matchSessionRead(url.pathname, '/api/admin');
+  if (request.method === 'POST' && adminReadSessionId) {
+    if (enforceMessageAbuseLimits(request, response, adminReadSessionId)) return;
+    await handleAdminRead(request, response, db, websocketHub, adminReadSessionId);
     return;
   }
 
@@ -266,6 +281,6 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-server.listen(config.appPort, () => {
-  console.log(`Generic customer chat server listening on port ${config.appPort}`);
+server.listen(config.appPort, config.bindHost, () => {
+  console.log(`Generic customer chat server listening on ${config.bindHost}:${config.appPort}`);
 });

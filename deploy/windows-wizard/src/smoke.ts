@@ -49,6 +49,7 @@ export function runSmoke(): void {
   const serializedPlan = JSON.stringify(plan);
   assert(plan.steps.length === 7, 'plan should include seven steps');
   assert(plan.target.setupUrl.endsWith('/setup'), 'plan should include setup URL');
+  assert(plan.target.credentialSource === 'private-key-file', 'plan should expose only credential source type');
   assert(plan.dryRun, 'plan should default to dryRun-safe behavior');
 
   const redacted = redactText(
@@ -69,6 +70,8 @@ export function runSmoke(): void {
   assert(commands.includes('./install.sh --self-check'), 'commands should include self-check');
   assert(commands.includes('./install.sh --dry-run'), 'dry-run plan should include install dry-run');
   assert(!serializedPlan.includes(sampleConfig.privateKeyPath || ''), 'plan should not include full private key path');
+  const rejectedPasswordEnv = validateDeploymentConfig({ ...sampleConfig, passwordEnv: 'GITHUB_TOKEN' } as unknown as DeploymentConfig);
+  assert(!rejectedPasswordEnv.ok && rejectedPasswordEnv.errors.some((error) => error.includes('unsupported')), 'passwordEnv must be rejected');
 }
 
 export async function runAsyncSmoke(): Promise<void> {

@@ -300,14 +300,19 @@ function first(source: Record<string, unknown>, ...keys: string[]) {
 function safeVisitorMessage(value: unknown) {
   const source = record(value);
   if (!source.id) return null;
+  const recalled = Boolean(first(source, 'recalledAt', 'recalled_at')) || source.status === 'recalled';
+  const deleted = Boolean(first(source, 'deletedAt', 'deleted_at'));
+  const imagePurged = Boolean(first(source, 'imagePurgedAt', 'image_purged_at'));
   return {
     id: source.id,
     sessionId: first(source, 'sessionId', 'session_id'),
     senderType: first(source, 'senderType', 'sender_type'),
     senderId: null,
-    content: typeof source.content === 'string' ? source.content : typeof source.body === 'string' ? source.body : '',
+    content: recalled || deleted || imagePurged
+      ? ''
+      : typeof source.content === 'string' ? source.content : typeof source.body === 'string' ? source.body : '',
     messageType: first(source, 'messageType', 'message_type') || 'text',
-    imagePath: first(source, 'imagePath', 'image_path') ?? null,
+    imagePath: recalled || deleted || imagePurged ? null : first(source, 'imagePath', 'image_path') ?? null,
     status: source.status || 'sent',
     createdAt: first(source, 'createdAt', 'created_at') || '',
     readAt: first(source, 'readAt', 'read_at') ?? null,
@@ -370,11 +375,13 @@ async function minimizeVisitorJson(req: Request, response: Response) {
       payload = {
         session: safeVisitorSession(source.session),
         messages: Array.isArray(source.messages) ? source.messages.map(safeVisitorMessage).filter(Boolean) : [],
+        nextCursor: typeof source.nextCursor === 'string' ? source.nextCursor : null,
         presentation: safeVisitorPresentation(source.presentation),
       };
     } else if (MESSAGE_LIST.test(path)) {
       payload = {
         messages: Array.isArray(source.messages) ? source.messages.map(safeVisitorMessage).filter(Boolean) : [],
+        nextCursor: typeof source.nextCursor === 'string' ? source.nextCursor : null,
       };
     } else if (path === '/api/messages') {
       payload = {

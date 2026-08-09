@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
@@ -34,6 +35,14 @@ require_env() {
   [[ -n "${!name:-}" ]] || fail "${name} is required in .env."
 }
 
+check_private_env() {
+  local owner mode
+  owner="$(stat -c '%u' .env 2>/dev/null || true)"
+  mode="$(stat -c '%a' .env 2>/dev/null || true)"
+  [[ "$owner" == "$(id -u)" ]] || fail ".env must be owned by the current deployment account."
+  [[ "$mode" == "600" ]] || fail ".env must have mode 0600; run chmod 600 .env."
+}
+
 run() {
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] $*"
@@ -50,10 +59,15 @@ require_file ".env"
 require_file "docker-compose.yml"
 require_file "Caddyfile"
 require_file "healthcheck.sh"
+check_private_env
 
 set -a
 source .env
 set +a
+
+APP_UID="${APP_UID:-$(id -u)}"
+APP_GID="${APP_GID:-$(id -g)}"
+export APP_UID APP_GID
 
 for name in \
   APP_DOMAIN \
@@ -80,7 +94,8 @@ if ! docker compose version >/dev/null 2>&1; then
   fail "Docker Compose plugin is required."
 fi
 
-mkdir -p storage logs "${BACKUP_DIR:-./backup}"
+mkdir -p -m 700 storage logs "${BACKUP_DIR:-./backup}"
+chmod 700 storage logs "${BACKUP_DIR:-./backup}"
 
 echo "Linux deployment preflight passed."
 echo "Validating Docker Compose configuration..."

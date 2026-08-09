@@ -46,8 +46,8 @@ export async function createAdminSession(db: PostgresAdapter, adminId: string, c
   const expiresAt = new Date(Date.now() + config.adminSessionTtl * 1000);
 
   await db.query(
-    `INSERT INTO admin_sessions (admin_id, token_hash, expires_at)
-     VALUES ($1, $2, $3)`,
+    `INSERT INTO admin_sessions (admin_id, token_hash, expires_at, last_seen_at)
+      VALUES ($1, $2, $3, now())`,
     [adminId, tokenHash, expiresAt],
   );
 
@@ -60,13 +60,16 @@ export async function findAdminBySessionToken(db: PostgresAdapter, token: string
     `SELECT admins.id, admins.username, admins.email, admins.display_name, admins.role, admins.created_at
        FROM admin_sessions
        JOIN admins ON admins.id = admin_sessions.admin_id
-      WHERE admin_sessions.token_hash = $1
-        AND admin_sessions.expires_at > now()
-        AND admins.is_disabled = FALSE
+       WHERE admin_sessions.token_hash = $1
+         AND admin_sessions.expires_at > now()
+         AND admin_sessions.revoked_at IS NULL
+         AND admins.is_disabled = FALSE
       LIMIT 1`,
     [tokenHash],
   );
-  return rows[0] ? mapAdmin(rows[0]) : null;
+  if (!rows[0]) return null;
+  await db.query('UPDATE admin_sessions SET last_seen_at=now() WHERE token_hash=$1 AND revoked_at IS NULL', [tokenHash]);
+  return mapAdmin(rows[0]);
 }
 
 export async function deleteAdminSessionByToken(db: PostgresAdapter, token: string): Promise<void> {

@@ -58,7 +58,7 @@ async function targetOperator(env: Env, req: Request): Promise<OperatorRow | Res
 
 async function presentationRateLimit(env: Env, req: Request) {
   const ip = req.headers.get('cf-connecting-ip') || 'unknown';
-  const key = `presentation:${ip}:${new URL(req.url).pathname}`.slice(0, 240);
+  const key = `presentation:write:${ip}`.slice(0, 240);
   const retryAfter = await consumeRateLimit(env.DB, key, 30, 60 * 1000);
   return retryAfter === null ? null : json({ error: 'rate_limited', retryAfter }, 429);
 }
