@@ -9,6 +9,7 @@ import { activeAdminSession } from './security/adminSession';
 import { isSameOriginWrite } from './security/requestOrigin';
 import { jsonObject, readJsonObjectWithinLimit } from './security/requestLimits';
 import { consumeRateLimit } from './security/rateLimit';
+import { createChatRoomBroadcastRequest } from './durable-objects/ChatRoom';
 
 type WorkerModule = {
   fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response>;
@@ -82,8 +83,7 @@ async function requireSuperAdmin(env: Env, req: Request): Promise<AdminIdentity 
 
 async function mutationRateLimit(env: Env, req: Request) {
   const ip = req.headers.get('cf-connecting-ip') || 'unknown';
-  const path = new URL(req.url).pathname;
-  const key = `hardening:${ip}:${path}`.slice(0, 240);
+  const key = `hardening:operator-disable:${ip}`.slice(0, 240);
   const retryAfter = await consumeRateLimit(env.DB, key, 20, 60 * 1000);
   return retryAfter === null ? null : json({ error: 'rate_limited', retryAfter }, 429);
 }
@@ -107,10 +107,9 @@ async function writeOperatorDisableAudit(env: Env, actorId: string, operatorId: 
 
 async function notifyAdmins(env: Env) {
   if (!env.CHAT_ROOM) return;
-  await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName('admin-feed')).fetch('https://room/broadcast', {
-    method: 'POST',
-    body: JSON.stringify({ type: 'sessions:changed', ts: Date.now() }),
-  });
+  await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName('admin-feed')).fetch(
+    createChatRoomBroadcastRequest('admin-feed', { type: 'sessions:changed', ts: Date.now() }),
+  );
 }
 
 async function handleOperatorDisable(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

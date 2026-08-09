@@ -16,6 +16,7 @@
     "check:http-security": "node scripts/check-http-security.mjs",
     "check:websocket-auth": "node scripts/check-websocket-auth.mjs",
     "check:v1-foundation": "node scripts/check-v1-foundation.mjs",
+    "check:postgres-visitor-joins": "node scripts/check-postgres-visitor-joins.mjs",
     "e2e:local-smoke": "node scripts/e2e-local-smoke.mjs"
   },
   "dependencies": {
@@ -29,3 +30,4 @@
     "typescript": "^5.8.3"
   }
 }
+

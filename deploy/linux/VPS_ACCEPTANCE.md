@@ -72,6 +72,7 @@ cp .env.example .env
 | `POSTGRES_PASSWORD` | PostgreSQL 密码 | 必须换成强随机值 |
 | `DATABASE_URL` | app 连接 PostgreSQL 的 URL | 密码要与 `POSTGRES_PASSWORD` 一致，host 使用 compose 服务名 `postgres` |
 | `APP_PORT` | app 容器内监听端口 | 默认 `3000` |
+| `APP_UID` / `APP_GID` | app 容器实际运行的非 root UID/GID | 必须显式填写，并与 `storage`、`logs`、`BACKUP_DIR` owner/group 一致 |
 | `SESSION_SECRET` | 管理员 session 签名密钥 | 必须换成强随机值 |
 | `SETUP_TOKEN` | 首次 setup 初始化令牌 | 首次管理员创建后应轮换或移除 |
 | `ADMIN_SESSION_TTL` | 管理员 session 有效期秒数 | 可保留默认 |
@@ -95,6 +96,7 @@ cp .env.example .env
 
 ```bash
 cd deploy/linux
+./prepare-directories.sh
 ./preflight.sh
 ./install.sh --self-check
 ```

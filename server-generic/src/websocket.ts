@@ -7,9 +7,9 @@ import type { PostgresAdapter } from './db/postgres.js';
 import type { ChatMessage } from './messages.js';
 import { isSafeId } from './routes.js';
 import { getAdminSessionToken, isSameOriginWebSocket, parseCookies } from './security.js';
+import { RESOURCE_LIMITS } from './resourceLimits.js';
 
 const VISITOR_COOKIE_NAME = 'support_visitor';
-const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024;
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
 
 export type WebSocketBroadcast<TMessage extends object = ChatMessage> =
@@ -40,19 +40,25 @@ export type WebSocketHub = {
 };
 
 type SocketAuth =
-  | { kind: 'admin'; token: string; sessionId?: string }
-  | { kind: 'visitor'; token: string; sessionId: string };
+  | { kind: 'admin'; token: string; principalId: string; authSessionId: string; sessionId?: string }
+  | { kind: 'visitor'; token: string; principalId: string; authSessionId: string; sessionId: string };
 
 type ClientState = {
   room: string;
   alive: boolean;
   auth: SocketAuth;
+  connectedAt: number;
+  lastActivityAt: number;
+  pingWindowStartedAt: number;
+  pingCount: number;
 };
 
 type UpgradeBinding = {
   room: string;
   auth: SocketAuth;
 };
+
+type UpgradeBucket = { count: number; resetAt: number };
 
 export function createBroadcastPayload<TMessage extends object>(event: WebSocketBroadcast<TMessage>): string {
   return JSON.stringify(event);
@@ -85,8 +91,11 @@ async function authenticateUpgrade(db: PostgresAdapter, request: IncomingMessage
   if (url.pathname === '/api/ws/admin' || url.pathname === '/api/ws/staff') {
     const token = getAdminSessionToken(request.headers.cookie);
     if (!token) throw Object.assign(new Error('unauthenticated'), { status: 401 });
-    await requireCurrentAdmin(db, token);
-    return { room: url.pathname === '/api/ws/admin' ? 'admin-feed' : 'staff', auth: { kind: 'admin', token } };
+    const admin = await requireCurrentAdmin(db, token);
+    return {
+      room: url.pathname === '/api/ws/admin' ? 'admin-feed' : 'staff',
+      auth: { kind: 'admin', token, principalId: admin.id, authSessionId: token },
+    };
   }
 
   const conversation = /^\/api\/ws\/conversations\/([^/]+)$/.exec(url.pathname);
@@ -99,13 +108,19 @@ async function authenticateUpgrade(db: PostgresAdapter, request: IncomingMessage
   if (adminToken) {
     const admin = await requireCurrentAdmin(db, adminToken);
     await requireAdminSessionAccess(db, admin, sessionId);
-    return { room: sessionId, auth: { kind: 'admin', token: adminToken, sessionId } };
+    return {
+      room: sessionId,
+      auth: { kind: 'admin', token: adminToken, principalId: admin.id, authSessionId: adminToken, sessionId },
+    };
   }
 
   const visitorToken = visitorCookieToken(request);
   if (!visitorToken) throw Object.assign(new Error('unauthenticated'), { status: 401 });
-  await requireVisitorSession(db, sessionId, visitorToken);
-  return { room: sessionId, auth: { kind: 'visitor', token: visitorToken, sessionId } };
+  await requireVisitorSession(db, sessionId, visitorToken, 'socket');
+  return {
+    room: sessionId,
+    auth: { kind: 'visitor', token: visitorToken, principalId: visitorToken, authSessionId: visitorToken, sessionId },
+  };
 }
 
 function sanitizeVisitorBroadcastPayload(payload: string) {
@@ -137,9 +152,41 @@ function sanitizeVisitorBroadcastPayload(payload: string) {
 }
 
 export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
-  const server = new WebSocketServer({ noServer: true, maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES });
+  const server = new WebSocketServer({ noServer: true, maxPayload: RESOURCE_LIMITS.websocketMaxFrameBytes });
   const subscribers = new Map<string, Set<WebSocket>>();
-  const states = new WeakMap<WebSocket, ClientState>();
+  const states = new Map<WebSocket, ClientState>();
+  const upgradeBuckets = new Map<string, UpgradeBucket>();
+
+  function clientIp(request: IncomingMessage) {
+    return String(request.socket.remoteAddress || 'unknown').slice(0, 120);
+  }
+
+  function upgradeAllowed(request: IncomingMessage) {
+    const now = Date.now();
+    const ip = clientIp(request);
+    for (const [key, bucket] of upgradeBuckets) {
+      if (bucket.resetAt <= now) upgradeBuckets.delete(key);
+    }
+    if (upgradeBuckets.size >= RESOURCE_LIMITS.websocketMaxUpgradeBuckets && !upgradeBuckets.has(ip)) return false;
+    const current = upgradeBuckets.get(ip);
+    const bucket = !current || current.resetAt <= now
+      ? { count: 0, resetAt: now + RESOURCE_LIMITS.websocketUpgradeWindowMs }
+      : current;
+    if (bucket.count >= RESOURCE_LIMITS.websocketUpgradeLimit) return false;
+    bucket.count += 1;
+    upgradeBuckets.set(ip, bucket);
+    return true;
+  }
+
+  function connectionAllowed(binding: UpgradeBinding) {
+    const current = [...states.values()];
+    if (current.filter((state) => state.room === binding.room).length >= RESOURCE_LIMITS.websocketMaxConnectionsPerRoom) return false;
+    if (current.filter((state) => state.auth.principalId === binding.auth.principalId).length >= RESOURCE_LIMITS.websocketMaxConnectionsPerPrincipal) return false;
+    if (current.filter((state) => state.auth.authSessionId === binding.auth.authSessionId).length >= RESOURCE_LIMITS.websocketMaxConnectionsPerAuthSession) return false;
+    if (binding.auth.sessionId
+      && current.filter((state) => state.auth.sessionId === binding.auth.sessionId).length >= RESOURCE_LIMITS.websocketMaxConnectionsPerConversation) return false;
+    return true;
+  }
 
   function unsubscribe(socket: WebSocket) {
     const state = states.get(socket);
@@ -157,7 +204,7 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
         if (state.auth.sessionId) await requireAdminSessionAccess(db, admin, state.auth.sessionId);
         return true;
       }
-      await requireVisitorSession(db, state.auth.sessionId, state.auth.token);
+      await requireVisitorSession(db, state.auth.sessionId, state.auth.token, 'socket');
       return true;
     } catch {
       return false;
@@ -175,15 +222,58 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
       subscribers.set(binding.room, set);
     }
     set.add(socket);
-    states.set(socket, { room: binding.room, alive: true, auth: binding.auth });
+    const timestamp = Date.now();
+    states.set(socket, {
+      room: binding.room,
+      alive: true,
+      auth: binding.auth,
+      connectedAt: timestamp,
+      lastActivityAt: timestamp,
+      pingWindowStartedAt: timestamp,
+      pingCount: 0,
+    });
 
     socket.on('pong', () => {
       const state = states.get(socket);
-      if (state) state.alive = true;
+      if (state) {
+        state.alive = true;
+        state.lastActivityAt = Date.now();
+      }
     });
 
-    socket.on('message', () => {
-      socket.close(1008, 'client_messages_not_supported');
+    socket.on('message', (data, isBinary) => {
+      const state = states.get(socket);
+      if (!state) return;
+      const bytes = Buffer.isBuffer(data) ? data.byteLength : Buffer.byteLength(String(data));
+      if (bytes > RESOURCE_LIMITS.websocketMaxFrameBytes) {
+        socket.close(1009, 'message_too_large');
+        return;
+      }
+      state.lastActivityAt = Date.now();
+      if (isBinary) {
+        socket.close(1003, 'binary_not_allowed');
+        return;
+      }
+      let event: unknown;
+      try { event = JSON.parse(String(data)); } catch {
+        socket.close(1003, 'invalid_json');
+        return;
+      }
+      if (!event || typeof event !== 'object' || (event as { type?: unknown }).type !== 'ping') {
+        socket.close(1008, 'event_not_allowed');
+        return;
+      }
+      const now = Date.now();
+      if (now - state.pingWindowStartedAt >= 60 * 1000) {
+        state.pingWindowStartedAt = now;
+        state.pingCount = 0;
+      }
+      if (state.pingCount >= 20) {
+        socket.close(1008, 'ping_rate_limited');
+        return;
+      }
+      state.pingCount += 1;
+      socket.send(JSON.stringify({ type: 'pong', ts: now }));
     });
 
     socket.on('close', () => unsubscribe(socket));
@@ -195,6 +285,12 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
       for (const socket of set) {
         const state = states.get(socket);
         if (!state || socket.readyState !== WebSocket.OPEN) continue;
+        const now = Date.now();
+        if (now - state.connectedAt > RESOURCE_LIMITS.websocketMaxLifetimeMs
+          || now - state.lastActivityAt > RESOURCE_LIMITS.websocketIdleTimeoutMs) {
+          closeRevoked(socket);
+          continue;
+        }
         if (!state.alive) {
           socket.terminate();
           continue;
@@ -212,9 +308,17 @@ export function createWebSocketHub(db: PostgresAdapter): WebSocketHub {
   return {
     async handleUpgrade(request, socket, head) {
       try {
+        if (!upgradeAllowed(request)) {
+          rejectUpgrade(socket, 403);
+          return;
+        }
         const binding = await authenticateUpgrade(db, request);
         if (!binding) {
           rejectUpgrade(socket, 404);
+          return;
+        }
+        if (!connectionAllowed(binding)) {
+          rejectUpgrade(socket, 403);
           return;
         }
         server.handleUpgrade(request, socket, head, (websocket) => {

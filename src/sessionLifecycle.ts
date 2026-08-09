@@ -20,6 +20,10 @@ export interface LifecycleResult {
 const now = () => new Date().toISOString();
 const ATTACHMENT_PATH_PREFIX = '/api/attachments/';
 
+function isMissingCleanupSchema(error: unknown): boolean {
+  return /no such table:\s*attachment_cleanup_jobs|no such column:\s*(deleted_at|history_cleared_at|image_purged_at)/i.test(String(error));
+}
+
 type LifecycleEnv = { DB: D1Database; UPLOADS?: R2Bucket };
 type PurgeCandidate = {
   id: string;
@@ -44,9 +48,14 @@ export async function archiveSession(
   archivedBy: string | null = null,
 ): Promise<void> {
   const t = now();
-  await env.DB.prepare(
-    `UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL`,
-  ).bind(t, t, archivedBy, t, sessionId).run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL AND purged_at IS NULL`,
+    ).bind(t, t, archivedBy, t, sessionId),
+    env.DB.prepare(
+      'UPDATE visitor_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE session_id=? AND revoked_at IS NULL',
+    ).bind(t, sessionId),
+  ]);
 }
 
 export async function autoArchiveActiveSessions(
@@ -73,17 +82,23 @@ export async function autoArchiveActiveSessions(
   if (!ids.length) return { archivedCount: 0 };
 
   const t = now();
-  const result = await env.DB.prepare(
-    `UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=NULL,updated_at=?
-     WHERE id IN (${ids.map(() => '?').join(',')})
-       AND deleted_at IS NULL
-       AND purged_at IS NULL
-       AND archived_at IS NULL
-       AND status IN ('PENDING','OPEN')
-       AND datetime(COALESCE(updated_at, created_at)) <= datetime('now', '-24 hours')`,
-  ).bind(t, t, t, ...ids).run();
+  const result = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE sessions SET status='ARCHIVED',closed_at=COALESCE(closed_at,?),archived_at=COALESCE(archived_at,?),archived_by=NULL,updated_at=?
+       WHERE id IN (${ids.map(() => '?').join(',')})
+         AND deleted_at IS NULL
+         AND purged_at IS NULL
+         AND archived_at IS NULL
+         AND status IN ('PENDING','OPEN')
+         AND datetime(COALESCE(updated_at, created_at)) <= datetime('now', '-24 hours')`,
+    ).bind(t, t, t, ...ids),
+    env.DB.prepare(
+      `UPDATE visitor_sessions SET revoked_at=COALESCE(revoked_at,?)
+        WHERE session_id IN (${ids.map(() => '?').join(',')}) AND revoked_at IS NULL`,
+    ).bind(t, ...ids),
+  ]);
 
-  return { archivedCount: Number(result?.meta?.changes || 0) };
+  return { archivedCount: Number(result[0]?.meta?.changes || 0) };
 }
 
 function attachmentKeyFromPath(path: unknown): string {
@@ -140,13 +155,75 @@ async function purgeTrashSessionData(env: LifecycleEnv, candidate: PurgeCandidat
   if (!sessionId || !(await claimTrashSessionForPurge(env, candidate))) return false;
 
   const keys = await collectPurgeKeys(env, sessionId);
-  if (keys.size && !env.UPLOADS) throw new Error('lifecycle purge requires UPLOADS binding for attachment cleanup');
-
-  for (const key of keys) {
-    await env.UPLOADS!.delete(key);
+  const t = now();
+  // Tombstone and enqueue first.  R2 deletion is an external side effect and
+  // may fail; ordinary reads must be closed even when the cleanup worker has
+  // to retry the object deletion later.
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO attachment_cleanup_jobs(
+           id,attachment_id,conversation_id,object_key,attempts,next_attempt_at,created_at,updated_at
+         )
+         SELECT lower(hex(randomblob(16))),a.id,a.conversation_id,a.object_key,0,?,?,?
+           FROM attachments a
+          WHERE (a.conversation_id=? OR a.message_id IN (SELECT id FROM messages WHERE session_id=?))
+            AND a.object_key IS NOT NULL
+            AND a.deleted_at IS NULL
+         ON CONFLICT(object_key) DO UPDATE SET
+           completed_at=NULL,last_error=NULL,next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at`,
+      ).bind(t, t, t, sessionId, sessionId),
+      env.DB.prepare(
+        `UPDATE attachments SET deleted_at=?
+          WHERE (conversation_id=? OR message_id IN (SELECT id FROM messages WHERE session_id=?))
+            AND deleted_at IS NULL`,
+      ).bind(t, sessionId, sessionId),
+      env.DB.prepare(
+        `UPDATE messages SET content='',image_path=NULL,image_purged_at=COALESCE(image_purged_at,?)
+          WHERE session_id=?`,
+      ).bind(t, sessionId),
+    ]);
+  } catch (error) {
+    // Pre-cleanup-job self-hosted databases still need the same read
+    // invalidation.  If no tombstone column exists, delete the attachment
+    // row only after the R2 delete path below has been attempted.
+    if (!isMissingCleanupSchema(error)) throw error;
+    try {
+      await env.DB.prepare(
+        `UPDATE attachments SET deleted_at=?
+          WHERE (conversation_id=? OR message_id IN (SELECT id FROM messages WHERE session_id=?))
+            AND deleted_at IS NULL`,
+      ).bind(t, sessionId, sessionId).run();
+    } catch (attachmentError) {
+      if (!/no such column:\s*deleted_at/i.test(String(attachmentError))) throw attachmentError;
+      await env.DB.prepare(
+        `DELETE FROM attachments
+          WHERE conversation_id=? OR message_id IN (SELECT id FROM messages WHERE session_id=?)`,
+      ).bind(sessionId, sessionId).run();
+    }
+    try {
+      await env.DB.prepare(
+        `UPDATE messages SET content='',image_path=NULL,image_purged_at=COALESCE(image_purged_at,?)
+          WHERE session_id=?`,
+      ).bind(t, sessionId).run();
+    } catch (messageError) {
+      if (!/no such column:\s*image_purged_at/i.test(String(messageError))) throw messageError;
+      await env.DB.prepare(
+        'UPDATE messages SET content=\'\',image_path=NULL WHERE session_id=?',
+      ).bind(sessionId).run();
+    }
   }
 
-  const t = now();
+  if (env.UPLOADS) {
+    for (const key of keys) {
+      try {
+        await env.UPLOADS.delete(key);
+      } catch (error) {
+        console.error('lifecycle: purge R2 cleanup deferred', { sessionId, error: String(error) });
+      }
+    }
+  }
+
   const results = await env.DB.batch([
     env.DB.prepare(
       `DELETE FROM attachments
@@ -222,37 +299,47 @@ export async function cleanupExpiredOrphanAttachments(
 
   const rows = (
     await env.DB.prepare(
-      `SELECT id, object_key FROM attachments
+      `SELECT id, object_key, conversation_id, byte_size FROM attachments
        WHERE message_id IS NULL
          AND deleted_at IS NULL
          AND expires_at IS NOT NULL
          AND datetime(expires_at) <= datetime('now')
        ORDER BY datetime(expires_at) ASC
        LIMIT ?`,
-    ).bind(cleanupLimit).all<{ id: string; object_key: string }>()
+  ).bind(cleanupLimit).all<{ id: string; object_key: string; conversation_id: string | null; byte_size: number }>()
   ).results || [];
 
-  const cleanedIds: string[] = [];
+  let cleanedCount = 0;
   for (const row of rows) {
     const id = String(row.id || '');
     const objectKey = String(row.object_key || '');
     if (!id || !objectKey) continue;
     try {
       await env.UPLOADS.delete(objectKey);
-      cleanedIds.push(id);
+      const deleted = await env.DB.prepare(
+        'DELETE FROM attachments WHERE id=? AND message_id IS NULL AND deleted_at IS NULL',
+      ).bind(id).run();
+      if (Number(deleted?.meta?.changes || 0) === 1) {
+        cleanedCount += 1;
+        if (row.conversation_id) {
+          try {
+            await env.DB.prepare(
+              `UPDATE sessions
+                  SET unclaimed_attachment_count=MAX(0,COALESCE(unclaimed_attachment_count,0)-1),
+                      unclaimed_attachment_bytes=MAX(0,COALESCE(unclaimed_attachment_bytes,0)-?)
+                WHERE id=?`,
+            ).bind(Number(row.byte_size || 0), row.conversation_id).run();
+          } catch (error) {
+            if (!/no such column|unknown column|unclaimed_attachment/i.test(String(error))) throw error;
+          }
+        }
+      }
     } catch (error) {
       console.error('lifecycle: cleanupExpiredOrphanAttachments R2 delete failed', { id, error: String(error) });
     }
   }
 
-  for (let i = 0; i < cleanedIds.length; i += 80) {
-    const chunk = cleanedIds.slice(i, i + 80);
-    if (chunk.length) {
-      await env.DB.prepare(`DELETE FROM attachments WHERE id IN (${chunk.map(() => '?').join(',')}) AND message_id IS NULL`).bind(...chunk).run();
-    }
-  }
-
-  return { expiredAttachmentCount: cleanedIds.length };
+  return { expiredAttachmentCount: cleanedCount };
 }
 
 export async function cleanupExpiredRateLimits(
@@ -373,7 +460,7 @@ export async function runLifecycle(
   }
 
   try {
-    const cleanupResult = await cleanupExpiredOrphanAttachments(env, 50);
+    const cleanupResult = await cleanupExpiredOrphanAttachments(env, 500);
     expiredAttachmentCount = cleanupResult.expiredAttachmentCount;
   } catch (error) {
     errorCount++;

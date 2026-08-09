@@ -28,23 +28,36 @@ export class AttachmentService {
     }
 
     const objectKey = `${crypto.randomUUID()}.${extension}`;
-    await this.uploads.put(objectKey, input.file.stream(), {
-      httpMetadata: { contentType: input.file.type },
-    });
+    const attachmentId = this.idFactory('att');
+    const createdAt = this.clock();
+    const record = {
+      id: attachmentId,
+      sessionId: input.sessionId,
+      objectKey,
+      mimeType: input.file.type,
+      byteSize: input.file.size,
+      createdAt,
+      createdByType: input.createdByType,
+      createdById: input.createdById,
+      expiresAt: new Date(Date.parse(createdAt) + 10 * 60 * 1000).toISOString(),
+    } as const;
+    const hasReservationApi = typeof (this.attachments as AttachmentRepository & { reserve?: unknown }).reserve === 'function';
+    if (hasReservationApi) await this.attachments.reserve(record);
     try {
-      const createdAt = this.clock();
-      await this.attachments.insert({
-        id: this.idFactory('att'),
-        sessionId: input.sessionId,
-        objectKey,
-        mimeType: input.file.type,
-        byteSize: input.file.size,
-        createdAt,
-        createdByType: input.createdByType,
-        createdById: input.createdById,
-        expiresAt: new Date(Date.parse(createdAt) + 7 * 86400000).toISOString(),
+      await this.uploads.put(objectKey, input.file.stream(), {
+        httpMetadata: { contentType: input.file.type },
       });
+      if (!hasReservationApi) {
+        await this.attachments.insert({ ...record, expiresAt: new Date(Date.parse(createdAt) + 7 * 86400000).toISOString() });
+      }
     } catch (error) {
+      if (hasReservationApi) {
+        try {
+          await this.attachments.releaseReservation?.(attachmentId);
+        } catch (cleanupError) {
+          console.error('attachment reservation rollback failed', { attachmentId, error: String(cleanupError) });
+        }
+      }
       try {
         await this.uploads.delete(objectKey);
       } catch (cleanupError) {

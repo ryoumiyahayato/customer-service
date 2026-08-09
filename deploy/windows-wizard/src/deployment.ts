@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { access } from 'node:fs/promises';
-import { normalizeDeploymentConfig, type DeploymentConfig } from './config.js';
+import { DEPLOYMENT_SSH_PASSWORD_ENV, normalizeDeploymentConfig, type DeploymentConfig } from './config.js';
 import { generateDeploymentPlan } from './deployPlan.js';
 import { createMockSshClient, createRealSshClient, type SshClient } from './ssh.js';
 import { createMockTransfer, createRealTransfer, listUploadFiles, type FileTransfer } from './transfer.js';
@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 export type DeployOptions = {
   real: boolean;
   dryRun: boolean;
+  confirmTarget?: boolean;
 };
 
 function repoRoot(): string {
@@ -57,6 +58,7 @@ export async function runDeployment(config: DeploymentConfig, options: DeployOpt
   const shouldConnect = options.real && normalized.mode === 'real' && !options.dryRun && !normalized.dryRun;
 
   logger.info(`Deployment mode: ${shouldConnect ? 'real SSH' : 'dry-run/mock'}`);
+  logger.info(`SSH target: ${config.host}:${config.port} user=${config.username} credential=${config.authMethod === 'password' ? `fixed-environment:${DEPLOYMENT_SSH_PASSWORD_ENV}` : 'private-key-file'}`);
   logger.info(`Remote deploy directory: ${normalized.remoteLinuxDir}`);
   logger.info(`Upload file count: ${files.length}`);
   for (const file of files) logger.info(`upload: ${file}`);
@@ -70,6 +72,10 @@ export async function runDeployment(config: DeploymentConfig, options: DeployOpt
       uploadedFiles: files,
       plan,
     };
+  }
+
+  if (!options.confirmTarget) {
+    throw new Error('Real deployment requires explicit target confirmation (--confirm-target) after reviewing the displayed host, port, username, and credential source.');
   }
 
   const { ssh, transfer } = createClients(config, true);

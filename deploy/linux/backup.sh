@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
@@ -16,8 +17,12 @@ set +a
 
 [[ -n "${POSTGRES_USER:-}" ]] || fail "POSTGRES_USER is required."
 [[ -n "${POSTGRES_DB:-}" ]] || fail "POSTGRES_DB is required."
+[[ "${APP_UID:-}" =~ ^[1-9][0-9]*$ ]] || fail "APP_UID must be an explicitly configured non-root numeric UID."
+[[ "${APP_GID:-}" =~ ^[1-9][0-9]*$ ]] || fail "APP_GID must be an explicitly configured non-root numeric GID."
 BACKUP_SIGNING_KEY="${BACKUP_SIGNING_KEY:-}"
 [[ "${#BACKUP_SIGNING_KEY}" -ge 32 ]] || fail "BACKUP_SIGNING_KEY must be at least 32 characters."
+
+"$ROOT_DIR/prepare-directories.sh"
 
 sign_manifest() {
   docker compose run --rm --no-deps -T app node --input-type=module -e '
@@ -34,10 +39,13 @@ BACKUP_TARGET="${BACKUP_DIR:-./backup}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${BACKUP_TARGET}/${STAMP}"
 
-mkdir -p "$OUT_DIR"
+mkdir -p -m 700 "$OUT_DIR"
+chown "${APP_UID}:${APP_GID}" -- "$OUT_DIR" || fail "Cannot set backup output ownership to ${APP_UID}:${APP_GID}."
+chmod 700 -- "$OUT_DIR"
 
 echo "Backing up PostgreSQL dump."
 docker compose exec -T postgres pg_dump -Fc --no-owner --no-privileges -U "${POSTGRES_USER}" "${POSTGRES_DB}" > "${OUT_DIR}/postgres.dump"
+chmod 600 "${OUT_DIR}/postgres.dump"
 
 echo "Backing up local storage directory."
 if [[ -d "storage" ]]; then
@@ -48,14 +56,17 @@ if [[ -d "storage" ]]; then
     fail "Storage contains unsupported file types."
   fi
   tar -czf "${OUT_DIR}/storage.tar.gz" storage
+  chmod 600 "${OUT_DIR}/storage.tar.gz"
 else
   touch "${OUT_DIR}/storage.empty"
+  chmod 600 "${OUT_DIR}/storage.empty"
 fi
 
 cat > "${OUT_DIR}/README.txt" <<'MSG'
 This backup intentionally does not include .env.
 Store .env, SESSION_SECRET, SETUP_TOKEN, ENCRYPTION_KEY, database credentials, and DNS/server records in a separate protected secret backup.
 MSG
+chmod 600 "${OUT_DIR}/README.txt"
 
 echo "Writing backup integrity manifest."
 (
@@ -67,6 +78,7 @@ echo "Writing backup integrity manifest."
   fi
   sign_manifest < SHA256SUMS > SHA256SUMS.hmac
 )
+chmod 600 "${OUT_DIR}/SHA256SUMS" "${OUT_DIR}/SHA256SUMS.hmac"
 
 echo "Backup completed: ${OUT_DIR}"
 echo ".env was not copied. Keep a separate protected secret backup."

@@ -159,18 +159,19 @@ assert.match(lifecycle, /datetime\(COALESCE\(updated_at, created_at\)\) <= datet
 assert.match(lifecycle, /datetime\(deleted_at\) <= datetime\('now', '-24 hours'\)/);
 assert.match(lifecycle, /claimTrashSessionForPurge/);
 assert.match(lifecycle, /SET purged_at=\?,updated_at=\?/);
-assert.match(lifecycle, /env\.UPLOADS!\.delete\(key\)/);
+assert.match(lifecycle, /env\.UPLOADS\.delete\(key\)/);
 assert.match(lifecycle, /DELETE FROM attachments/);
 assert.match(lifecycle, /DELETE FROM messages/);
 assert.match(lifecycle, /EXISTS \([\s\S]*?purged_at IS NOT NULL AND history_cleared_at IS NULL/);
 assert.match(lifecycle, /purged_at IS NOT NULL[\s\S]*?history_cleared_at IS NULL/);
-assert.ok(lifecycle.indexOf('SET purged_at=?,updated_at=?') < lifecycle.indexOf('env.UPLOADS!.delete(key)'));
+assert.ok(lifecycle.indexOf('SET purged_at=?,updated_at=?') < lifecycle.indexOf('env.UPLOADS.delete(key)'));
 
 assert.match(websocket, /requireCurrentAdmin/);
 assert.match(websocket, /requireVisitorSession/);
 assert.ok(websocket.includes("/^\\/api\\/ws\\/conversations\\/"));
 assert.doesNotMatch(websocket, /type\s*===\s*['"]subscribe['"]/);
-assert.match(websocket, /client_messages_not_supported/);
+assert.match(websocket, /event_not_allowed/);
+assert.match(websocket, /binary_not_allowed/);
 assert.match(genericIndex, /createWebSocketHub\(db\)/);
 assert.match(genericConfig, /server-generic public exposure is blocked/);
 assert.match(genericConfig, /does not yet implement the production admin\/visitor bundle and token-subdomain isolation boundary/);

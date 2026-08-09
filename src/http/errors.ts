@@ -11,6 +11,9 @@ export type DomainErrorCode =
   | 'ATTACHMENT_NOT_FOUND'
   | 'ATTACHMENT_INVALID_TYPE'
   | 'ATTACHMENT_TOO_LARGE'
+  | 'ATTACHMENT_SESSION_ENDED'
+  | 'ATTACHMENT_QUOTA_EXCEEDED'
+  | 'MESSAGE_QUOTA_EXCEEDED'
   | 'INTERNAL_ERROR';
 
 export class DomainError extends Error {

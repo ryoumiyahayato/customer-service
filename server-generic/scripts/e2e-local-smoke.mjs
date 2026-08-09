@@ -2,12 +2,17 @@
 
 import http from 'node:http';
 import https from 'node:https';
+import path from 'node:path';
+import { readdir, stat } from 'node:fs/promises';
 
 const baseUrl = (process.env.SELF_HOST_BASE_URL || 'http://127.0.0.1:8788').replace(/\/+$/, '');
 const setupToken = process.env.SETUP_TOKEN || '';
 const adminUsername = process.env.ADMIN_USERNAME || 'local-smoke-admin';
 const adminPassword = process.env.ADMIN_PASSWORD || '';
 const adminDisplayName = process.env.ADMIN_DISPLAY_NAME || 'Local Smoke Admin';
+const storageRoot = process.env.SELF_HOST_STORAGE_ROOT || '';
+const expectedStorageUid = process.env.SELF_HOST_APP_UID || (typeof process.getuid === 'function' ? String(process.getuid()) : '');
+const expectedStorageGid = process.env.SELF_HOST_APP_GID || (typeof process.getgid === 'function' ? String(process.getgid()) : '');
 
 if (!setupToken) failConfig('SETUP_TOKEN is required for local self-host smoke.');
 if (!adminPassword || adminPassword.length < 12) failConfig('ADMIN_PASSWORD is required and must be at least 12 characters.');
@@ -62,20 +67,24 @@ function safeRequestLabel(path) {
     .replace(/\/api\/guest\/[^/?#]+/, '/api/guest/:token')
     .replace(/\/api\/sessions\/[^/?#]+\/messages/, '/api/sessions/:id/messages')
     .replace(/\/api\/sessions\/[^/?#]+\/customer-read/, '/api/sessions/:id/customer-read')
+    .replace(/\/api\/visitor\/sessions\/[^/?#]+\/attachments(?:\/[^/?#]+)?/, '/api/visitor/sessions/:id/attachments')
     .replace(/\/api\/invites\/[^/?#]+\/revoke/, '/api/invites/:id/revoke');
 }
 
 function rawRequest(path, { method, headers, body }) {
   const target = new URL(`${baseUrl}${path}`);
   const client = target.protocol === 'https:' ? https : http;
-  const requestBody = body === undefined ? undefined : JSON.stringify(body);
+  const requestBody = body === undefined ? undefined : Buffer.isBuffer(body) ? body : JSON.stringify(body);
   const requestHeaders = { ...headers };
   if (requestBody !== undefined) requestHeaders['content-length'] = Buffer.byteLength(requestBody);
   return new Promise((resolve, reject) => {
     const req = client.request(target, { method, headers: requestHeaders }, (res) => {
       const chunks = [];
       res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      res.on('end', () => resolve({ status: res.statusCode || 0, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') }));
+      res.on('end', () => {
+        const responseBody = Buffer.concat(chunks);
+        resolve({ status: res.statusCode || 0, headers: res.headers, body: responseBody, text: responseBody.toString('utf8') });
+      });
     });
     req.on('error', reject);
     if (requestBody !== undefined) req.write(requestBody);
@@ -83,9 +92,9 @@ function rawRequest(path, { method, headers, body }) {
   });
 }
 
-async function request(path, { method = 'GET', body, jar, expected = [200], skipJson = false, label } = {}) {
-  const headers = { accept: 'application/json' };
-  if (body !== undefined) headers['content-type'] = 'application/json';
+async function request(path, { method = 'GET', body, jar, headers: extraHeaders = {}, expected = [200], skipJson = false, label } = {}) {
+  const headers = { accept: 'application/json', ...extraHeaders };
+  if (body !== undefined && !headers['content-type']) headers['content-type'] = Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json';
   const cookie = jar?.header();
   if (cookie) headers.cookie = cookie;
   const safeLabel = label || safeRequestLabel(path);
@@ -133,6 +142,54 @@ function findMessage(messages, senderType) {
 
 function countClientMessage(messages, clientMessageId) {
   return Array.isArray(messages) ? messages.filter(message => message?.client_message_id === clientMessageId).length : 0;
+}
+
+async function listStorageFiles(root) {
+  const files = new Set();
+  async function visit(directory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error('storage contains a symbolic link');
+      if (entry.isDirectory()) await visit(fullPath);
+      else if (entry.isFile()) files.add(path.relative(root, fullPath));
+      else throw new Error('storage contains an unsupported file type');
+    }
+  }
+  await visit(root);
+  return files;
+}
+
+async function assertPrivateStorage(root) {
+  const rootInfo = await stat(root);
+  assert(rootInfo.isDirectory(), 'storage root is not a directory');
+  if (process.platform === 'win32') return;
+
+  assert((rootInfo.mode & 0o7777) === 0o700, 'storage root mode is not 0700');
+  if (expectedStorageUid) assert(String(rootInfo.uid) === expectedStorageUid, 'storage root owner does not match app UID');
+  if (expectedStorageGid) assert(String(rootInfo.gid) === expectedStorageGid, 'storage root group does not match app GID');
+
+  async function visit(directory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(directory, entry.name);
+      assert(!entry.isSymbolicLink(), 'storage contains a symbolic link');
+      const info = await stat(fullPath);
+      if (entry.isDirectory()) {
+        assert((info.mode & 0o7777) === 0o700, 'storage subdirectory mode is not 0700');
+        if (expectedStorageUid) assert(String(info.uid) === expectedStorageUid, 'storage subdirectory owner does not match app UID');
+        if (expectedStorageGid) assert(String(info.gid) === expectedStorageGid, 'storage subdirectory group does not match app GID');
+        await visit(fullPath);
+      } else if (entry.isFile()) {
+        assert((info.mode & 0o7777) === 0o600, 'attachment file mode is not 0600');
+        if (expectedStorageUid) assert(String(info.uid) === expectedStorageUid, 'attachment owner does not match app UID');
+        if (expectedStorageGid) assert(String(info.gid) === expectedStorageGid, 'attachment group does not match app GID');
+      } else {
+        throw new Error('storage contains an unsupported file type');
+      }
+    }
+  }
+  await visit(root);
 }
 
 async function main() {
@@ -185,6 +242,36 @@ async function main() {
   assert(resumed?.resumed === true && getSessionId(resumed) === sessionId, 'original HttpOnly visitor session could not resume consumed invite');
   logPass('resume consumed invite in original browser');
 
+  const visitorToken = visitorJar.cookies.get('support_visitor');
+  assert(visitorToken, 'visitor session cookie did not contain a token for attachment upload');
+  const attachmentBody = Buffer.from('local self-host attachment smoke');
+  const filesBeforeUpload = storageRoot ? await listStorageFiles(storageRoot) : null;
+  if (storageRoot) await assertPrivateStorage(storageRoot);
+  const uploadResponse = await request(`/api/visitor/sessions/${encodeURIComponent(sessionId)}/attachments`, {
+    method: 'POST',
+    body: attachmentBody,
+    jar: visitorJar,
+    headers: { 'x-visitor-token': visitorToken, 'x-filename': 'local-smoke.txt' },
+    expected: [201],
+  });
+  const attachmentId = uploadResponse?.attachment?.id;
+  assert(typeof attachmentId === 'string' && attachmentId.length > 0, 'attachment upload did not return an id');
+  if (storageRoot) {
+    await assertPrivateStorage(storageRoot);
+    const filesAfterUpload = await listStorageFiles(storageRoot);
+    const addedFiles = [...filesAfterUpload].filter(file => !filesBeforeUpload.has(file));
+    assert(addedFiles.length === 1, 'attachment upload did not create exactly one storage object');
+  }
+  logPass('visitor attachment write and 0600 mode');
+
+  const downloadedAttachment = await rawRequest(`/api/visitor/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`, {
+    method: 'GET',
+    headers: { cookie: visitorJar.header(), 'x-visitor-token': visitorToken },
+  });
+  assert(downloadedAttachment.status === 200, 'attachment download did not succeed');
+  assert(downloadedAttachment.body.equals(attachmentBody), 'attachment download body did not match upload');
+  logPass('visitor attachment read');
+
   const revokeCandidateResponse = await request('/api/invites', { method: 'POST', body: {}, jar: adminJar, expected: [201] });
   const revokeCandidate = extractInvite(revokeCandidateResponse);
   await request(`/api/invites/${encodeURIComponent(revokeCandidate.id)}/revoke`, { method: 'POST', body: {}, jar: adminJar });
@@ -227,6 +314,25 @@ async function main() {
   const readReceipt = await request(`/api/sessions/${encodeURIComponent(sessionId)}/customer-read`, { method: 'POST', body: { messageIds: [readTargetId] }, jar: visitorJar });
   assert(readReceipt?.ok === true && Array.isArray(readReceipt.messageIds) && readReceipt.messageIds.length === 1 && readReceipt.messageIds[0] === readTargetId && !readReceipt.messageIds.includes(unreadControlId), 'customer read receipt did not honor the requested message ids');
   logPass('customer read receipt id filtering');
+
+  await request(`/api/admin/sessions/${encodeURIComponent(sessionId)}/close`, { method: 'POST', jar: adminJar });
+  await request(`/api/admin/sessions/${encodeURIComponent(sessionId)}/clear-history`, {
+    method: 'POST',
+    body: { confirm: 'CLEAR_HISTORY' },
+    jar: adminJar,
+  });
+  const deletedAttachment = await rawRequest(`/api/visitor/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`, {
+    method: 'GET',
+    headers: { cookie: visitorJar.header(), 'x-visitor-token': visitorToken },
+  });
+  assert(deletedAttachment.status === 404, 'deleted attachment remained downloadable');
+  if (storageRoot) {
+    await assertPrivateStorage(storageRoot);
+    const filesAfterDelete = await listStorageFiles(storageRoot);
+    const filesBefore = filesBeforeUpload || new Set();
+    assert(filesAfterDelete.size === filesBefore.size, 'attachment cleanup did not remove the uploaded object');
+  }
+  logPass('attachment delete and post-delete access denial');
 
   await request('/api/auth/logout', { method: 'POST', jar: adminJar, expected: [204], skipJson: true });
   logPass('admin logout');

@@ -1,0 +1,18 @@
+export const RESOURCE_LIMITS = {
+  messagePageSize: 100,
+  messageSessionMaxCount: 10_000,
+  messageSessionMaxBytes: 20 * 1024 * 1024,
+  unclaimedAttachmentMaxCount: 8,
+  unclaimedAttachmentMaxBytes: 25 * 1024 * 1024,
+  attachmentClaimTtlMs: 10 * 60 * 1000,
+  websocketMaxFrameBytes: 16 * 1024,
+  websocketMaxConnectionsPerRoom: 50,
+  websocketMaxConnectionsPerPrincipal: 4,
+  websocketMaxConnectionsPerAuthSession: 2,
+  websocketMaxConnectionsPerConversation: 2,
+  websocketMaxLifetimeMs: 24 * 60 * 60 * 1000,
+  websocketIdleTimeoutMs: 15 * 60 * 1000,
+  websocketUpgradeLimit: 20,
+  websocketUpgradeWindowMs: 60 * 1000,
+  websocketMaxUpgradeBuckets: 10_000,
+} as const;

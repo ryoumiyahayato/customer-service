@@ -111,7 +111,7 @@ test('self-host authentication and websocket access fail closed after login', ()
   assert.match(genericAuth, /!admin \|\| admin\.is_disabled \|\| !valid/);
   assert.match(genericSocket, /async function remainsAuthorized/);
   assert.match(genericSocket, /requireCurrentAdmin\(db, state\.auth\.token\)/);
-  assert.match(genericSocket, /requireVisitorSession\(db, state\.auth\.sessionId, state\.auth\.token\)/);
+  assert.match(genericSocket, /requireVisitorSession\(db, state\.auth\.sessionId, state\.auth\.token, 'socket'\)/);
   assert.match(genericSocket, /remainsAuthorized\(state\)[\s\S]*?closeRevoked/);
 });
 

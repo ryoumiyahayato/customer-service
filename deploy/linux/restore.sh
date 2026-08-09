@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
@@ -144,6 +145,7 @@ fi
 [[ -d "$BACKUP_PATH" ]] || fail "Backup directory not found."
 BACKUP_PATH="$(cd "$BACKUP_PATH" && pwd -P)"
 [[ -f ".env" ]] || fail "Missing .env."
+[[ -x "./prepare-directories.sh" ]] || fail "Missing executable prepare-directories.sh."
 [[ -f "$BACKUP_PATH/postgres.dump" ]] || fail "Missing postgres.dump in backup directory."
 
 set -a
@@ -152,8 +154,12 @@ set +a
 
 [[ -n "${POSTGRES_USER:-}" ]] || fail "POSTGRES_USER is required."
 [[ -n "${POSTGRES_DB:-}" ]] || fail "POSTGRES_DB is required."
+[[ "${APP_UID:-}" =~ ^[1-9][0-9]*$ ]] || fail "APP_UID must be an explicitly configured non-root numeric UID."
+[[ "${APP_GID:-}" =~ ^[1-9][0-9]*$ ]] || fail "APP_GID must be an explicitly configured non-root numeric GID."
 BACKUP_SIGNING_KEY="${BACKUP_SIGNING_KEY:-}"
 [[ "${#BACKUP_SIGNING_KEY}" -ge 32 ]] || fail "BACKUP_SIGNING_KEY must be at least 32 characters."
+
+"$ROOT_DIR/prepare-directories.sh"
 
 cat <<'MSG'
 Restore requires a maintenance window and overwrites application data.
@@ -188,6 +194,8 @@ else
   mkdir -p "$ROOT_DIR/storage"
 fi
 STORAGE_SWAPPED=1
+
+"$ROOT_DIR/prepare-directories.sh"
 
 echo "Starting services after restore."
 docker compose up -d

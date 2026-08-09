@@ -3,6 +3,11 @@ export function matchSessionMessages(pathname: string, prefix: '/api/visitor' | 
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+export function matchSessionRead(pathname: string, prefix: '/api/visitor' | '/api/admin'): string | null {
+  const match = new RegExp(`^${prefix}/sessions/([^/]+)/read$`).exec(pathname);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 export function matchAdminSessionClose(pathname: string): string | null {
   const match = /^\/api\/admin\/sessions\/([^/]+)\/close$/.exec(pathname);
   return match ? decodeURIComponent(match[1]) : null;

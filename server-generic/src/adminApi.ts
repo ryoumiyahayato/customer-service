@@ -6,7 +6,7 @@ import type { GenericServerConfig } from './config.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError, optionalString } from './http.js';
 import { archiveSession, clearSessionHistory, recycleSession } from './lifecycle.js';
-import { createSessionMessage, listSessionMessages, markSessionMessagesRead, normalizeMessageBody } from './messages.js';
+import { createSessionMessage, listSessionMessagePage, markSessionMessagesRead, normalizeMessageBody } from './messages.js';
 import { readJsonBody, sendJson } from './response.js';
 import { isSafeId } from './routes.js';
 import { getAdminSessionToken } from './security.js';
@@ -36,12 +36,16 @@ export async function handleAdminMessages(
   await requireAdminSessionAccess(db, admin, sessionId);
 
   if (request.method === 'GET') {
-    const receipt = await markSessionMessagesRead(db, sessionId, 'admin');
-    if (receipt.messageIds.length) {
-      hub.broadcastToSession(sessionId, { type: 'messages:read', sessionId, ...receipt });
-    }
-    const messages = await listSessionMessages(db, sessionId, config.encryption);
-    sendJson(response, 200, { ok: true, messages, read: receipt });
+    const requestUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    const page = await listSessionMessagePage(
+      db,
+      sessionId,
+      config.encryption,
+      Number(requestUrl.searchParams.get('limit') || 100),
+      requestUrl.searchParams.get('after'),
+      requestUrl.searchParams.get('before'),
+    );
+    sendJson(response, 200, { ok: true, ...page });
     return;
   }
 
@@ -63,6 +67,25 @@ export async function handleAdminMessages(
   }
 
   throw new HttpError(405, 'method_not_allowed');
+}
+
+export async function handleAdminRead(
+  request: IncomingMessage,
+  response: ServerResponse,
+  db: PostgresAdapter,
+  hub: WebSocketHub,
+  sessionId: string,
+) {
+  if (!isSafeId(sessionId)) throw new HttpError(404, 'session_not_found');
+  const admin = await authenticatedAdmin(request, db);
+  await requireAdminSessionAccess(db, admin, sessionId);
+  const body = await readJsonBody<Record<string, unknown>>(request);
+  const requested = Array.isArray(body.messageIds)
+    ? body.messageIds.filter((id): id is string => typeof id === 'string')
+    : undefined;
+  const receipt = await markSessionMessagesRead(db, sessionId, 'admin', requested);
+  if (receipt.messageIds.length) hub.broadcastToSession(sessionId, { type: 'messages:read', sessionId, ...receipt });
+  sendJson(response, 200, { ok: true, ...receipt });
 }
 
 export async function handleCloseAdminSession(
@@ -103,7 +126,8 @@ export async function handleAdminSessionLifecycleAction(
   }
 
   if (action === 'clear-history') {
-    const result = await clearSessionHistory(db, storage, sessionId, admin);
+    const body = await readJsonBody<Record<string, unknown>>(request);
+    const result = await clearSessionHistory(db, storage, sessionId, admin, body.confirm);
     sendJson(response, 200, { ok: true, result });
     return;
   }

@@ -49,20 +49,15 @@ test('Cloudflare build gate permits version builds but keeps migration verificat
 });
 
 test('wrangler migration invocation never drops the d1 subcommand', () => {
-  assert.deepEqual(
-    wranglerInvocation('/repo/node_modules/.bin/wrangler', 'npx', migrationListArgs()),
-    {
-      command: '/repo/node_modules/.bin/wrangler',
-      args: ['d1', 'migrations', 'list', 'customer_chat_db', '--remote'],
-    },
-  );
-  assert.deepEqual(
-    wranglerInvocation('', 'npx', migrationApplyArgs()),
-    {
-      command: 'npx',
-      args: ['wrangler', 'd1', 'migrations', 'apply', 'customer_chat_db', '--remote'],
-    },
-  );
+  const list = wranglerInvocation('', 'npx', migrationListArgs());
+  assert.equal(list.command, process.execPath);
+  assert.match(list.args[0], /npm-cli\.js$/i);
+  assert.deepEqual(list.args.slice(-5), ['d1', 'migrations', 'list', 'customer_chat_db', '--remote']);
+
+  const apply = wranglerInvocation('', 'npx', migrationApplyArgs());
+  assert.equal(apply.command, process.execPath);
+  assert.match(apply.args[0], /npm-cli\.js$/i);
+  assert.deepEqual(apply.args.slice(-5), ['d1', 'migrations', 'apply', 'customer_chat_db', '--remote']);
 });
 
 test('pending migration parser recognizes migration filenames and ignores no-op output', () => {

@@ -1,10 +1,14 @@
 import { generateDeploymentPlan } from './deployPlan.js';
 import { runDeployment } from './deployment.js';
-import { generateRedactedRemoteEnv, plannedRemoteCommands } from './remoteCommands.js';
+import { commandCreateRemoteDir, generateRedactedRemoteEnv, plannedRemoteCommands } from './remoteCommands.js';
 import { redactText } from './redact.js';
 import { validateDeploymentConfig } from './validation.js';
 import type { DeploymentConfig } from './config.js';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 import { createHostKeyVerifier } from './sshHostKey.js';
 
 const sampleConfig: DeploymentConfig = {
@@ -49,6 +53,7 @@ export function runSmoke(): void {
   const serializedPlan = JSON.stringify(plan);
   assert(plan.steps.length === 7, 'plan should include seven steps');
   assert(plan.target.setupUrl.endsWith('/setup'), 'plan should include setup URL');
+  assert(plan.target.credentialSource === 'private-key-file', 'plan should expose only credential source type');
   assert(plan.dryRun, 'plan should default to dryRun-safe behavior');
 
   const redacted = redactText(
@@ -68,7 +73,28 @@ export function runSmoke(): void {
   const commands = plannedRemoteCommands(sampleConfig).join('\n');
   assert(commands.includes('./install.sh --self-check'), 'commands should include self-check');
   assert(commands.includes('./install.sh --dry-run'), 'dry-run plan should include install dry-run');
+  const specialPathConfig = { ...sampleConfig, remoteBaseDir: '/opt/customer chat/a&b^b(a)' };
+  assert(
+    commandCreateRemoteDir(specialPathConfig) === "mkdir -p '/opt/customer chat/a&b^b(a)/customer-chat/deploy/linux'",
+    'remote paths with spaces and shell metacharacters must stay single shell-quoted arguments',
+  );
+  if (process.platform !== 'win32') {
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), 'customer-chat-remote-command-'));
+    try {
+      const remoteBaseDir = `${tempRoot}/a&b^b(a)`;
+      const command = commandCreateRemoteDir({ ...sampleConfig, remoteBaseDir });
+      const execution = spawnSync('sh', ['-c', command], { encoding: 'utf8' });
+      assert(execution.status === 0, `quoted remote command failed: ${execution.stderr || execution.stdout}`);
+      assert(statSync(path.join(remoteBaseDir, 'customer-chat/deploy/linux')).isDirectory(), 'quoted remote command did not create the intended directory');
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }
   assert(!serializedPlan.includes(sampleConfig.privateKeyPath || ''), 'plan should not include full private key path');
+  for (const field of ['passwordEnv', 'cloudflareApiTokenEnv', 'awsSecretAccessKeyEnv']) {
+    const rejected = validateDeploymentConfig({ ...sampleConfig, [field]: 'GITHUB_TOKEN' } as unknown as DeploymentConfig);
+    assert(!rejected.ok && rejected.errors.some((error) => error.includes('unsupported')), `${field} must be rejected`);
+  }
 }
 
 export async function runAsyncSmoke(): Promise<void> {
@@ -76,4 +102,5 @@ export async function runAsyncSmoke(): Promise<void> {
   const result = await runDeployment(sampleConfig, { real: false, dryRun: true });
   assert(!result.realSshExecuted, 'smoke deploy must not execute real SSH');
   assert(result.uploadedFiles.includes('install.sh'), 'upload list should include install.sh');
+  assert(result.plan.remoteCommands.some((command) => command.includes('prepare-directories.sh')), 'remote chmod must include prepare-directories.sh');
 }

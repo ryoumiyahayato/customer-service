@@ -16,7 +16,7 @@ export function commandCreateRemoteDir(config: DeploymentConfig | NormalizedDepl
 
 export function commandChmodScripts(config: DeploymentConfig | NormalizedDeploymentConfig): string {
   const plan = normalized(config);
-  const scripts = ['install.sh', 'healthcheck.sh', 'backup.sh', 'restore.sh', 'upgrade.sh']
+  const scripts = ['install.sh', 'healthcheck.sh', 'backup.sh', 'restore.sh', 'upgrade.sh', 'prepare-directories.sh']
     .map((script) => shellQuote(`${plan.remoteLinuxDir}/${script}`))
     .join(' ');
   return `chmod +x ${scripts}`;

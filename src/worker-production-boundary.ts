@@ -54,7 +54,7 @@ type ActiveAdminSessionRow = {
 type LoginNameSnapshot = { adminId: string; displayName: string | null };
 
 const inner = worker as WorkerModule;
-const ADMIN_MESSAGE_READ = /^\/api\/sessions\/[^/]+\/messages$/;
+const ADMIN_MESSAGE_READ = /^\/api\/sessions\/[^/]+\/read$/;
 const INVITE_CONSUME = /^\/api\/guest\/[a-f0-9]{40}$/i;
 const OPERATOR_PASSWORD_RESET = /^\/api\/admin\/operators\/[^/]+\/reset-password$/;
 const SENSITIVE_PROFILE_MAX_BYTES = 16 * 1024;
@@ -211,15 +211,24 @@ async function liveInvite(env: Env, token: string) {
 }
 
 function crossSiteReadMutation(req: WorkerRequest) {
-  if (req.method.toUpperCase() !== 'GET') return false;
+  if (req.method.toUpperCase() !== 'POST') return false;
   if (!ADMIN_MESSAGE_READ.test(new URL(req.url).pathname)) return false;
+  const url = new URL(req.url);
+  const origin = req.headers.get('origin');
+  if (origin) return origin !== url.origin;
+  const referer = req.headers.get('referer');
+  if (referer) {
+    try { return new URL(referer).origin !== url.origin; } catch { return true; }
+  }
   const site = String(req.headers.get('sec-fetch-site') || '').toLowerCase();
   const mode = String(req.headers.get('sec-fetch-mode') || '').toLowerCase();
   const dest = String(req.headers.get('sec-fetch-dest') || '').toLowerCase();
   if (site && site !== 'same-origin') return true;
   if (mode === 'navigate') return true;
   if (dest && dest !== 'empty') return true;
-  return false;
+  // A production state-changing request without any provenance evidence is
+  // rejected here before it reaches the application handler.
+  return !site && !mode && !dest;
 }
 
 function sensitiveIdentityPath(pathname: string, method: string) {
@@ -324,8 +333,12 @@ async function activateLoginSession(req: WorkerRequest, env: Env, response: Resp
     return response;
   } catch (error) {
     console.error('Failed to activate single admin session', error);
-    await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=?')
-      .bind(timestamp, sessionId).run().catch(() => {});
+    try {
+      await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=?')
+        .bind(timestamp, sessionId).run();
+    } catch {
+      // Preserve the fail-closed response even if the legacy cleanup write fails.
+    }
     return hardenedJson(503, { error: 'session_activation_failed' }, { 'Set-Cookie': clearSessionCookie(COOKIE_NAMES.admin) });
   }
 }
@@ -350,8 +363,12 @@ async function enforceSingleAdminSession(req: WorkerRequest, env: Env) {
     return null;
   }
   if (row.session_id === context.sessionId) return null;
-  await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=? AND revoked_at IS NULL')
-    .bind(timestamp, context.sessionId).run().catch(() => {});
+  try {
+    await env.DB.prepare('UPDATE admin_sessions SET revoked_at=COALESCE(revoked_at,?) WHERE id=? AND revoked_at IS NULL')
+      .bind(timestamp, context.sessionId).run();
+  } catch {
+    // Preserve the fail-closed response even if the legacy cleanup write fails.
+  }
   return hardenedJson(401, { error: 'session_replaced' }, { 'Set-Cookie': clearSessionCookie(COOKIE_NAMES.admin) });
 }
 

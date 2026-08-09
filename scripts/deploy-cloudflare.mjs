@@ -3,9 +3,8 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
+import { nodeNpmInvocation } from './deployment-safety-lib.mjs';
 
-const isWindows = process.platform === 'win32';
-const npmBin = isWindows ? 'npm.cmd' : 'npm';
 const rawArgs = process.argv.slice(2);
 const deployRequested = rawArgs.includes('--deploy');
 const applyMigrations = rawArgs.includes('--apply-migrations');
@@ -22,7 +21,7 @@ function run(command, args) {
     cwd: process.cwd(),
     env: process.env,
     stdio: 'inherit',
-    shell: isWindows,
+    shell: false,
   });
   if (result.error || result.status !== 0) {
     fail(`Command failed: ${command} ${args.join(' ')}`);
@@ -67,7 +66,8 @@ for (const args of [
   ['run', 'typecheck'],
   ['run', 'build'],
 ]) {
-  run(npmBin, args);
+  const invocation = nodeNpmInvocation(args);
+  run(invocation.command, invocation.args);
 }
 
 console.log('Cloudflare preflight completed. No production deployment was started.');

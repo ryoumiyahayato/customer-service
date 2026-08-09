@@ -10,6 +10,7 @@
 # - no secret value printing
 
 set -u
+umask 077
 
 FAIL_COUNT=0
 WARN_COUNT=0
@@ -92,6 +93,66 @@ env_value_matches() {
   local value
   value="$(env_value "$key")"
   printf '%s' "$value" | grep -Eiq "$pattern"
+}
+
+check_private_path() {
+  local path="$1"
+  local expected_mode="$2"
+  local expected_uid="${3:-$(id -u)}"
+  local expected_gid="${4:-$(id -g)}"
+  local label="${5:-$path}"
+  if [ ! -e "$path" ]; then
+    fail "${label} is missing; run ./prepare-directories.sh before starting the service"
+    return
+  fi
+  local owner group mode
+  owner="$(stat -c '%u' "$path" 2>/dev/null || true)"
+  group="$(stat -c '%g' "$path" 2>/dev/null || true)"
+  mode="$(stat -c '%a' "$path" 2>/dev/null || true)"
+  if [ "$owner" != "$expected_uid" ] || [ "$group" != "$expected_gid" ]; then
+    fail "${label} must be owned by ${expected_uid}:${expected_gid}; refusing to continue"
+  elif [ "$mode" != "$expected_mode" ]; then
+    fail "${label} must have mode ${expected_mode}; refusing to continue"
+  else
+    pass "${label} owner/group and mode are secure"
+  fi
+}
+
+check_private_tree() {
+  local path="$1"
+  local expected_uid="$2"
+  local expected_gid="$3"
+  local label="$4"
+  local entry owner group mode
+
+  check_private_path "$path" "700" "$expected_uid" "$expected_gid" "$label"
+  if [ ! -d "$path" ]; then
+    return
+  fi
+  if find -P -- "$path" -type l -print -quit | grep -q .; then
+    fail "${label} contains a symbolic link"
+  fi
+  if find -P -- "$path" ! -type f ! -type d -print -quit | grep -q .; then
+    fail "${label} contains an unsupported file type"
+  fi
+
+  while IFS= read -r -d '' entry; do
+    owner="$(stat -c '%u' "$entry" 2>/dev/null || true)"
+    group="$(stat -c '%g' "$entry" 2>/dev/null || true)"
+    mode="$(stat -c '%a' "$entry" 2>/dev/null || true)"
+    if [ "$owner" != "$expected_uid" ] || [ "$group" != "$expected_gid" ] || [ "$mode" != "700" ]; then
+      fail "${label} directory entry has unsafe owner/group/mode: ${entry}"
+    fi
+  done < <(find -P -- "$path" -mindepth 1 -type d -print0)
+
+  while IFS= read -r -d '' entry; do
+    owner="$(stat -c '%u' "$entry" 2>/dev/null || true)"
+    group="$(stat -c '%g' "$entry" 2>/dev/null || true)"
+    mode="$(stat -c '%a' "$entry" 2>/dev/null || true)"
+    if [ "$owner" != "$expected_uid" ] || [ "$group" != "$expected_gid" ] || [ "$mode" != "600" ]; then
+      fail "${label} file entry has unsafe owner/group/mode: ${entry}"
+    fi
+  done < <(find -P -- "$path" -mindepth 1 -type f -print0)
 }
 
 check_required_env() {
@@ -213,6 +274,7 @@ check_port "443"
 
 if [ -f ".env" ]; then
   pass ".env exists"
+  check_private_path ".env" "600"
 else
   fail ".env is missing; copy .env.example to .env and fill it only on the VPS"
 fi
@@ -228,6 +290,8 @@ if [ -f ".env" ]; then
     "APP_PORT"
     "SESSION_SECRET"
     "SETUP_TOKEN"
+    "APP_UID"
+    "APP_GID"
     "STORAGE_DRIVER"
     "STORAGE_PATH"
     "MAX_UPLOAD_SIZE"
@@ -245,6 +309,19 @@ if [ -f ".env" ]; then
       fail ".env key appears to contain a placeholder or localhost value: ${key}"
     fi
   done
+
+  app_uid="$(env_value APP_UID)"
+  app_gid="$(env_value APP_GID)"
+  if ! [[ "$app_uid" =~ ^[1-9][0-9]*$ ]]; then
+    fail "APP_UID must be an explicitly configured non-root numeric UID"
+  fi
+  if ! [[ "$app_gid" =~ ^[1-9][0-9]*$ ]]; then
+    fail "APP_GID must be an explicitly configured non-root numeric GID"
+  fi
+
+  check_private_tree "storage" "$app_uid" "$app_gid" "storage"
+  check_private_tree "logs" "$app_uid" "$app_gid" "logs"
+  check_private_tree "$(env_value BACKUP_DIR)" "$app_uid" "$app_gid" "backup directory"
 
   fail "server-generic public deployment is disabled until it implements the same separate admin bundle, visitor bundle, token-subdomain host capability, and visitor API boundary as the Cloudflare production entry; use the Cloudflare production deployment for public traffic"
 

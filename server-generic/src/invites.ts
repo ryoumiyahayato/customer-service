@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { generateVisitorToken, hashSessionToken, hashVisitorToken } from './crypto.js';
-import { mapChatSession, type ChatSessionSummary } from './chat.js';
+import { CHAT_SESSION_COLUMNS_FROM_C, mapChatSession, type ChatSessionSummary } from './chat.js';
 import type { PostgresAdapter } from './db/postgres.js';
 import { HttpError } from './http.js';
 import { isSuperAdmin, type AdminIdentity } from './sessions.js';
@@ -34,6 +34,7 @@ type ChatSessionRow = {
   archived_at: Date | null;
   deleted_at: Date | null;
   history_cleared_at: Date | null;
+  purged_at: Date | null;
   assigned_operator_id: string | null;
 };
 
@@ -177,7 +178,7 @@ export async function consumeInvite(
   db: PostgresAdapter,
   rawToken: string,
   existingVisitorToken: string | null,
-  customerName = '访客',
+  customerName = '璁垮',
 ): Promise<InviteConsumptionResult> {
   const token = normalizeToken(rawToken);
   const tokenHash = hashSessionToken(token);
@@ -198,13 +199,15 @@ export async function consumeInvite(
     if (invite.consumed_at) {
       if (!invite.session_id || !existingVisitorToken) throw new HttpError(410, 'invite_already_consumed');
       const resumed = await client.query<ChatSessionRow>(
-        `SELECT id, status, customer_name, created_at, updated_at, closed_at,
-                archived_at, deleted_at, history_cleared_at, assigned_operator_id
-           FROM chat_sessions
-          WHERE id = $1
-            AND visitor_token_hash = $2
-            AND deleted_at IS NULL
-            AND history_cleared_at IS NULL
+        `SELECT ${CHAT_SESSION_COLUMNS_FROM_C}
+           FROM chat_sessions c
+           JOIN visitor_sessions v ON v.chat_session_id=c.id
+          WHERE c.id = $1
+            AND v.token_hash = $2
+            AND v.revoked_at IS NULL
+            AND v.expires_at > now()
+            AND c.deleted_at IS NULL
+            AND c.history_cleared_at IS NULL
           LIMIT 1`,
         [invite.session_id, hashVisitorToken(existingVisitorToken)],
       );
@@ -223,10 +226,15 @@ export async function consumeInvite(
       `INSERT INTO chat_sessions (visitor_token_hash, status, customer_name, assigned_operator_id)
        VALUES ($1, 'open', $2, $3)
        RETURNING id, status, customer_name, created_at, updated_at, closed_at,
-                 archived_at, deleted_at, history_cleared_at, assigned_operator_id`,
-      [visitorTokenHash, customerName.trim().slice(0, 80) || '访客', invite.source_admin_id],
+                 archived_at, deleted_at, history_cleared_at, purged_at, assigned_operator_id`,
+      [visitorTokenHash, customerName.trim().slice(0, 80) || '璁垮', invite.source_admin_id],
     );
     const session = sessionResult.rows[0];
+    await client.query(
+      `INSERT INTO visitor_sessions(chat_session_id,token_hash,created_at,last_seen_at,expires_at)
+       VALUES($1,$2,now(),now(),now()+interval '30 days')`,
+      [session.id, visitorTokenHash],
+    );
 
     const consumed = await client.query<InviteRow>(
       `UPDATE invite_links
@@ -249,3 +257,4 @@ export async function consumeInvite(
     };
   });
 }
+

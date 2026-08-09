@@ -2,7 +2,6 @@ import type { IncomingMessage } from 'node:http';
 import type { GenericServerConfig } from './config.js';
 
 export const ADMIN_COOKIE_NAME = 'support_admin';
-const AMBIENT_COOKIE_NAMES = [ADMIN_COOKIE_NAME, 'support_visitor'];
 
 function localHost(host: string) {
   let normalized = host.toLowerCase();
@@ -36,9 +35,11 @@ export function isSameOriginWrite(request: IncomingMessage): boolean {
   const referer = Array.isArray(request.headers.referer) ? request.headers.referer[0] : request.headers.referer;
   if (referer) return sameOrigin(referer, expected);
 
-  const cookies = parseCookies(request.headers.cookie);
-  const hasAmbientCredentials = AMBIENT_COOKIE_NAMES.some((name) => cookies.has(name));
-  return !hasAmbientCredentials || localHost(request.headers.host || 'localhost');
+  // In production, state-changing requests must carry explicit same-origin
+  // provenance.  Do not treat an absent Origin/Referer as permission merely
+  // because the browser did not send an ambient cookie.
+  if (localHost(request.headers.host || 'localhost')) return true;
+  return false;
 }
 
 export function isSameOriginWebSocket(request: IncomingMessage): boolean {

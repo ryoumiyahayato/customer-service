@@ -67,6 +67,10 @@ function staffMeta(id) {
   return { mode: 'staff', principalId: id, authSessionId: `staff-auth-${id}` };
 }
 
+function adminFeedMeta(id) {
+  return { mode: 'admin-feed', principalId: id, authSessionId: `staff-auth-${id}` };
+}
+
 function room(database, sockets) {
   return new ChatRoom({ getWebSockets() { return sockets; } }, { DB: new SqliteD1Adapter(database) });
 }
@@ -136,4 +140,40 @@ test('already connected staff socket is cut off after backend login session is r
   } finally {
     database.close();
   }
+});
+
+test('already connected admin-feed socket is cut off after backend login session is revoked', async () => {
+  const database = createDatabase();
+  try {
+    addAdmin(database, 'operator-a');
+    const operator = new TestSocket(adminFeedMeta('operator-a'));
+    const chatRoom = room(database, [operator]);
+
+    const before = await chatRoom.fetch(createChatRoomBroadcastRequest('admin-feed', { type: 'sessions:changed' }));
+    assert.equal(before.status, 200);
+    assert.equal(operator.sent.length, 1);
+
+    database.prepare('UPDATE admin_sessions SET revoked_at=? WHERE id=?').run(NOW, 'staff-auth-operator-a');
+    operator.sent.length = 0;
+
+    const after = await chatRoom.fetch(createChatRoomBroadcastRequest('admin-feed', { type: 'sessions:changed' }));
+    assert.equal(after.status, 200);
+    assert.deepEqual(operator.sent, []);
+    assert.deepEqual(operator.closed, { code: 1008, reason: 'Admin feed access revoked' });
+  } finally {
+    database.close();
+  }
+});
+
+test('admin-feed authorization database errors fail closed without broadcasting', async () => {
+  const socket = new TestSocket(adminFeedMeta('operator-a'));
+  const chatRoom = new ChatRoom(
+    { getWebSockets() { return [socket]; } },
+    { DB: { prepare() { throw new Error('database unavailable'); } } },
+  );
+
+  const response = await chatRoom.fetch(createChatRoomBroadcastRequest('admin-feed', { type: 'sessions:changed' }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(socket.sent, []);
+  assert.deepEqual(socket.closed, { code: 1008, reason: 'Admin feed access revoked' });
 });

@@ -12,9 +12,9 @@ function usage(): string {
     '  node dist/index.js --plan <config.json>',
     '  node dist/index.js plan --plan <config.json>',
     '  node dist/index.js deploy --plan <config.json> --dry-run',
-    '  node dist/index.js deploy --plan <config.json> --real',
+    '  node dist/index.js deploy --plan <config.json> --real --confirm-target',
     '',
-    'Default mode never opens real SSH. Real SSH requires deploy --real and dryRun=false in the plan.',
+    'Default mode never opens real SSH. Real SSH requires deploy --real, --confirm-target, and dryRun=false in the plan.',
   ].join('\n');
 }
 
@@ -47,6 +47,7 @@ async function main(argv: string[]) {
     const result = await runDeployment(config, {
       real: argv.includes('--real'),
       dryRun: argv.includes('--dry-run'),
+      confirmTarget: argv.includes('--confirm-target'),
     });
     console.log(JSON.stringify(result, null, 2));
     return;

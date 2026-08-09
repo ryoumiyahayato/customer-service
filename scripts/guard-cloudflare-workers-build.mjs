@@ -7,6 +7,7 @@ import process from 'node:process';
 import {
   extractPendingMigrationNames,
   migrationListArgs,
+  nodeNpmInvocation,
   workersBuildBranchDecision,
   wranglerInvocation,
 } from './deployment-safety-lib.mjs';
@@ -32,15 +33,13 @@ if (!decision.production) {
   process.exit(0);
 }
 
-const isWindows = process.platform === 'win32';
-const npxBin = isWindows ? 'npx.cmd' : 'npx';
-const localWrangler = path.join(process.cwd(), 'node_modules', '.bin', `wrangler${isWindows ? '.cmd' : ''}`);
-const invocation = wranglerInvocation(existsSync(localWrangler) ? localWrangler : '', npxBin, migrationListArgs());
+const localWrangler = path.join(process.cwd(), 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+const invocation = wranglerInvocation(existsSync(localWrangler) ? localWrangler : '', '', migrationListArgs());
 const result = spawnSync(invocation.command, invocation.args, {
   cwd: process.cwd(),
   env: process.env,
   encoding: 'utf8',
-  shell: isWindows,
+  shell: false,
   timeout: 120000,
 });
 

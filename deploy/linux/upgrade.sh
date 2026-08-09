@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
@@ -16,9 +17,12 @@ for arg in "$@"; do
 done
 
 [[ -f ".env" ]] || { echo "Missing .env."; exit 1; }
+[[ -x "./prepare-directories.sh" ]] || { echo "Missing executable prepare-directories.sh."; exit 1; }
 set -a
 source .env
 set +a
+
+"$ROOT_DIR/prepare-directories.sh"
 
 PREVIOUS_IMAGE_ID="$(docker image inspect customer-chat-app:local --format '{{.Id}}' 2>/dev/null || true)"
 ROLLBACK_TAG="customer-chat-app:rollback-$(date +%Y%m%d%H%M%S)"

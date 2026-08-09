@@ -69,3 +69,32 @@ test('keeps the R2 object after a successful database insert', async () => {
   assert.equal(attachments.inserts.length, 1);
   assert.equal(result.path, `/api/attachments/${uploads.putCalls[0]}`);
 });
+
+test('reserves attachment quota before R2 and releases it when the upload fails', async () => {
+  const events = [];
+  const uploads = {
+    async put() { events.push('put'); throw new Error('R2 unavailable'); },
+    async delete() { events.push('delete'); },
+  };
+  const attachments = {
+    async reserve() { events.push('reserve'); },
+    async releaseReservation() { events.push('release'); },
+  };
+  const service = new AttachmentService(
+    attachments,
+    uploads,
+    () => 'att-failed',
+    () => '2026-07-31T00:00:00.000Z',
+  );
+
+  await assert.rejects(
+    service.upload({
+      sessionId: 'sess-1',
+      file: imageFile(),
+      createdByType: 'VISITOR',
+      createdById: 'visitor-1',
+    }),
+    /R2 unavailable/,
+  );
+  assert.deepEqual(events, ['reserve', 'put', 'release', 'delete']);
+});

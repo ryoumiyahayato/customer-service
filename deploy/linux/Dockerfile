@@ -18,6 +18,9 @@ COPY dist ./dist
 
 FROM node:20-alpine AS runtime
 
+RUN addgroup -S -g 10001 customerchat \
+  && adduser -S -D -H -u 10001 -G customerchat customerchat
+
 ENV NODE_ENV=production
 ENV APP_PORT=3000
 ENV STATIC_DIR=/app/dist
@@ -32,4 +35,5 @@ COPY --from=build /app/dist ./dist
 
 WORKDIR /app/server-generic
 EXPOSE 3000
+USER customerchat
 CMD ["node", "dist/index.js"]
