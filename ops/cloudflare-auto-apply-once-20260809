@@ -1,2 +1,0 @@
-One-time production migration authorization for the exact six pending D1 migrations present after PR #52.
-Remove this file immediately after the production build applies and re-verifies them.
