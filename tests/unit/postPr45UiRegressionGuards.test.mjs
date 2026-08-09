@@ -20,12 +20,17 @@ test('unresolved admin role is never mislabeled as customer-service operator', a
   assert.match(source, /role === 'SUPER_ADMIN' \? '超级管理员' : role === 'OPERATOR' \? '客服' : '身份加载中'/);
 });
 
-test('super admin login username is a separate reauthenticated control', async () => {
+test('super admin login username is a separate reauthenticated control without a permanently duplicated password block', async () => {
   const source = await read('src/admin/OperatorProfileSettings.tsx');
   assert.match(source, /管理员登录账号/);
-  assert.match(source, /只影响后台登录，不改变对外显示名称/);
+  assert.match(source, /登录账号与登录密码在这里分别管理，不影响对外显示名称/);
   assert.match(source, /apiFetch\('\/api\/auth\/login'/);
   assert.match(source, /JSON\.stringify\(\{ username: nextUsername \}\)/);
+  assert.match(source, /loginUsernameEditing \?/);
+  assert.match(source, /passwordEditing \?/);
+  assert.match(source, /仅用于确认本次账号修改/);
+  assert.doesNotMatch(source, /account-login-name-form/);
+  assert.doesNotMatch(source, /account-password-form/);
 });
 
 test('production boundary enforces one active backend session and exposes device-only active sessions', async () => {
@@ -62,12 +67,16 @@ test('preset welcome content is edited as a one-sided chat and supports images',
   const editor = await read('src/admin/PresetMessageEditor.tsx');
   const desktop = await read('src/admin/DesktopAdminPolish.tsx');
   const mobile = await read('src/admin/AdminMobileShell.tsx');
+  const css = await read('src/admin/presetMessageEditor.css');
   assert.match(editor, /预设消息可视化编辑器/);
   assert.match(editor, /\/api\/admins\/preset-messages\/image/);
   assert.match(editor, /accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(editor, /\/api\/admins\/preset-messages\/order/);
   assert.match(desktop, /<PresetMessageEditor \/>/);
   assert.match(mobile, /<PresetMessageEditor \/>/);
+  assert.match(css, /height: clamp\(460px, 68dvh, 620px\)/);
+  assert.match(css, /\.preset-composer \{[\s\S]*?position: static/);
+  assert.doesNotMatch(css, /min-height: calc\(100dvh - 190px\)/);
 });
 
 test('mobile QR editor exposes both text fields inside the bounded card', async () => {
