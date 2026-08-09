@@ -170,3 +170,4 @@ export async function closeChatSession(
   await db.query('UPDATE visitor_sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE chat_session_id=$1 AND revoked_at IS NULL', [sessionId]);
   return mapChatSession(rows[0]);
 }
+

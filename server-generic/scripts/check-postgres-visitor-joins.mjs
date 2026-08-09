@@ -38,3 +38,4 @@ try {
 } finally {
   await db.close();
 }
+

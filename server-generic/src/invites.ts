@@ -178,7 +178,7 @@ export async function consumeInvite(
   db: PostgresAdapter,
   rawToken: string,
   existingVisitorToken: string | null,
-  customerName = '访客',
+  customerName = '璁垮',
 ): Promise<InviteConsumptionResult> {
   const token = normalizeToken(rawToken);
   const tokenHash = hashSessionToken(token);
@@ -227,7 +227,7 @@ export async function consumeInvite(
        VALUES ($1, 'open', $2, $3)
        RETURNING id, status, customer_name, created_at, updated_at, closed_at,
                  archived_at, deleted_at, history_cleared_at, purged_at, assigned_operator_id`,
-      [visitorTokenHash, customerName.trim().slice(0, 80) || '访客', invite.source_admin_id],
+      [visitorTokenHash, customerName.trim().slice(0, 80) || '璁垮', invite.source_admin_id],
     );
     const session = sessionResult.rows[0];
     await client.query(
@@ -257,3 +257,4 @@ export async function consumeInvite(
     };
   });
 }
+
