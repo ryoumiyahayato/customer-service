@@ -48,6 +48,18 @@ test('Cloudflare build gate permits version builds but keeps migration verificat
   assert.match(gate, /Pending remote D1 migrations block automatic production deployment/);
 });
 
+test('one-time Cloudflare migration path is exact-set gated and re-verifies remote state', async () => {
+  const gate = await readFile(new URL('../../scripts/guard-cloudflare-workers-build.mjs', import.meta.url), 'utf8');
+  const sentinel = await readFile(new URL('../../ops/cloudflare-auto-apply-once-20260811', import.meta.url), 'utf8');
+  assert.match(gate, /0015_security_resource_limits\.sql/);
+  assert.match(gate, /sameMigrationSet\(pending, EXPECTED_ONE_TIME_PENDING\)/);
+  assert.match(gate, /runWrangler\(migrationApplyArgs\(\)\)/);
+  assert.match(gate, /pending = remotePendingMigrations\(\)/);
+  assert.match(gate, /Remote D1 migrations remain pending after the one-time apply/);
+  assert.match(sentinel, /0015_security_resource_limits\.sql/);
+  assert.match(sentinel, /Remove this file immediately/);
+});
+
 test('wrangler migration invocation never drops the d1 subcommand', () => {
   const list = wranglerInvocation('', 'npx', migrationListArgs());
   assert.equal(list.command, process.execPath);
