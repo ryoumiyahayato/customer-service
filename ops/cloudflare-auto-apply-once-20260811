@@ -1,0 +1,5 @@
+One-time production migration authorization for exactly:
+- 0015_security_resource_limits.sql
+
+Cloudflare Workers Build must verify that the remote pending migration set matches exactly before applying it.
+Remove this file immediately after the production build applies and re-verifies the migration.
